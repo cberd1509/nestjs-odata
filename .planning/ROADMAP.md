@@ -53,7 +53,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 3. TypeORM `Date` columns map to `Edm.DateTimeOffset`, `number` to `Edm.Int32` or `Edm.Decimal`, `string` to `Edm.String` — verified by unit tests
 4. `OneToMany`, `ManyToOne`, and `ManyToMany` TypeORM relations appear as navigation properties in the CSDL output
 5. `@nestjs-odata/core` has zero imports from `typeorm` — verified by `publint` and `@arethetypeswrong/cli` in CI
-   **Plans**: TBD
+   **Plans:** 4 plans
+   Plans:
+
+- [ ] 02-01-PLAN.md — EDM types, adapter interfaces (IEdmDeriver, IQueryTranslator), OData decorators, EdmRegistry
+- [ ] 02-02-PLAN.md — NestJS module system (ODataModule.forRoot/forFeature, ODataTypeOrmModule.forFeature)
+- [ ] 02-03-PLAN.md — TypeORM-to-EDM type mapper and entity deriver (TDD)
+- [ ] 02-04-PLAN.md — CSDL XML builder, $metadata controller, service document, test-app e2e + odata2ts validation
 
 ### Phase 3: Query Engine and Response Format
 
@@ -105,7 +111,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                 | Plans Complete | Status            | Completed |
 | ------------------------------------- | -------------- | ----------------- | --------- |
 | 1. Foundation and Parser Spike        | 0/4            | Planning complete | -         |
-| 2. EDM and $metadata                  | 0/TBD          | Not started       | -         |
+| 2. EDM and $metadata                  | 0/4            | Planning complete | -         |
 | 3. Query Engine and Response Format   | 0/TBD          | Not started       | -         |
 | 4. CRUD, $expand, and Module System   | 0/TBD          | Not started       | -         |
 | 5. $batch, Security, and v1 Hardening | 0/TBD          | Not started       | -         |
