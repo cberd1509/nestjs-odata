@@ -1,10 +1,12 @@
 import { DynamicModule, Inject, Injectable, Module, OnModuleInit } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
-import { DataSource } from 'typeorm'
+import { DataSource, type ObjectLiteral } from 'typeorm'
 import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type.js'
 import type { EdmEntityConfig, EdmEntitySet, EdmEntityType, EntityClass } from '@nestjs-odata/core'
 import { EdmRegistry, ODATA_MODULE_OPTIONS, type ODataModuleOptions } from '@nestjs-odata/core'
 import { TypeOrmEdmDeriver } from './deriver/typeorm-edm-deriver.js'
+import { TypeOrmQueryTranslator } from './translator/typeorm-query-translator.js'
+import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
 
 /**
  * DI injection token for the array of TypeORM entity classes
@@ -88,8 +90,24 @@ export class ODataTypeOrmModule {
           useValue: entities,
         },
         TypeOrmEdmInitializer,
+        {
+          provide: TypeOrmQueryTranslator,
+          useFactory: (dataSource: DataSource): TypeOrmQueryTranslator => {
+            // Use a shared repository for query builder creation.
+            // TypeOrmQueryTranslator uses repo.createQueryBuilder() which accepts any entity target.
+            // The DataSource repository is typed as ObjectLiteral which satisfies the translator.
+            const firstEntity = entities[0]
+            if (!firstEntity) {
+              throw new Error('ODataTypeOrmModule.forFeature() requires at least one entity class')
+            }
+            const repo = dataSource.getRepository(firstEntity as new () => ObjectLiteral)
+            return new TypeOrmQueryTranslator(repo)
+          },
+          inject: [DataSource],
+        },
+        TypeOrmAutoHandler,
       ],
-      exports: [TYPEORM_ODATA_ENTITIES],
+      exports: [TYPEORM_ODATA_ENTITIES, TypeOrmQueryTranslator, TypeOrmAutoHandler],
     }
   }
 }
