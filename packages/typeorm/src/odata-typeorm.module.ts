@@ -115,7 +115,23 @@ export class ODataTypeOrmModule {
           },
           inject: [DataSource, EdmRegistry, ODATA_MODULE_OPTIONS],
         },
-        TypeOrmAutoHandler,
+        {
+          provide: TypeOrmAutoHandler,
+          useFactory: (
+            translator: TypeOrmQueryTranslator,
+            edmRegistry: EdmRegistry,
+            options: ODataModuleResolvedOptions,
+            dataSource: DataSource,
+          ): TypeOrmAutoHandler => {
+            const firstEntity = entities[0]
+            if (!firstEntity) {
+              throw new Error('ODataTypeOrmModule.forFeature() requires at least one entity class')
+            }
+            const repo = dataSource.getRepository(firstEntity as new () => ObjectLiteral)
+            return new TypeOrmAutoHandler(translator, edmRegistry, options, repo)
+          },
+          inject: [TypeOrmQueryTranslator, EdmRegistry, ODATA_MODULE_OPTIONS, DataSource],
+        },
       ],
       exports: [TYPEORM_ODATA_ENTITIES, TypeOrmQueryTranslator, TypeOrmAutoHandler],
     }

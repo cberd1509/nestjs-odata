@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { MockInstance } from 'vitest'
-import type { SelectQueryBuilder, ObjectLiteral } from 'typeorm'
+import type { SelectQueryBuilder, ObjectLiteral, Repository, DeleteResult } from 'typeorm'
 import type { ODataQuery, EdmEntityType, EdmEntitySet } from '@nestjs-odata/core'
 import { EdmRegistry } from '@nestjs-odata/core'
+import { NotFoundException } from '@nestjs/common'
 import { TypeOrmAutoHandler } from './typeorm-auto-handler.js'
 import type { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 
@@ -80,6 +81,26 @@ function makeMockQb(rows: ObjectLiteral[] = [], totalCount = 0): MockQbResult {
   }
 }
 
+// ── Mock Repository ───────────────────────────────────────────────────────────
+
+function makeMockRepo() {
+  const findOne = vi.fn()
+  const create = vi.fn()
+  const save = vi.fn()
+  const preload = vi.fn()
+  const deleteMethod = vi.fn()
+
+  const repo = {
+    findOne,
+    create,
+    save,
+    preload,
+    delete: deleteMethod,
+  } as unknown as Repository<ObjectLiteral>
+
+  return { repo, findOne, create, save, preload, deleteMethod }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('TypeOrmAutoHandler', () => {
@@ -106,10 +127,11 @@ describe('TypeOrmAutoHandler', () => {
   describe('handleGet()', () => {
     it('Test 1: calls translator.translate() then execute() and returns ODataQueryResult', async () => {
       const { qb } = makeMockQb([{ id: 1, name: 'Widget' }], 1)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
       executeMock.mockResolvedValue({ items: [{ id: 1, name: 'Widget' }] })
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ filter: undefined, select: undefined })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
@@ -123,10 +145,11 @@ describe('TypeOrmAutoHandler', () => {
     it('Test 2: with $count=true passes includeCount=true to execute() — result has count field', async () => {
       const rows = [{ id: 1 }, { id: 2 }]
       const { qb } = makeMockQb(rows, 2)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
       executeMock.mockResolvedValue({ items: rows, count: 2 })
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ count: true, top: 10 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
@@ -137,10 +160,11 @@ describe('TypeOrmAutoHandler', () => {
     it('Test 3: with $count=false or undefined passes includeCount=false — result has no count field', async () => {
       const rows = [{ id: 1 }]
       const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
       executeMock.mockResolvedValue({ items: rows })
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ count: undefined, top: 10 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
@@ -152,10 +176,11 @@ describe('TypeOrmAutoHandler', () => {
       // 3 items returned means there are more than 2
       const rows = [{ id: 1 }, { id: 2 }, { id: 3 }]
       const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
       executeMock.mockResolvedValue({ items: rows })
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ top: 2, skip: 0 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
@@ -170,10 +195,11 @@ describe('TypeOrmAutoHandler', () => {
       // Only 2 items returned for top=5: no more pages
       const rows = [{ id: 1 }, { id: 2 }]
       const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
       executeMock.mockResolvedValue({ items: rows })
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ top: 5, skip: 0 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
@@ -185,9 +211,10 @@ describe('TypeOrmAutoHandler', () => {
   describe('handleCount()', () => {
     it('Test 6: calls translator.translate() with stripped query (filter only) then returns count from qb.getCount()', async () => {
       const { qb, getCount } = makeMockQb([], 42)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({
         top: 5,
         skip: 10,
@@ -215,9 +242,10 @@ describe('TypeOrmAutoHandler', () => {
 
     it('Test 7: ignores $top and $skip in count query (Pitfall 3 — count is always total matching filter)', async () => {
       const { qb, getCount } = makeMockQb([], 100)
+      const { repo } = makeMockRepo()
       translateMock.mockReturnValue(qb)
 
-      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions())
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ top: 5, skip: 50 })
       const count = await autoHandler.handleCount(query)
 
@@ -226,6 +254,131 @@ describe('TypeOrmAutoHandler', () => {
       expect(strippedQuery.skip).toBeUndefined()
       expect(getCount).toHaveBeenCalled()
       expect(count).toBe(100)
+    })
+  })
+
+  describe('handleGetByKey()', () => {
+    it('Test 8: returns entity when repo.findOne finds the entity', async () => {
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue({ id: 42, name: 'Widget' })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const result = await autoHandler.handleGetByKey('42', 'Products')
+
+      expect(findOne).toHaveBeenCalledWith({ where: { id: 42 } })
+      expect(result).toEqual({ id: 42, name: 'Widget' })
+    })
+
+    it('Test 9: throws NotFoundException when repo.findOne returns null', async () => {
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(null)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await expect(autoHandler.handleGetByKey('999', 'Products')).rejects.toThrow(NotFoundException)
+    })
+
+    it('Test 10: composite key calls repo.findOne with correct multi-field where clause', async () => {
+      // Register a composite key entity
+      const compositeEntityType: EdmEntityType = {
+        name: 'OrderItem',
+        namespace: 'Default',
+        properties: [
+          { name: 'orderId', type: 'Edm.Int32', nullable: false },
+          { name: 'itemId', type: 'Edm.Int32', nullable: false },
+        ],
+        navigationProperties: [],
+        keyProperties: ['orderId', 'itemId'],
+        isReadOnly: false,
+      }
+      const compositeEntitySet = makeEntitySet('OrderItems', 'OrderItem')
+      edmRegistry.register(compositeEntityType, compositeEntitySet)
+
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue({ orderId: 1, itemId: 3 })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const result = await autoHandler.handleGetByKey('orderId=1,itemId=3', 'OrderItems')
+
+      expect(findOne).toHaveBeenCalledWith({ where: { orderId: 1, itemId: 3 } })
+      expect(result).toEqual({ orderId: 1, itemId: 3 })
+    })
+  })
+
+  describe('handleCreate()', () => {
+    it('Test 11: calls repo.create + repo.save and returns entity with locationUrl', async () => {
+      const savedEntity = { id: 99, name: 'New Widget', price: 10.0 }
+      const { repo, create, save } = makeMockRepo()
+      create.mockReturnValue(savedEntity)
+      save.mockResolvedValue(savedEntity)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const result = await autoHandler.handleCreate({ name: 'New Widget', price: 10.0 }, 'Products')
+
+      expect(create).toHaveBeenCalledWith({ name: 'New Widget', price: 10.0 })
+      expect(save).toHaveBeenCalled()
+      expect(result.entity).toEqual(savedEntity)
+      expect(result.locationUrl).toBe('/odata/Products(99)')
+    })
+
+    it('Test 12: locationUrl format is {serviceRoot}/{entitySetName}({key})', async () => {
+      const savedEntity = { id: 7, name: 'Widget' }
+      const { repo, create, save } = makeMockRepo()
+      create.mockReturnValue(savedEntity)
+      save.mockResolvedValue(savedEntity)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const result = await autoHandler.handleCreate({ name: 'Widget' }, 'Products')
+
+      expect(result.locationUrl).toMatch(/^\/odata\/Products\(7\)$/)
+    })
+  })
+
+  describe('handleUpdate()', () => {
+    it('Test 13: calls repo.preload + repo.save and returns merged entity', async () => {
+      const mergedEntity = { id: 1, name: 'Updated', price: 20.0 }
+      const { repo, preload, save } = makeMockRepo()
+      preload.mockResolvedValue(mergedEntity)
+      save.mockResolvedValue(mergedEntity)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const result = await autoHandler.handleUpdate(
+        '1',
+        { name: 'Updated', price: 20.0 },
+        'Products',
+      )
+
+      expect(preload).toHaveBeenCalledWith({ id: 1, name: 'Updated', price: 20.0 })
+      expect(save).toHaveBeenCalledWith(mergedEntity)
+      expect(result).toEqual(mergedEntity)
+    })
+
+    it('Test 14: throws NotFoundException when repo.preload returns undefined (entity not found)', async () => {
+      const { repo, preload } = makeMockRepo()
+      preload.mockResolvedValue(undefined)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await expect(autoHandler.handleUpdate('999', { name: 'Ghost' }, 'Products')).rejects.toThrow(
+        NotFoundException,
+      )
+    })
+  })
+
+  describe('handleDelete()', () => {
+    it('Test 15: calls repo.delete with correct where clause and returns void on success', async () => {
+      const { repo, deleteMethod } = makeMockRepo()
+      deleteMethod.mockResolvedValue({ affected: 1 } as DeleteResult)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await expect(autoHandler.handleDelete('1', 'Products')).resolves.toBeUndefined()
+      expect(deleteMethod).toHaveBeenCalledWith({ id: 1 })
+    })
+
+    it('Test 16: throws NotFoundException when repo.delete returns affected=0', async () => {
+      const { repo, deleteMethod } = makeMockRepo()
+      deleteMethod.mockResolvedValue({ affected: 0 } as DeleteResult)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await expect(autoHandler.handleDelete('999', 'Products')).rejects.toThrow(NotFoundException)
     })
   })
 })
