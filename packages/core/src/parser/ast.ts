@@ -140,6 +140,26 @@ export interface SelectNode {
 }
 
 // ---------------------------------------------------------------------------
+// Expand AST
+// ---------------------------------------------------------------------------
+
+/** Single $expand item — one navigation property with optional nested query options */
+export interface ExpandItem {
+  readonly navigationProperty: string
+  readonly filter?: FilterNode
+  readonly select?: SelectNode
+  readonly orderBy?: OrderByItem[]
+  readonly top?: number
+  readonly skip?: number
+  readonly expand?: ExpandNode // recursive nested expand
+}
+
+/** Parsed $expand value — list of expand items */
+export interface ExpandNode {
+  readonly items: readonly ExpandItem[]
+}
+
+// ---------------------------------------------------------------------------
 // QueryOptions — top-level parsed query aggregate
 // ---------------------------------------------------------------------------
 
@@ -153,4 +173,5 @@ export interface QueryOptions {
   readonly select?: SelectNode
   readonly top?: number
   readonly skip?: number
+  readonly expand?: ExpandNode
 }

@@ -20,6 +20,8 @@
 import type {
   BinaryExprNode,
   BinaryOperator,
+  ExpandItem,
+  ExpandNode,
   FilterNode,
   FunctionCallNode,
   LambdaExprNode,
@@ -500,6 +502,7 @@ export function parseQuery(queryString: string): QueryOptions {
   let select: SelectNode | undefined
   let top: number | undefined
   let skip: number | undefined
+  let expand: ExpandNode | undefined
 
   for (const part of parts) {
     const lpart = part.toLowerCase()
@@ -519,11 +522,14 @@ export function parseQuery(queryString: string): QueryOptions {
     } else if (lpart.startsWith('$skip=')) {
       const val = part.slice('$skip='.length)
       skip = parseNonNegativeInt(val, '$skip', 0)
+    } else if (lpart.startsWith('$expand=')) {
+      const val = part.slice('$expand='.length)
+      expand = parseExpand(val)
     }
     // Unknown options are silently ignored
   }
 
-  return { filter, orderBy, select, top, skip }
+  return { filter, orderBy, select, top, skip, expand }
 }
 
 /**
@@ -575,6 +581,83 @@ function parseSelect(value: string): SelectNode {
     const path = p.trim().split('/').filter(Boolean)
     return { path }
   })
+
+  return { items }
+}
+
+/**
+ * Split an $expand value string by top-level commas only (not commas inside parentheses).
+ * Tracks parenthesis depth to avoid splitting nested options like Items($filter=x),Customer.
+ */
+function splitTopLevelCommas(value: string): string[] {
+  const segments: string[] = []
+  let depth = 0
+  let start = 0
+
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]
+    if (ch === '(') {
+      depth++
+    } else if (ch === ')') {
+      depth--
+    } else if (ch === ',' && depth === 0) {
+      segments.push(value.slice(start, i))
+      start = i + 1
+    }
+  }
+
+  segments.push(value.slice(start))
+  return segments
+}
+
+/**
+ * Parse the value of a $expand query option into an ExpandNode.
+ * Handles simple (Customer), multi (Customer,Items), nested options (Items($filter=...)),
+ * and recursive nested expand (Items($expand=Product)).
+ *
+ * Per D-07: Full nested $expand support.
+ * Per D-08: Nested query options use semicolons as separators.
+ * Per T-04-01: Inherits max nesting depth from recursive parseQuery calls.
+ */
+function parseExpand(value: string): ExpandNode {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return { items: [] }
+  }
+
+  const segments = splitTopLevelCommas(trimmed)
+  const items: ExpandItem[] = segments
+    .map((seg) => seg.trim())
+    .filter((seg) => seg.length > 0)
+    .map((seg) => {
+      const parenIdx = seg.indexOf('(')
+      if (parenIdx === -1) {
+        // Simple: just a navigation property name
+        return { navigationProperty: seg.trim() } satisfies ExpandItem
+      }
+
+      // Has nested options: NavProp(options)
+      const navigationProperty = seg.slice(0, parenIdx).trim()
+      // Extract content between outer parens — last char should be ')'
+      const innerContent = seg.slice(parenIdx + 1, seg.length - 1)
+
+      // Replace semicolons with & to convert nested OData options to query string format
+      const nestedQuery = innerContent.replace(/;/g, '&')
+
+      // Recursively parse nested query options
+      const nested = parseQuery(nestedQuery)
+
+      const item: ExpandItem = {
+        navigationProperty,
+        ...(nested.filter !== undefined && { filter: nested.filter }),
+        ...(nested.select !== undefined && { select: nested.select }),
+        ...(nested.orderBy !== undefined && { orderBy: nested.orderBy }),
+        ...(nested.top !== undefined && { top: nested.top }),
+        ...(nested.skip !== undefined && { skip: nested.skip }),
+        ...(nested.expand !== undefined && { expand: nested.expand }),
+      }
+      return item
+    })
 
   return { items }
 }

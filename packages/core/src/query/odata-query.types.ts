@@ -7,7 +7,7 @@
  *   - entitySetName (string): for context URL construction and field validation
  */
 
-import type { FilterNode, SelectNode, OrderByItem } from '../parser/ast.js'
+import type { FilterNode, SelectNode, OrderByItem, ExpandNode } from '../parser/ast.js'
 
 /**
  * Typed OData query object produced by ODataQueryPipe.
@@ -26,6 +26,8 @@ export interface ODataQuery {
   readonly count?: boolean
   /** Name of the entity set — required for context URL construction and field validation */
   readonly entitySetName: string
+  /** Parsed $expand value — navigation properties to expand */
+  readonly expand?: ExpandNode
 }
 
 /**
