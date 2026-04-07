@@ -115,7 +115,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 4. `GET /Products?$expand=Orders($expand=Items($expand=Details))` beyond the configured `maxExpansionDepth` returns HTTP 400
 5. The full release pipeline runs end-to-end without error: `pnpm lint` -> `pnpm test` -> `pnpm build` -> `changeset version` -> `npm publish` with OIDC provenance — verified by a successful dry-run in CI (`pnpm publish --dry-run`) and a real publish to a scoped test registry
 6. `@arethetypeswrong/cli` reports no entrypoint issues and `publint` passes for both published packages after the release pipeline completes
-   **Plans**: TBD
+   **Plans:** 4 plans
+   Plans:
+
+- [ ] 05-01-PLAN.md — Custom multipart/mixed batch parser (core), batch controller with changeset atomicity and e2e tests (typeorm)
+- [ ] 05-02-PLAN.md — Security limit hardening (maxTop rejection, filter depth, per-entity overrides) and $expand pagination gap closure
+- [ ] 05-03-PLAN.md — Coverage enforcement (@vitest/coverage-v8 thresholds) and CI/CD release pipeline with npm OIDC provenance
+- [ ] 05-04-PLAN.md — VitePress documentation site (getting-started, API reference, examples for all v1 features)
 
 ## Progress
 
@@ -128,4 +134,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. EDM and $metadata                  | 5/5            | Complete          | 2026-04-07 |
 | 3. Query Engine and Response Format   | 0/4            | Planning complete | -          |
 | 4. CRUD, $expand, and Module System   | 5/5            | Complete          | 2026-04-07 |
-| 5. $batch, Security, and v1 Hardening | 0/TBD          | Not started       | -          |
+| 5. $batch, Security, and v1 Hardening | 0/4            | Planning complete | -          |
