@@ -244,6 +244,42 @@ describe('TypeOrmExpandVisitor', () => {
     expect(leftJoinAndSelect).toHaveBeenCalledWith('entity.Orders', 'entity_Orders')
   })
 
+  it('Test 8: expand with orderBy applies TypeOrmOrderByVisitor', () => {
+    const { qb, leftJoinAndSelect } = createMockQb()
+    const expandNode: ExpandNode = {
+      items: [
+        {
+          navigationProperty: 'Orders',
+          orderBy: [{ expression: { kind: 'PropertyAccess', path: ['Total'] }, direction: 'asc' }],
+        },
+      ],
+    }
+
+    const visitor = new TypeOrmExpandVisitor(qb, edmRegistry, 3)
+    expect(() => visitor.apply(expandNode, 'entity', customerEntityType, 0)).not.toThrow()
+    expect(leftJoinAndSelect).toHaveBeenCalledWith('entity.Orders', 'entity_Orders')
+  })
+
+  it('Test 9: expand with top/skip on collection nav prop adds to pagination map', () => {
+    const { qb, leftJoinAndSelect } = createMockQb()
+    const expandNode: ExpandNode = {
+      items: [
+        {
+          navigationProperty: 'Orders',
+          top: 5,
+          skip: 2,
+        },
+      ],
+    }
+
+    const visitor = new TypeOrmExpandVisitor(qb, edmRegistry, 3)
+    expect(() => visitor.apply(expandNode, 'entity', customerEntityType, 0)).not.toThrow()
+    expect(leftJoinAndSelect).toHaveBeenCalledWith('entity.Orders', 'entity_Orders')
+    // The pagination map should have the nav property
+    expect(visitor.expandPaginationMap.size).toBe(1)
+    expect(visitor.expandPaginationMap.get('Orders')).toEqual({ top: 5, skip: 2 })
+  })
+
   it('Test D-09: per-entity maxExpandDepth=5 allows depth 3 (global default of 2 would reject it)', () => {
     const { qb, leftJoinAndSelect } = createMockQb()
     // Build a 3-level nested expand: Customer -> Orders -> Items

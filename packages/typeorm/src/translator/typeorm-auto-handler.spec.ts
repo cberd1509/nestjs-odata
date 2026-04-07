@@ -388,4 +388,48 @@ describe('TypeOrmAutoHandler', () => {
       await expect(autoHandler.handleDelete('999', 'Products')).rejects.toThrow(NotFoundException)
     })
   })
+
+  describe('buildNextLink()', () => {
+    it('Test 17: builds nextLink with no existing query string', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink('http://localhost/odata/Products', 10, 5)
+
+      expect(nextLink).toBe('http://localhost/odata/Products?$skip=10&$top=5')
+    })
+
+    it('Test 18: builds nextLink preserving existing query params and updating $skip/$top', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://localhost/odata/Products?$filter=name%20eq%20%27Widget%27&$top=5&$skip=0',
+        5,
+        5,
+      )
+
+      expect(nextLink).toContain('$skip=5')
+      expect(nextLink).toContain('$top=5')
+      expect(nextLink).toContain('$filter=')
+    })
+
+    it('Test 19: handleGet with URL containing existing query string builds correct nextLink', async () => {
+      const rows = [{ id: 1 }, { id: 2 }, { id: 3 }]
+      const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
+      translateMock.mockReturnValue(makeTranslateResult(qb))
+      executeMock.mockResolvedValue({ items: rows })
+
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+      const query = makeQuery({ top: 2, skip: 0 })
+      const result = await autoHandler.handleGet(
+        query,
+        'http://localhost/odata/Products?$top=2&$skip=0',
+      )
+
+      expect(result.nextLink).toBeDefined()
+      expect(result.nextLink).toContain('$skip=2')
+    })
+  })
 })

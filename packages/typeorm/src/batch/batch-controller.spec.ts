@@ -253,4 +253,369 @@ describe('BatchController dispatch', () => {
     const sentBody = mockRes.send.mock.calls[0][0] as string
     expect(sentBody).toContain('HTTP/1.1 204 No Content')
   })
+
+  it('Test 7: returns 400 when content-type boundary is missing', async () => {
+    mockReq = {
+      body: '--test--',
+      headers: { 'content-type': 'multipart/mixed' },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    expect(mockRes.status).toHaveBeenCalledWith(400)
+    expect(mockRes.json).toHaveBeenCalled()
+  })
+
+  it('Test 8: returns 400 in batch part when entity URL has no alpha segment', async () => {
+    const boundary = 'batch_test'
+    // URL ending with "/" or only slashes — parseEntityUrl returns null
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'GET /123/456 HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    // Controller returns 200 for the batch envelope, individual part has 400
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 400')
+  })
+
+  it('Test 9: dispatches GET /Products(1) by key (returns 200)', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'GET /odata/Products(1) HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockManager.findOne.mockResolvedValue({ id: 1, name: 'Widget', price: 9.99 })
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    expect(mockManager.findOne).toHaveBeenCalled()
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 200 OK')
+  })
+
+  it('Test 10: GET by key returns 404 when entity not found', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'GET /odata/Products(999) HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockManager.findOne.mockResolvedValue(null)
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 404')
+  })
+
+  it('Test 11: DELETE returns 404 when entity not found (affected: 0)', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'DELETE /odata/Products(999) HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockManager.delete.mockResolvedValue({ affected: 0 })
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 404')
+  })
+
+  it('Test 12: PATCH without key returns 400', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'PATCH /odata/Products HTTP/1.1',
+        'Content-Type: application/json',
+        '',
+        '{"name":"Updated"}',
+      ].join('\r\n'),
+    ])
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 400')
+  })
+
+  it('Test 13: DELETE without key returns 400', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'DELETE /odata/Products HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 400')
+  })
+
+  it('Test 14: unsupported method returns 405', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'HEAD /odata/Products HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 405')
+  })
+
+  it('Test 15: unknown entity set returns 404', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'GET /odata/UnknownEntity HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    mockEdmRegistry.getEntitySet.mockReturnValue(null)
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 404')
+  })
+
+  it('Test 16: executes a changeset with rollback on failure', async () => {
+    const boundary = 'batch_changeset'
+    const changesetBoundary = 'changeset_inner'
+    const body = [
+      `--${boundary}`,
+      `Content-Type: multipart/mixed; boundary=${changesetBoundary}`,
+      '',
+      `--${changesetBoundary}`,
+      'Content-Type: application/http',
+      'Content-Transfer-Encoding: binary',
+      '',
+      'POST /odata/Products HTTP/1.1',
+      'Content-Type: application/json',
+      '',
+      '{"name":"Widget","price":9.99}',
+      `--${changesetBoundary}--`,
+      `--${boundary}--`,
+    ].join('\r\n')
+
+    mockRepo.save.mockRejectedValue(new Error('DB error'))
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled()
+    expect(mockRes.status).toHaveBeenCalledWith(200)
+  })
+
+  it('Test 17: reads body from stream when req.body is empty', async () => {
+    const boundary = 'batch_test'
+    const batchBody = [
+      'Content-Type: application/http',
+      'Content-Transfer-Encoding: binary',
+      '',
+      'GET /odata/Products HTTP/1.1',
+      '',
+    ].join('\r\n')
+
+    const fullBody = [`--${boundary}`, batchBody, `--${boundary}--`].join('\r\n')
+
+    mockManager.find.mockResolvedValue([{ id: 1, name: 'Widget' }])
+
+    // Simulate streaming request — use Node IncomingMessage-compatible EventEmitter
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { EventEmitter } = require('events') as typeof import('events')
+    const emitter = new EventEmitter()
+    const streamReq = emitter as unknown as BatchRequest & { headers: Record<string, string> }
+    streamReq.headers = { 'content-type': `multipart/mixed; boundary=${boundary}` }
+    // no body property — triggers stream path
+
+    setImmediate(() => {
+      emitter.emit('data', Buffer.from(fullBody))
+      emitter.emit('end')
+    })
+
+    await controller.handleBatch(streamReq, mockRes as unknown as BatchResponse)
+
+    expect(mockRes.status).toHaveBeenCalledWith(200)
+  })
+
+  it('Test 18b: when getMetadata throws for entity class, resolveEntityClass returns 500', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'GET /odata/Products HTTP/1.1',
+        '',
+      ].join('\r\n'),
+    ])
+
+    // Make getMetadata throw so resolveEntityClass catches and skips — returns undefined
+    mockDataSource.getMetadata.mockImplementationOnce(() => {
+      throw new Error('Entity not found in DataSource')
+    })
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    // entity class not found -> 500 InternalServerError
+    expect(sentBody).toContain('HTTP/1.1 500')
+  })
+
+  it('Test 18: PATCH with not-found entity returns 404', async () => {
+    const boundary = 'batch_test'
+    const body = buildBatchBody(boundary, [
+      [
+        'Content-Type: application/http',
+        'Content-Transfer-Encoding: binary',
+        '',
+        'PATCH /odata/Products(999) HTTP/1.1',
+        'Content-Type: application/json',
+        '',
+        '{"name":"Updated"}',
+      ].join('\r\n'),
+    ])
+
+    mockManager.findOne.mockResolvedValue(null)
+
+    mockReq = {
+      body,
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+    }
+
+    await controller.handleBatch(
+      mockReq as unknown as BatchRequest,
+      mockRes as unknown as BatchResponse,
+    )
+
+    const sentBody = mockRes.send.mock.calls[0][0] as string
+    expect(sentBody).toContain('HTTP/1.1 404')
+  })
 })
