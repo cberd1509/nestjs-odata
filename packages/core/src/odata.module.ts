@@ -13,6 +13,7 @@ import { EDM_ENTITY_CONFIGS, ODATA_MODULE_OPTIONS } from './tokens.js'
 import { CsdlBuilder } from './metadata/csdl-builder.js'
 import { ServiceDocumentBuilder } from './metadata/service-document-builder.js'
 import { MetadataController } from './metadata/metadata.controller.js'
+import { ODATA_CONTROLLER_KEY } from './decorators/metadata-keys.js'
 
 // Re-export ODATA_MODULE_OPTIONS so consumers can import it from this module
 export { ODATA_MODULE_OPTIONS } from './tokens.js'
@@ -34,6 +35,12 @@ export interface ODataModuleOptions {
   maxExpandDepth?: number
   /** Strategy when a TypeScript type cannot be mapped to an EDM primitive. Default: 'skip' (per D-10) */
   unmappedTypeStrategy?: UnmappedTypeStrategy
+  /**
+   * OData controller classes decorated with @ODataController().
+   * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
+   * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
+   */
+  controllers?: (new (...args: unknown[]) => unknown)[]
 }
 
 /** Resolved options with all defaults applied */
@@ -108,7 +115,24 @@ export class ODataModule extends ConfigurableModuleClass {
   /** Override forRoot to inject the resolved-options provider into the dynamic module. */
   static override forRoot(options: ODataModuleOptions): DynamicModule {
     const parent = super.forRoot(options)
-    const controller = createMetadataControllerWithPath(options.serviceRoot)
+    const metadataController = createMetadataControllerWithPath(options.serviceRoot)
+
+    // Per D-17: patch @ODataController paths with serviceRoot synchronously before module compilation.
+    // NestJS reads PATH_METADATA at compile time, so patching must happen here in forRoot().
+    const odataControllers = options.controllers ?? []
+    if (odataControllers.length > 0) {
+      const root = options.serviceRoot.startsWith('/')
+        ? options.serviceRoot.slice(1)
+        : options.serviceRoot
+      for (const ctrl of odataControllers) {
+        const entitySetName = Reflect.getMetadata(ODATA_CONTROLLER_KEY, ctrl) as string | undefined
+        if (entitySetName) {
+          const fullPath = root ? `${root}/${entitySetName}` : entitySetName
+          Reflect.defineMetadata(PATH_METADATA, fullPath, ctrl)
+        }
+      }
+    }
+
     return {
       ...parent,
       providers: [
@@ -117,7 +141,7 @@ export class ODataModule extends ConfigurableModuleClass {
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
-      controllers: [...(parent.controllers ?? []), controller],
+      controllers: [...(parent.controllers ?? []), metadataController, ...odataControllers],
       exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
