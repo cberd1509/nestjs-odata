@@ -8,7 +8,13 @@ import {
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import { EdmRegistry } from './edm/edm-registry.js'
-import { EDM_ENTITY_CONFIGS } from './tokens.js'
+import { EDM_ENTITY_CONFIGS, ODATA_MODULE_OPTIONS } from './tokens.js'
+import { CsdlBuilder } from './metadata/csdl-builder.js'
+import { ServiceDocumentBuilder } from './metadata/service-document-builder.js'
+import { MetadataController } from './metadata/metadata.controller.js'
+
+// Re-export ODATA_MODULE_OPTIONS so consumers can import it from this module
+export { ODATA_MODULE_OPTIONS } from './tokens.js'
 
 /**
  * Configuration options for ODataModule.forRoot().
@@ -54,9 +60,6 @@ const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } =
 /** Internal raw options token from ConfigurableModuleBuilder — not exported publicly. */
 const RAW_OPTIONS_TOKEN = MODULE_OPTIONS_TOKEN
 
-/** Public injection token for the fully-resolved ODataModuleOptions (with defaults applied). */
-export const ODATA_MODULE_OPTIONS = Symbol('ODATA_MODULE_OPTIONS')
-
 /** Provider that applies defaults to the raw options and exposes them under ODATA_MODULE_OPTIONS */
 const resolvedOptionsProvider = {
   provide: ODATA_MODULE_OPTIONS,
@@ -91,8 +94,14 @@ export class ODataModule extends ConfigurableModuleClass {
     const parent = super.forRoot(options)
     return {
       ...parent,
-      providers: [...(parent.providers ?? []), resolvedOptionsProvider],
-      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS],
+      providers: [
+        ...(parent.providers ?? []),
+        resolvedOptionsProvider,
+        CsdlBuilder,
+        ServiceDocumentBuilder,
+      ],
+      controllers: [...(parent.controllers ?? []), MetadataController],
+      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
 
@@ -103,8 +112,14 @@ export class ODataModule extends ConfigurableModuleClass {
     const parent = super.forRootAsync(options)
     return {
       ...parent,
-      providers: [...(parent.providers ?? []), resolvedOptionsProvider],
-      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS],
+      providers: [
+        ...(parent.providers ?? []),
+        resolvedOptionsProvider,
+        CsdlBuilder,
+        ServiceDocumentBuilder,
+      ],
+      controllers: [...(parent.controllers ?? []), MetadataController],
+      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
 
