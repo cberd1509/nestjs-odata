@@ -1,4 +1,5 @@
 import { DynamicModule, Inject, Injectable, Module, OnModuleInit } from '@nestjs/common'
+import { PATH_METADATA } from '@nestjs/common/constants.js'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { DataSource, type ObjectLiteral } from 'typeorm'
 import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type.js'
@@ -13,6 +14,7 @@ import { EdmRegistry, ODATA_MODULE_OPTIONS, type ODataModuleOptions } from '@nes
 import { TypeOrmEdmDeriver } from './deriver/typeorm-edm-deriver.js'
 import { TypeOrmQueryTranslator } from './translator/typeorm-query-translator.js'
 import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
+import { BatchController } from './batch/batch-controller.js'
 
 /**
  * DI injection token for the array of TypeORM entity classes
@@ -86,10 +88,25 @@ export class ODataTypeOrmModule {
    * @returns DynamicModule that imports TypeOrmModule.forFeature, provides TYPEORM_ODATA_ENTITIES,
    *          and wires TypeOrmEdmInitializer to populate the EdmRegistry at onModuleInit
    */
-  static forFeature(entities: EntityClassOrSchema[]): DynamicModule {
+  static forFeature(
+    entities: EntityClassOrSchema[],
+    options?: { serviceRoot?: string },
+  ): DynamicModule {
+    // Patch BatchController's PATH_METADATA to include the serviceRoot so
+    // POST {serviceRoot}/$batch is registered correctly.
+    // This mirrors how ODataModule.forRoot() patches @ODataController paths.
+    // Patch BatchController's PATH_METADATA to the serviceRoot prefix.
+    // The method decorator @Post('$batch') adds the '$batch' suffix, so the
+    // controller prefix must be just the serviceRoot (e.g. 'odata'),
+    // resulting in the full route: /odata/$batch.
+    const serviceRoot = options?.serviceRoot ?? 'odata'
+    const root = serviceRoot.startsWith('/') ? serviceRoot.slice(1) : serviceRoot
+    Reflect.defineMetadata(PATH_METADATA, root, BatchController)
+
     return {
       module: ODataTypeOrmModule,
       imports: [TypeOrmModule.forFeature(entities)],
+      controllers: [BatchController],
       providers: [
         {
           provide: TYPEORM_ODATA_ENTITIES,

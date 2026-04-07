@@ -32,7 +32,9 @@ import { HealthModule } from './health/health.module.js'
       serviceRoot: '/odata',
       namespace: 'Default',
     }),
-    ODataTypeOrmModule.forFeature([Product, Category, Customer, Order, OrderItem, Tag]),
+    ODataTypeOrmModule.forFeature([Product, Category, Customer, Order, OrderItem, Tag], {
+      serviceRoot: '/odata',
+    }),
     ProductsModule,
     HealthModule,
   ],
