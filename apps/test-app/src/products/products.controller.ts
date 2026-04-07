@@ -43,6 +43,20 @@ export class ProductsController {
   }
 
   /**
+   * GET /odata/Products/$count
+   *
+   * Returns total count of matching products as plain integer (text/plain).
+   * Strips pagination ($top/$skip) so count reflects total filter match.
+   * Registered BEFORE :key route so NestJS matches $count before the wildcard.
+   */
+  @Get('$count')
+  @Header('Content-Type', 'text/plain')
+  @UsePipes(ODataQueryPipe)
+  async count(@ODataQueryParam('Products') query: ODataQuery): Promise<number> {
+    return this.handler.handleCount(query)
+  }
+
+  /**
    * GET /odata/Products/:key
    *
    * Returns single entity with @odata.context containing /$entity suffix.
@@ -84,18 +98,5 @@ export class ProductsController {
   @ODataDelete('Products')
   async deleteProduct(@Param('key') key: string) {
     return this.handler.handleDelete(key, 'Products')
-  }
-
-  /**
-   * GET /odata/Products/$count
-   *
-   * Returns total count of matching products as plain integer (text/plain).
-   * Strips pagination ($top/$skip) so count reflects total filter match.
-   */
-  @Get('$count')
-  @Header('Content-Type', 'text/plain')
-  @UsePipes(ODataQueryPipe)
-  async count(@ODataQueryParam('Products') query: ODataQuery): Promise<number> {
-    return this.handler.handleCount(query)
   }
 }
