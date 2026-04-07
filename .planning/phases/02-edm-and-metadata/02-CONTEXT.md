@@ -57,12 +57,19 @@ Auto-derive OData Entity Data Model from TypeORM entity metadata and serve a spe
 
 - **D-20:** TypeORM `@ManyToOne` → `NavigationProperty Type="Namespace.Target"`. `@OneToMany` and `@ManyToMany` → `NavigationProperty Type="Collection(Namespace.Target)"`. Auto-derived from TypeORM relation metadata.
 
+### View Support
+
+- **D-21:** Support TypeORM `@ViewEntity()` as read-only OData EntitySets. Auto-detect view entities and mark them as read-only in the EDM — no POST/PATCH/DELETE routes generated. `@ViewColumn()` columns are derived the same way as regular `@Column()`.
+- **D-22:** Support virtual OData views (projections) of regular entities via `@ODataView()` decorator or forFeature config. A virtual view exposes a subset of columns and/or applies a default pre-filter — without requiring a database view. Appears as a separate EntitySet in $metadata.
+- **D-23:** Virtual views are defined in `@nestjs-odata/core` (ORM-agnostic). The concept is: "same underlying entity, different OData surface." Example: `ProductSummary` view that only exposes `Id`, `Name`, `Price` from `Product`.
+
 ### Claude's Discretion
 
 - CSDL XML generation implementation details (template engine vs string builder)
 - Exact pluralization approach (library vs built-in rules)
 - EdmRegistry internal caching structure
 - Unit test organization and naming
+- Virtual view implementation details (decorator shape, pre-filter expression format)
 
 </decisions>
 
