@@ -34,6 +34,7 @@ const mockEntitySet: EdmEntitySet = {
 const mockEdmRegistry = {
   getEntityType: vi.fn((name: string) => (name === 'Product' ? mockEntityType : undefined)),
   getEntitySet: vi.fn((name: string) => (name === 'Products' ? mockEntitySet : undefined)),
+  getEntitySecurityOptions: vi.fn(() => undefined),
 }
 
 const mockOptions = {
@@ -41,6 +42,7 @@ const mockOptions = {
   namespace: 'Default',
   maxTop: 100,
   maxExpandDepth: 2,
+  maxFilterDepth: 10,
   unmappedTypeStrategy: 'skip' as const,
 }
 
@@ -164,14 +166,35 @@ describe('ODataQueryPipe', () => {
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataParseError)
   })
 
-  it('Test 9: enforces maxTop — clamps $top=5000 to maxTop=100', () => {
+  it('Test 9 (SEC-01): enforces maxTop — throws ODataValidationError when $top=5000 exceeds maxTop=100', () => {
     const pipe = createPipe()
     const rawQuery: Record<string, string> = {
       $top: '5000',
     }
 
-    const result = pipe.transform(rawQuery, metadata)
+    expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
+    expect(() => pipe.transform(rawQuery, metadata)).toThrow(
+      '$top value 5000 exceeds maximum of 100',
+    )
+  })
 
+  it('Test 9b (SEC-01): allows $top=50 when maxTop=100 (within limit)', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $top: '50',
+    }
+
+    const result = pipe.transform(rawQuery, metadata)
+    expect(result.top).toBe(50)
+  })
+
+  it('Test 9c (SEC-01): allows $top=100 when maxTop=100 (boundary, no error)', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $top: '100',
+    }
+
+    const result = pipe.transform(rawQuery, metadata)
     expect(result.top).toBe(100)
   })
 
@@ -236,5 +259,39 @@ describe('ODataQueryPipe', () => {
 
     expect(result.expand).toBeDefined()
     expect(result.expand?.items[0]?.navigationProperty).toBe('Category')
+  })
+
+  describe('Per-entity security overrides (D-07)', () => {
+    it('Test D-07a: per-entity maxTop=500 for Products allows $top=400 (exceeds global 100 but within entity limit)', () => {
+      mockEdmRegistry.getEntitySecurityOptions.mockReturnValue({ maxTop: 500 })
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = { $top: '400' }
+
+      const result = pipe.transform(rawQuery, metadata)
+
+      expect(result.top).toBe(400)
+    })
+
+    it('Test D-07b: per-entity maxTop=500 for Products rejects $top=600 (exceeds entity limit 500)', () => {
+      mockEdmRegistry.getEntitySecurityOptions.mockReturnValue({ maxTop: 500 })
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = { $top: '600' }
+
+      expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
+      expect(() => pipe.transform(rawQuery, metadata)).toThrow(
+        '$top value 600 exceeds maximum of 500',
+      )
+    })
+
+    it('Test D-07c: no per-entity override falls back to global maxTop=100 and rejects $top=150', () => {
+      mockEdmRegistry.getEntitySecurityOptions.mockReturnValue(undefined)
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = { $top: '150' }
+
+      expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
+      expect(() => pipe.transform(rawQuery, metadata)).toThrow(
+        '$top value 150 exceeds maximum of 100',
+      )
+    })
   })
 })

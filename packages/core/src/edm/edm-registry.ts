@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import type { EdmEntityType } from './edm-entity-type.js'
 import type { EdmEntitySet } from './edm-entity-set.js'
+import type { ODataEntitySecurityOptions } from '../query/odata-query.types.js'
 
 /**
  * EdmRegistry — NestJS injectable singleton that stores all registered
@@ -13,6 +14,8 @@ import type { EdmEntitySet } from './edm-entity-set.js'
 export class EdmRegistry {
   private readonly entityTypes = new Map<string, EdmEntityType>()
   private readonly entitySets = new Map<string, EdmEntitySet>()
+  /** Per-entity security option overrides keyed by entitySetName (per D-07) */
+  private readonly entitySecurityOptions = new Map<string, ODataEntitySecurityOptions>()
 
   /**
    * Register an entity type and its corresponding entity set.
@@ -51,5 +54,21 @@ export class EdmRegistry {
   /** All registered entity sets as a read-only map. */
   getEntitySets(): ReadonlyMap<string, EdmEntitySet> {
     return this.entitySets
+  }
+
+  /**
+   * Store per-entity security option overrides for a given entity set name.
+   * These override global ODataModuleResolvedOptions values (per D-07).
+   */
+  setEntitySecurityOptions(entitySetName: string, options: ODataEntitySecurityOptions): void {
+    this.entitySecurityOptions.set(entitySetName, options)
+  }
+
+  /**
+   * Retrieve per-entity security options for a given entity set name.
+   * Returns undefined if no overrides have been set.
+   */
+  getEntitySecurityOptions(entitySetName: string): ODataEntitySecurityOptions | undefined {
+    return this.entitySecurityOptions.get(entitySetName)
   }
 }

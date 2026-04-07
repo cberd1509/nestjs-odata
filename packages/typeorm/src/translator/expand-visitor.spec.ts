@@ -243,4 +243,29 @@ describe('TypeOrmExpandVisitor', () => {
     expect(() => visitor.apply(expandNode, 'entity', customerEntityType, 0)).not.toThrow()
     expect(leftJoinAndSelect).toHaveBeenCalledWith('entity.Orders', 'entity_Orders')
   })
+
+  it('Test D-09: per-entity maxExpandDepth=5 allows depth 3 (global default of 2 would reject it)', () => {
+    const { qb, leftJoinAndSelect } = createMockQb()
+    // Build a 3-level nested expand: Customer -> Orders -> Items
+    // With global maxExpandDepth=2 this would throw at depth 2; with 5 it should succeed
+    const expandNode: ExpandNode = {
+      items: [
+        {
+          navigationProperty: 'Orders',
+          expand: {
+            items: [
+              {
+                navigationProperty: 'Items',
+              },
+            ],
+          },
+        },
+      ],
+    }
+
+    // maxExpandDepth=5 allows depth 3 (current depths 0, 1, all < 5)
+    const visitor = new TypeOrmExpandVisitor(qb, edmRegistry, 5)
+    expect(() => visitor.apply(expandNode, 'entity', customerEntityType, 0)).not.toThrow()
+    expect(leftJoinAndSelect).toHaveBeenCalledTimes(2)
+  })
 })

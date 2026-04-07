@@ -324,7 +324,7 @@ describe('TypeOrmFilterVisitor', () => {
     })
   })
 
-  describe('security — parameterized queries', () => {
+  describe('security — parameterized queries (SEC-03)', () => {
     it('SECURITY: no raw literal values appear in the SQL condition string', () => {
       const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
       const rawValue = 'dangerous-input-123'
@@ -339,6 +339,119 @@ describe('TypeOrmFilterVisitor', () => {
       const sqlCondition = andWhereMock.mock.calls[0][0] as string
       expect(sqlCondition).not.toContain(rawValue)
       expect(sqlCondition).toMatch(/:p\d+/)
+    })
+
+    it('SEC-03 verification: all andWhere calls use :pN named parameters, no raw values', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      // Complex filter with multiple conditions
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'and',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'gt',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 9.99 },
+        },
+        right: {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: { kind: 'PropertyAccess', path: ['Name'] },
+          right: { kind: 'Literal', literalKind: 'string', value: 'SecretValue' },
+        },
+      }
+      visitor.visit(node)
+      const andWhereMock = qb.andWhere
+      // Every SQL condition string must contain :pN, never raw values
+      for (const call of andWhereMock.mock.calls) {
+        const sql = call[0] as string
+        expect(sql).toMatch(/:p\d+/)
+        expect(sql).not.toContain('SecretValue')
+        expect(sql).not.toContain('9.99')
+      }
+    })
+  })
+
+  describe('filter depth enforcement (SEC-04)', () => {
+    it('SEC-04: throws ODataValidationError when filter nesting depth exceeds maxFilterDepth', () => {
+      // Build a depth-4 filter: ((A eq 1 and B eq 2) and C eq 3) and D eq 4
+      const depth4Filter: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'and',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'and',
+          left: {
+            kind: 'BinaryExpr',
+            operator: 'and',
+            left: {
+              kind: 'BinaryExpr',
+              operator: 'eq',
+              left: { kind: 'PropertyAccess', path: ['Id'] },
+              right: { kind: 'Literal', literalKind: 'number', value: 1 },
+            },
+            right: {
+              kind: 'BinaryExpr',
+              operator: 'eq',
+              left: { kind: 'PropertyAccess', path: ['Id'] },
+              right: { kind: 'Literal', literalKind: 'number', value: 2 },
+            },
+          },
+          right: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['Id'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 3 },
+          },
+        },
+        right: {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: { kind: 'PropertyAccess', path: ['Id'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 4 },
+        },
+      }
+
+      // maxFilterDepth=3 means depth 4 should throw
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 3)
+      expect(() => visitor.visit(depth4Filter)).toThrow()
+      expect(() => {
+        const v2 = new TypeOrmFilterVisitor(makeQb(), 'entity', entityType, 3)
+        v2.visit(depth4Filter)
+      }).toThrow('$filter nesting depth')
+    })
+
+    it('SEC-04: allows filter within maxFilterDepth=10 (depth 3 is fine)', () => {
+      const depth3Filter: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'and',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'and',
+          left: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['Id'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 1 },
+          },
+          right: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['Id'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 2 },
+          },
+        },
+        right: {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: { kind: 'PropertyAccess', path: ['Id'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 3 },
+        },
+      }
+
+      // maxFilterDepth=10 allows depth 3
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10)
+      expect(() => visitor.visit(depth3Filter)).not.toThrow()
     })
   })
 })
