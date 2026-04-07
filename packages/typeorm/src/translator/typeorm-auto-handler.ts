@@ -77,10 +77,10 @@ export class TypeOrmAutoHandler {
       top: effectiveTop + 1,
     }
 
-    const qb = this.translator.translate(fetchQuery, entityType)
+    const translateResult = this.translator.translate(fetchQuery, entityType)
 
     const includeCount = query.count === true
-    const rawResult = await this.translator.execute(qb, includeCount)
+    const rawResult = await this.translator.execute(translateResult, includeCount)
 
     const items = rawResult.items
     const hasMore = items.length > effectiveTop
@@ -118,7 +118,7 @@ export class TypeOrmAutoHandler {
       filter: query.filter,
     }
 
-    const qb = this.translator.translate(countQuery, entityType)
+    const { qb } = this.translator.translate(countQuery, entityType)
     return qb.getCount()
   }
 

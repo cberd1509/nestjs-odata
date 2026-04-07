@@ -127,28 +127,47 @@ describe('TypeOrmQueryTranslator', () => {
       expect(qb.skip).toHaveBeenCalledWith(5)
     })
 
-    it('returns the SelectQueryBuilder', () => {
+    it('returns TranslateResult with qb and expandPaginationMap', () => {
       const query: ODataQuery = { entitySetName: 'Products' }
       const result = translator.translate(query, entityType)
-      expect(result).toBe(qb)
+      expect(result.qb).toBe(qb)
+      expect(result.expandPaginationMap).toBeInstanceOf(Map)
     })
   })
 
   describe('execute()', () => {
-    it('calls getMany() when includeCount is false', async () => {
-      const result = await translator.execute(qb, false)
+    it('calls getMany() when includeCount is false (TranslateResult)', async () => {
+      const translateResult = { qb, expandPaginationMap: new Map() }
+      const result = await translator.execute(translateResult, false)
       expect(qb.getMany).toHaveBeenCalled()
       expect(qb.getManyAndCount).not.toHaveBeenCalled()
       expect(result.items).toEqual([{ id: 1 }, { id: 2 }])
       expect(result.count).toBeUndefined()
     })
 
-    it('calls getManyAndCount() when includeCount is true', async () => {
-      const result = await translator.execute(qb, true)
+    it('calls getManyAndCount() when includeCount is true (TranslateResult)', async () => {
+      const translateResult = { qb, expandPaginationMap: new Map() }
+      const result = await translator.execute(translateResult, true)
       expect(qb.getManyAndCount).toHaveBeenCalled()
       expect(qb.getMany).not.toHaveBeenCalled()
       expect(result.items).toEqual([{ id: 1 }, { id: 2 }])
       expect(result.count).toBe(2)
+    })
+
+    it('applies expandPaginationMap after getMany() for post-JOIN slicing (D-13)', async () => {
+      const fullItems = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }]
+      qb.getMany.mockResolvedValue(
+        fullItems.map((item) => ({ ...item, tags: [{ t: 1 }, { t: 2 }, { t: 3 }] })),
+      )
+      const paginationMap = new Map([['tags', { top: 2 }]])
+      const translateResult = { qb, expandPaginationMap: paginationMap }
+
+      const result = await translator.execute(translateResult, false)
+
+      // Each parent item should have its tags sliced to 2
+      for (const item of result.items as Array<{ tags: unknown[] }>) {
+        expect(item.tags).toHaveLength(2)
+      }
     })
   })
 

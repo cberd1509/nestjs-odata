@@ -124,11 +124,16 @@ describe('TypeOrmAutoHandler', () => {
     edmRegistry.register(entityType, entitySet)
   })
 
+  /** Helper to create a TranslateResult mock from a qb */
+  function makeTranslateResult(qb: SelectQueryBuilder<ObjectLiteral>) {
+    return { qb, expandPaginationMap: new Map<string, { skip?: number; top?: number }>() }
+  }
+
   describe('handleGet()', () => {
     it('Test 1: calls translator.translate() then execute() and returns ODataQueryResult', async () => {
       const { qb } = makeMockQb([{ id: 1, name: 'Widget' }], 1)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      translateMock.mockReturnValue(makeTranslateResult(qb))
       executeMock.mockResolvedValue({ items: [{ id: 1, name: 'Widget' }] })
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
@@ -146,14 +151,15 @@ describe('TypeOrmAutoHandler', () => {
       const rows = [{ id: 1 }, { id: 2 }]
       const { qb } = makeMockQb(rows, 2)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      const translateResult = makeTranslateResult(qb)
+      translateMock.mockReturnValue(translateResult)
       executeMock.mockResolvedValue({ items: rows, count: 2 })
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ count: true, top: 10 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
-      expect(executeMock).toHaveBeenCalledWith(qb, true)
+      expect(executeMock).toHaveBeenCalledWith(translateResult, true)
       expect(result.count).toBe(2)
     })
 
@@ -161,14 +167,15 @@ describe('TypeOrmAutoHandler', () => {
       const rows = [{ id: 1 }]
       const { qb } = makeMockQb(rows)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      const translateResult = makeTranslateResult(qb)
+      translateMock.mockReturnValue(translateResult)
       executeMock.mockResolvedValue({ items: rows })
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ count: undefined, top: 10 })
       const result = await autoHandler.handleGet(query, 'http://localhost/odata/Products')
 
-      expect(executeMock).toHaveBeenCalledWith(qb, false)
+      expect(executeMock).toHaveBeenCalledWith(translateResult, false)
       expect(result.count).toBeUndefined()
     })
 
@@ -177,7 +184,7 @@ describe('TypeOrmAutoHandler', () => {
       const rows = [{ id: 1 }, { id: 2 }, { id: 3 }]
       const { qb } = makeMockQb(rows)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      translateMock.mockReturnValue(makeTranslateResult(qb))
       executeMock.mockResolvedValue({ items: rows })
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
@@ -196,7 +203,7 @@ describe('TypeOrmAutoHandler', () => {
       const rows = [{ id: 1 }, { id: 2 }]
       const { qb } = makeMockQb(rows)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      translateMock.mockReturnValue(makeTranslateResult(qb))
       executeMock.mockResolvedValue({ items: rows })
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
@@ -212,7 +219,7 @@ describe('TypeOrmAutoHandler', () => {
     it('Test 6: calls translator.translate() with stripped query (filter only) then returns count from qb.getCount()', async () => {
       const { qb, getCount } = makeMockQb([], 42)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      translateMock.mockReturnValue(makeTranslateResult(qb))
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({
@@ -243,7 +250,7 @@ describe('TypeOrmAutoHandler', () => {
     it('Test 7: ignores $top and $skip in count query (Pitfall 3 — count is always total matching filter)', async () => {
       const { qb, getCount } = makeMockQb([], 100)
       const { repo } = makeMockRepo()
-      translateMock.mockReturnValue(qb)
+      translateMock.mockReturnValue(makeTranslateResult(qb))
 
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
       const query = makeQuery({ top: 5, skip: 50 })
