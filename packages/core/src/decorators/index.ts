@@ -48,3 +48,7 @@ export { ODataDelete } from './odata-delete.decorator.js'
 // @ODataGetByKey route decorator
 export type { ODataGetByKeyOptions } from './odata-get-by-key.decorator.js'
 export { ODataGetByKey } from './odata-get-by-key.decorator.js'
+
+// @ODataController class decorator
+export type { ODataControllerOptions } from './odata-controller.decorator.js'
+export { ODataController } from './odata-controller.decorator.js'

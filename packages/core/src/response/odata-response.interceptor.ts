@@ -8,9 +8,11 @@ import type { ODataQueryResult } from '../query/odata-query.types.js'
 import { buildContextUrl } from './odata-context-url.builder.js'
 import { ODATA_ROUTE_KEY } from '../decorators/metadata-keys.js'
 
-/** Metadata value shape set by @ODataGet() decorator */
+/** Metadata value shape set by @ODataGet() and CRUD decorators */
 interface ODataRouteMetadata {
   readonly entitySetName: string
+  readonly operation?: string
+  readonly isSingleEntity?: boolean
 }
 
 /**
@@ -50,25 +52,66 @@ export class ODataResponseInterceptor implements NestInterceptor {
       return next.handle()
     }
 
-    const { entitySetName } = metadata
+    const { entitySetName, operation, isSingleEntity } = metadata
 
     return next.handle().pipe(
-      map((result: ODataQueryResult) => {
-        // Build the @odata.context URL (includes select projection if applicable)
-        const contextUrl = buildContextUrl(this.options.serviceRoot, entitySetName, result.select)
+      map((result: unknown) => {
+        // Handle POST create: set Location header and return entity with $entity context URL
+        if (operation === 'create' && result !== null && typeof result === 'object') {
+          const createResult = result as { entity?: unknown; locationUrl?: string }
+          if (createResult.locationUrl) {
+            const httpResponse = context
+              .switchToHttp()
+              .getResponse<{ setHeader: (k: string, v: string) => void }>()
+            httpResponse.setHeader('Location', createResult.locationUrl)
+          }
+          const entity = createResult.entity ?? result
+          const contextUrl = buildContextUrl(
+            this.options.serviceRoot,
+            entitySetName,
+            undefined,
+            true,
+          )
+          return {
+            '@odata.context': contextUrl,
+            ...(entity as Record<string, unknown>),
+          }
+        }
+
+        // Handle single-entity response (GET by key, PATCH update) — D-05
+        if (isSingleEntity) {
+          const contextUrl = buildContextUrl(
+            this.options.serviceRoot,
+            entitySetName,
+            undefined,
+            true,
+          )
+          return {
+            '@odata.context': contextUrl,
+            ...(result as Record<string, unknown>),
+          }
+        }
+
+        // Collection response (default) — wrap in OData envelope
+        const queryResult = result as ODataQueryResult
+        const contextUrl = buildContextUrl(
+          this.options.serviceRoot,
+          entitySetName,
+          queryResult.select,
+        )
 
         // Build response: only include optional keys when they have values (D-06, D-08)
         const response: Record<string, unknown> = {
           '@odata.context': contextUrl,
-          value: result.items,
+          value: queryResult.items,
         }
 
-        if (result.count !== undefined) {
-          response['@odata.count'] = result.count
+        if (queryResult.count !== undefined) {
+          response['@odata.count'] = queryResult.count
         }
 
-        if (result.nextLink !== undefined) {
-          response['@odata.nextLink'] = result.nextLink
+        if (queryResult.nextLink !== undefined) {
+          response['@odata.nextLink'] = queryResult.nextLink
         }
 
         return response
