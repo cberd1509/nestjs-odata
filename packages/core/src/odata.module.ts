@@ -1,0 +1,127 @@
+import {
+  ConfigurableModuleBuilder,
+  ConfigurableModuleAsyncOptions,
+  DynamicModule,
+  Global,
+  Module,
+} from '@nestjs/common'
+import type { UnmappedTypeStrategy } from './edm/edm-types.js'
+import type { EdmEntityConfig } from './edm/edm-entity-set.js'
+import { EdmRegistry } from './edm/edm-registry.js'
+import { EDM_ENTITY_CONFIGS } from './tokens.js'
+
+/**
+ * Configuration options for ODataModule.forRoot().
+ *
+ * Per threat model T-02-03: serviceRoot must be a non-empty string.
+ * Per threat model T-02-04: maxTop and maxExpandDepth have safe defaults.
+ */
+export interface ODataModuleOptions {
+  /** Base path for the OData service, e.g. '/odata' */
+  serviceRoot: string
+  /** EDM namespace for all entity types. Default: 'Default' (per D-08) */
+  namespace?: string
+  /** Maximum number of entities returned per query. Default: 1000 */
+  maxTop?: number
+  /** Maximum depth of $expand nesting. Default: 2 */
+  maxExpandDepth?: number
+  /** Strategy when a TypeScript type cannot be mapped to an EDM primitive. Default: 'skip' (per D-10) */
+  unmappedTypeStrategy?: UnmappedTypeStrategy
+}
+
+/** Resolved options with all defaults applied */
+export interface ODataModuleResolvedOptions {
+  serviceRoot: string
+  namespace: string
+  maxTop: number
+  maxExpandDepth: number
+  unmappedTypeStrategy: UnmappedTypeStrategy
+}
+
+const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
+  namespace: 'Default',
+  maxTop: 1000,
+  maxExpandDepth: 2,
+  unmappedTypeStrategy: 'skip',
+}
+
+const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } =
+  new ConfigurableModuleBuilder<ODataModuleOptions>()
+    .setClassMethodName('forRoot')
+    .setFactoryMethodName('create')
+    .build()
+
+/** Internal raw options token from ConfigurableModuleBuilder — not exported publicly. */
+const RAW_OPTIONS_TOKEN = MODULE_OPTIONS_TOKEN
+
+/** Public injection token for the fully-resolved ODataModuleOptions (with defaults applied). */
+export const ODATA_MODULE_OPTIONS = Symbol('ODATA_MODULE_OPTIONS')
+
+/** Provider that applies defaults to the raw options and exposes them under ODATA_MODULE_OPTIONS */
+const resolvedOptionsProvider = {
+  provide: ODATA_MODULE_OPTIONS,
+  useFactory: (raw: ODataModuleOptions): ODataModuleResolvedOptions => ({
+    ...DEFAULT_OPTIONS,
+    ...raw,
+  }),
+  inject: [RAW_OPTIONS_TOKEN],
+}
+
+/**
+ * Core OData module — ORM-agnostic.
+ *
+ * Usage:
+ *   // Root module:
+ *   ODataModule.forRoot({ serviceRoot: '/odata' })
+ *   ODataModule.forRootAsync({ useFactory: () => ({ serviceRoot: '/odata' }) })
+ *
+ *   // Feature modules:
+ *   ODataModule.forFeature([myEdmEntityConfig])
+ *
+ * Zero TypeORM imports — per PKG-01 architecture constraint.
+ */
+@Global()
+@Module({
+  providers: [EdmRegistry],
+  exports: [EdmRegistry],
+})
+export class ODataModule extends ConfigurableModuleClass {
+  /** Override forRoot to inject the resolved-options provider into the dynamic module. */
+  static override forRoot(options: ODataModuleOptions): DynamicModule {
+    const parent = super.forRoot(options)
+    return {
+      ...parent,
+      providers: [...(parent.providers ?? []), resolvedOptionsProvider],
+      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS],
+    }
+  }
+
+  /** Override forRootAsync to inject the resolved-options provider into the dynamic module. */
+  static override forRootAsync(
+    options: ConfigurableModuleAsyncOptions<ODataModuleOptions>,
+  ): DynamicModule {
+    const parent = super.forRootAsync(options)
+    return {
+      ...parent,
+      providers: [...(parent.providers ?? []), resolvedOptionsProvider],
+      exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS],
+    }
+  }
+
+  /**
+   * Register EDM entity configurations from a feature module.
+   * Entities provided here are available via the EDM_ENTITY_CONFIGS injection token.
+   */
+  static forFeature(entityConfigs: EdmEntityConfig[]): DynamicModule {
+    return {
+      module: ODataModule,
+      providers: [
+        {
+          provide: EDM_ENTITY_CONFIGS,
+          useValue: entityConfigs,
+        },
+      ],
+      exports: [EDM_ENTITY_CONFIGS],
+    }
+  }
+}
