@@ -14,7 +14,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "release": "changeset publish"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
