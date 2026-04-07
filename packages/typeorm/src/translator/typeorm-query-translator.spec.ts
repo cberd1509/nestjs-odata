@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import type { Repository, SelectQueryBuilder } from 'typeorm'
-import type { ODataQuery, EdmEntityType } from '@nestjs-odata/core'
+import type { ODataQuery, EdmEntityType, EdmRegistry } from '@nestjs-odata/core'
 
 type MockQb = SelectQueryBuilder<never> & {
   andWhere: MockInstance
@@ -55,10 +55,26 @@ describe('TypeOrmQueryTranslator', () => {
   let repo: MockRepo
   let translator: TypeOrmQueryTranslator
 
+  const mockEdmRegistry: EdmRegistry = {
+    getEntityType: vi.fn(),
+    getEntitySet: vi.fn(),
+    getEntityTypes: vi.fn(),
+    getEntitySets: vi.fn(),
+    register: vi.fn(),
+  } as unknown as EdmRegistry
+
+  const mockOptions = {
+    serviceRoot: '/odata',
+    namespace: 'Default',
+    maxTop: 1000,
+    maxExpandDepth: 2,
+    unmappedTypeStrategy: 'skip' as const,
+  }
+
   beforeEach(() => {
     qb = makeQb()
     repo = makeRepo(qb)
-    translator = new TypeOrmQueryTranslator(repo)
+    translator = new TypeOrmQueryTranslator(repo, mockEdmRegistry, mockOptions)
   })
 
   describe('translate()', () => {

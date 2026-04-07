@@ -6,7 +6,7 @@ import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQuery } from './odata-query.types.js'
 import type { EdmEntityType } from '../edm/edm-entity-type.js'
-import type { FilterNode, SelectItem } from '../parser/ast.js'
+import type { FilterNode, SelectItem, ExpandNode } from '../parser/ast.js'
 import { ODataValidationError } from './odata-validation.error.js'
 
 /**
@@ -79,6 +79,11 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
               this.validateFilterNode(orderItem.expression, entityType)
             }
           }
+
+          // Validate $expand navigation property names (T-04-09, D-10)
+          if (parsed.expand?.items) {
+            this.validateExpandNode(parsed.expand, entityType)
+          }
         }
       }
     }
@@ -91,6 +96,7 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
       skip: parsed.skip,
       count: count || undefined,
       entitySetName,
+      expand: parsed.expand,
     }
   }
 
@@ -136,6 +142,27 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
       case 'Literal':
         // Literals have no property references to validate
         break
+    }
+  }
+
+  /**
+   * Validate $expand navigation property names against the entity type's navigationProperties.
+   * Validates top-level navigation properties only — nested expand validation is handled
+   * by TypeOrmExpandVisitor at translation time with full EDM registry access.
+   *
+   * Per T-04-09: prevents users from expanding properties not declared as navigation properties.
+   * Per D-10: validates property references before any DB query is constructed.
+   */
+  private validateExpandNode(expandNode: ExpandNode, entityType: EdmEntityType): void {
+    for (const item of expandNode.items) {
+      const navNames = entityType.navigationProperties.map((np) => np.name)
+      if (!navNames.includes(item.navigationProperty)) {
+        throw new ODataValidationError(
+          `Navigation property '${item.navigationProperty}' not found on entity '${entityType.name}'`,
+          entityType.name,
+          item.navigationProperty,
+        )
+      }
     }
   }
 

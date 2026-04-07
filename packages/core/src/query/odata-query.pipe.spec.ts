@@ -16,7 +16,10 @@ const mockEntityType: EdmEntityType = {
     { name: 'Name', type: 'Edm.String', nullable: false },
     { name: 'Price', type: 'Edm.Decimal', nullable: false },
   ],
-  navigationProperties: [],
+  navigationProperties: [
+    { name: 'Category', type: 'Category', nullable: true, isCollection: false },
+    { name: 'Supplier', type: 'Supplier', nullable: true, isCollection: false },
+  ],
   keyProperties: ['Id'],
   isReadOnly: false,
 }
@@ -184,5 +187,54 @@ describe('ODataQueryPipe', () => {
     expect(result.orderBy).toBeUndefined()
     expect(result.top).toBeUndefined()
     expect(result.skip).toBeUndefined()
+  })
+
+  it('Test 11: $expand=Category passes validation for known navigation property', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $expand: 'Category',
+    }
+
+    const result = pipe.transform(rawQuery, metadata)
+
+    expect(result.expand).toBeDefined()
+    expect(result.expand?.items).toHaveLength(1)
+    expect(result.expand?.items[0]?.navigationProperty).toBe('Category')
+  })
+
+  it('Test 12: $expand=InvalidNavProp throws ODataValidationError for unknown navigation property', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $expand: 'NonExistentNavProp',
+    }
+
+    expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
+    expect(() => pipe.transform(rawQuery, metadata)).toThrow(
+      "Navigation property 'NonExistentNavProp' not found on entity 'Product'",
+    )
+  })
+
+  it('Test 13: $expand=Category,Supplier passes validation for multiple known navigation properties', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $expand: 'Category,Supplier',
+    }
+
+    const result = pipe.transform(rawQuery, metadata)
+
+    expect(result.expand).toBeDefined()
+    expect(result.expand?.items).toHaveLength(2)
+  })
+
+  it('Test 14: $expand is present in returned ODataQuery.expand field', () => {
+    const pipe = createPipe()
+    const rawQuery: Record<string, string> = {
+      $expand: 'Category',
+    }
+
+    const result = pipe.transform(rawQuery, metadata)
+
+    expect(result.expand).toBeDefined()
+    expect(result.expand?.items[0]?.navigationProperty).toBe('Category')
   })
 })
