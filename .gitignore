@@ -6,6 +6,8 @@ node_modules/
 dist/
 build/
 .turbo/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
 
 # Test output
 coverage/

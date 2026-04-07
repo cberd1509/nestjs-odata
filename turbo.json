@@ -12,6 +12,10 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": ["coverage/**"]
+    },
+    "docs:build": {
+      "dependsOn": ["^build"],
+      "outputs": ["docs/.vitepress/dist/**"]
     }
   }
 }
