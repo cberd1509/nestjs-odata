@@ -49,10 +49,17 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
     // Parse into QueryOptions (filter AST, select, orderBy, top, skip)
     const parsed = parseQuery(queryString)
 
-    // Enforce maxTop: clamp top to configured maximum
-    let top = parsed.top
-    if (top !== undefined && top > this.options.maxTop) {
-      top = this.options.maxTop
+    // Enforce maxTop: reject (HTTP 400) when $top exceeds the limit (per D-05, SEC-01)
+    // Per-entity override takes precedence over global options (per D-07)
+    const entitySecOpts = this.edmRegistry.getEntitySecurityOptions(entitySetName)
+    const effectiveMaxTop = entitySecOpts?.maxTop ?? this.options.maxTop
+    const top = parsed.top
+    if (top !== undefined && top > effectiveMaxTop) {
+      throw new ODataValidationError(
+        `$top value ${top} exceeds maximum of ${effectiveMaxTop}`,
+        entitySetName,
+        '$top',
+      )
     }
 
     // Validate field names against EdmRegistry when we have an entity set

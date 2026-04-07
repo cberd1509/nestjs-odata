@@ -13,6 +13,16 @@ import { TypeOrmSelectVisitor } from './select-visitor.js'
 import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
 import { TypeOrmPaginationVisitor } from './pagination-visitor.js'
 import { TypeOrmExpandVisitor } from './expand-visitor.js'
+import { applyExpandPagination } from './expand-pagination.js'
+
+/**
+ * Translation result from translate() — includes the QueryBuilder and the
+ * expandPaginationMap needed for post-JOIN in-memory slicing (D-13).
+ */
+export interface TranslateResult {
+  readonly qb: SelectQueryBuilder<ObjectLiteral>
+  readonly expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }>
+}
 
 /**
  * TypeOrmQueryTranslator — orchestrates all visitor classes to translate
@@ -38,9 +48,10 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<SelectQueryBuild
 
   /**
    * Translate an ODataQuery AST into a TypeORM SelectQueryBuilder.
+   * Also returns the expandPaginationMap for post-JOIN slicing (D-13).
    * Does not execute the query — call execute() for DB access.
    */
-  translate(query: ODataQuery, entityType: EdmEntityType): SelectQueryBuilder<ObjectLiteral> {
+  translate(query: ODataQuery, entityType: EdmEntityType): TranslateResult {
     const alias = 'entity'
     const qb = this.repo.createQueryBuilder(alias)
 
@@ -63,33 +74,50 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<SelectQueryBuild
     new TypeOrmPaginationVisitor(qb).paginate(query.top, query.skip)
 
     // 5. Expand (JOINs for navigation properties)
+    let expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }> = new Map()
     if (query.expand) {
-      new TypeOrmExpandVisitor(qb, this.edmRegistry, this.options.maxExpandDepth).apply(
-        query.expand,
-        alias,
-        entityType,
-        0,
+      const expandVisitor = new TypeOrmExpandVisitor(
+        qb,
+        this.edmRegistry,
+        this.options.maxExpandDepth,
       )
+      expandVisitor.apply(query.expand, alias, entityType, 0)
+      expandPaginationMap = expandVisitor.expandPaginationMap
     }
 
-    return qb
+    return { qb, expandPaginationMap }
   }
 
   /**
    * Execute the translated SelectQueryBuilder and return structured results.
+   * Applies post-JOIN in-memory expand pagination after getMany() (D-13).
    *
-   * @param qb - The SelectQueryBuilder returned by translate()
+   * @param translateResult - The result from translate() (qb + expandPaginationMap)
    * @param includeCount - If true, uses getManyAndCount() to include total count
    */
   async execute(
-    qb: SelectQueryBuilder<ObjectLiteral>,
+    translateResult: TranslateResult | SelectQueryBuilder<ObjectLiteral>,
     includeCount: boolean,
   ): Promise<ODataQueryResult> {
+    // Support legacy callers that pass a raw SelectQueryBuilder (backwards compat)
+    let qb: SelectQueryBuilder<ObjectLiteral>
+    let expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }>
+
+    if ('qb' in translateResult && 'expandPaginationMap' in translateResult) {
+      qb = translateResult.qb
+      expandPaginationMap = translateResult.expandPaginationMap
+    } else {
+      qb = translateResult
+      expandPaginationMap = new Map()
+    }
+
     if (includeCount) {
       const [items, count] = await qb.getManyAndCount()
+      applyExpandPagination(items, expandPaginationMap)
       return { items, count }
     }
     const items = await qb.getMany()
+    applyExpandPagination(items, expandPaginationMap)
     return { items }
   }
 }

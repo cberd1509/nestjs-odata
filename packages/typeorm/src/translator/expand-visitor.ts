@@ -13,12 +13,21 @@ import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
  * Per D-09: Uses JOINs, NOT lazy loading — one SQL query.
  * Per D-07: Enforces maxExpandDepth.
  * Per D-10: Validates navigation property names against EDM.
+ * Per D-13: Records $top/$skip per expand item in expandPaginationMap for
+ *   post-JOIN in-memory slicing by TypeOrmQueryTranslator after getMany().
  *
  * Alias convention: `{parentAlias}_{navigationProperty}` — unique per level
  * to prevent TypeORM alias collision when the same nav prop appears at
  * different tree paths.
  */
 export class TypeOrmExpandVisitor {
+  /**
+   * Records per-navigation-property $top/$skip values for post-JOIN slicing.
+   * Populated during apply() calls. Consumed by TypeOrmQueryTranslator after
+   * getMany() via applyExpandPagination().
+   */
+  readonly expandPaginationMap = new Map<string, { skip?: number; top?: number }>()
+
   constructor(
     private readonly qb: SelectQueryBuilder<ObjectLiteral>,
     private readonly edmRegistry: EdmRegistry,
@@ -87,8 +96,15 @@ export class TypeOrmExpandVisitor {
     if (item.orderBy?.length) {
       new TypeOrmOrderByVisitor(this.qb, joinAlias).apply(item.orderBy)
     }
-    // Note: $top/$skip on $expand items require subqueries — complex for v1.
-    // These are intentionally deferred to a later phase.
+
+    // Per D-13: Record $top/$skip for post-JOIN in-memory slicing after getMany().
+    // Only collections can be paginated — single-valued nav props are not arrays.
+    if ((item.top !== undefined || item.skip !== undefined) && navProp.isCollection) {
+      this.expandPaginationMap.set(item.navigationProperty, {
+        skip: item.skip,
+        top: item.top,
+      })
+    }
 
     // Recursive nested expand (D-07)
     if (item.expand && targetEntityType) {

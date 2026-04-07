@@ -10,6 +10,19 @@
 import type { FilterNode, SelectNode, OrderByItem, ExpandNode } from '../parser/ast.js'
 
 /**
+ * Per-entity security option overrides.
+ * When set via EdmRegistry, these take precedence over global ODataModuleOptions values.
+ *
+ * Per D-07: allows individual entity sets to have tighter (or looser) limits than the
+ * global defaults without modifying the global config.
+ */
+export interface ODataEntitySecurityOptions {
+  readonly maxTop?: number
+  readonly maxExpandDepth?: number
+  readonly maxFilterDepth?: number
+}
+
+/**
  * Typed OData query object produced by ODataQueryPipe.
  * All optional fields are only present when the corresponding query option
  * was supplied in the request.

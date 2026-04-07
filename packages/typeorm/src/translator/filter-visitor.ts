@@ -10,7 +10,7 @@ import type {
   FilterVisitor,
   EdmEntityType,
 } from '@nestjs-odata/core'
-import { acceptVisitor } from '@nestjs-odata/core'
+import { acceptVisitor, ODataValidationError } from '@nestjs-odata/core'
 
 /** Map of OData comparison operators to SQL operators */
 const COMPARISON_OPS: Record<string, string> = {
@@ -39,14 +39,21 @@ const SCALAR_FUNCTIONS: Record<string, string> = {
  *
  * LIKE special characters (%, _) are escaped before use in contains/startswith/endswith
  * to prevent wildcard injection (T-03-05 mitigation).
+ *
+ * Per SEC-04: Tracks filter AST nesting depth and throws ODataValidationError when
+ * depth exceeds maxFilterDepth. Prevents pathological filter expressions.
  */
 export class TypeOrmFilterVisitor implements FilterVisitor<void> {
-  private paramCount = 0
+  /** Shared param counter — passed between sibling visitors for unique names */
+  paramCount = 0
+  /** Current nesting depth — propagated to sub-visitors for or branches */
+  currentDepth = 0
 
   constructor(
     private readonly qb: SelectQueryBuilder<ObjectLiteral>,
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
+    private readonly maxFilterDepth: number = 10,
   ) {}
 
   /** Entry point: dispatch the root FilterNode to the appropriate visit method */
@@ -55,23 +62,35 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
   }
 
   visitBinaryExpr(node: BinaryExprNode): void {
+    this.currentDepth++
+    if (this.currentDepth > this.maxFilterDepth) {
+      throw new ODataValidationError(
+        `$filter nesting depth ${this.currentDepth} exceeds maximum of ${this.maxFilterDepth}`,
+        this.entityType.name,
+        '$filter',
+      )
+    }
     const { operator, left, right } = node
 
     if (operator === 'and') {
       acceptVisitor(left, this)
       acceptVisitor(right, this)
+      this.currentDepth--
       return
     }
 
     if (operator === 'or') {
+      const depthAtEntry = this.currentDepth
       this.qb.andWhere(
         new Brackets((qb) => {
           const leftVisitor = new TypeOrmFilterVisitor(
             qb as SelectQueryBuilder<ObjectLiteral>,
             this.alias,
             this.entityType,
+            this.maxFilterDepth,
           )
           leftVisitor.paramCount = this.paramCount
+          leftVisitor.currentDepth = depthAtEntry
           acceptVisitor(left, leftVisitor)
           this.paramCount = leftVisitor.paramCount
 
@@ -79,12 +98,15 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             qb as SelectQueryBuilder<ObjectLiteral>,
             this.alias,
             this.entityType,
+            this.maxFilterDepth,
           )
           rightVisitor.paramCount = this.paramCount
+          rightVisitor.currentDepth = depthAtEntry
           acceptVisitor(right, rightVisitor)
           this.paramCount = rightVisitor.paramCount
         }),
       )
+      this.currentDepth--
       return
     }
 
@@ -94,10 +116,12 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       const paramName = this.nextParam()
       const literalValue = this.extractLiteralValue(right)
       this.qb.andWhere(`${leftExpr} ${sqlOp} :${paramName}`, { [paramName]: literalValue })
+      this.currentDepth--
       return
     }
 
     // Unsupported operator — skip (arithmetic ops would need different handling)
+    this.currentDepth--
   }
 
   visitUnaryExpr(node: UnaryExprNode): void {

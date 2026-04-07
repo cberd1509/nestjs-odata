@@ -33,6 +33,8 @@ export interface ODataModuleOptions {
   maxTop?: number
   /** Maximum depth of $expand nesting. Default: 2 */
   maxExpandDepth?: number
+  /** Maximum nesting depth of $filter expressions. Default: 10 (per SEC-04) */
+  maxFilterDepth?: number
   /** Strategy when a TypeScript type cannot be mapped to an EDM primitive. Default: 'skip' (per D-10) */
   unmappedTypeStrategy?: UnmappedTypeStrategy
   /**
@@ -49,6 +51,8 @@ export interface ODataModuleResolvedOptions {
   namespace: string
   maxTop: number
   maxExpandDepth: number
+  /** Maximum nesting depth of $filter expressions (SEC-04). Default: 10 */
+  maxFilterDepth: number
   unmappedTypeStrategy: UnmappedTypeStrategy
 }
 
@@ -56,6 +60,7 @@ const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
   namespace: 'Default',
   maxTop: 1000,
   maxExpandDepth: 2,
+  maxFilterDepth: 10,
   unmappedTypeStrategy: 'skip',
 }
 
