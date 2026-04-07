@@ -76,10 +76,10 @@ Decimal phases appear between their surrounding integers in numeric order.
    **Plans:** 4 plans
    Plans:
 
-- [ ] 03-01-PLAN.md — Core query types (ODataQuery, ODataQueryResult, ODataValidationError), refined IQueryTranslator, ODataQueryPipe
-- [ ] 03-02-PLAN.md — TypeORM visitor classes TDD (FilterVisitor, SelectVisitor, OrderByVisitor, PaginationVisitor, TypeOrmQueryTranslator)
-- [ ] 03-03-PLAN.md — ODataResponseInterceptor, ODataExceptionFilter, buildContextUrl, @ODataGet and @ODataQuery decorators
-- [ ] 03-04-PLAN.md — TypeOrmAutoHandler, $count route, module wiring, Products controller e2e test
+- [x] 03-01-PLAN.md — Core query types (ODataQuery, ODataQueryResult, ODataValidationError), refined IQueryTranslator, ODataQueryPipe
+- [x] 03-02-PLAN.md — TypeORM visitor classes TDD (FilterVisitor, SelectVisitor, OrderByVisitor, PaginationVisitor, TypeOrmQueryTranslator)
+- [x] 03-03-PLAN.md — ODataResponseInterceptor, ODataExceptionFilter, buildContextUrl, @ODataGet and @ODataQuery decorators
+- [x] 03-04-PLAN.md — TypeOrmAutoHandler, $count route, module wiring, Products controller e2e test
 
 ### Phase 4: CRUD, $expand, and Module System
 
