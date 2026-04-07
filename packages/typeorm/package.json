@@ -1,0 +1,49 @@
+{
+  "name": "@nestjs-odata/typeorm",
+  "version": "0.0.1",
+  "description": "TypeORM adapter for @nestjs-odata/core — auto-derives OData EDM from TypeORM entity metadata",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "peerDependencies": {
+    "@nestjs-odata/core": ">=0.1.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "@nestjs/typeorm": "^10.0.0 || ^11.0.0",
+    "reflect-metadata": "^0.1.13 || ^0.2.0",
+    "rxjs": "^7.0.0",
+    "typeorm": "^0.3.0"
+  },
+  "devDependencies": {
+    "@nestjs-odata/core": "workspace:*",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/typeorm": "^11.0.0",
+    "@swc/core": "^1.15.24",
+    "@types/better-sqlite3": "^7.6.0",
+    "better-sqlite3": "^12.8.0",
+    "tsdown": "^0.21.7",
+    "typeorm": "^0.3.28",
+    "typescript": "^5.7.3",
+    "unplugin-swc": "^1.5.9",
+    "vitest": "^3.2.0"
+  }
+}

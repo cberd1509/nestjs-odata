@@ -1,0 +1,35 @@
+{
+  "name": "@nestjs-odata/test-app",
+  "version": "0.0.1",
+  "description": "Integration test application for @nestjs-odata",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/typeorm": "^11.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "typeorm": "^0.3.28"
+  },
+  "devDependencies": {
+    "@nestjs-odata/core": "workspace:*",
+    "@nestjs-odata/typeorm": "workspace:*",
+    "@swc/core": "^1.15.24",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "better-sqlite3": "^12.8.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^5.7.3",
+    "unplugin-swc": "^1.5.9",
+    "vitest": "^3.2.0"
+  }
+}
