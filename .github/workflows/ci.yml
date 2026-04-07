@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo lint
+      - run: pnpm turbo typecheck
+      - run: pnpm turbo test
+      - run: pnpm turbo build
+      - name: Validate package exports (core)
+        run: |
+          pnpm dlx @arethetypeswrong/cli --pack packages/core
+          pnpm dlx publint packages/core
+      - name: Validate package exports (typeorm)
+        run: |
+          pnpm dlx @arethetypeswrong/cli --pack packages/typeorm
+          pnpm dlx publint packages/typeorm
