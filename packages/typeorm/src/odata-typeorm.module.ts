@@ -1,6 +1,10 @@
-import { DynamicModule, Module } from '@nestjs/common'
+import { DynamicModule, Inject, Injectable, Module, OnModuleInit } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { DataSource } from 'typeorm'
 import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type.js'
+import type { EdmEntityConfig, EdmEntitySet, EdmEntityType, EntityClass } from '@nestjs-odata/core'
+import { EdmRegistry, ODATA_MODULE_OPTIONS, type ODataModuleOptions } from '@nestjs-odata/core'
+import { TypeOrmEdmDeriver } from './deriver/typeorm-edm-deriver.js'
 
 /**
  * DI injection token for the array of TypeORM entity classes
@@ -9,11 +13,55 @@ import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity
 export const TYPEORM_ODATA_ENTITIES = Symbol('TYPEORM_ODATA_ENTITIES')
 
 /**
+ * TypeOrmEdmInitializer — runs at module init to derive EDM from TypeORM entities
+ * and register them in the EdmRegistry.
+ *
+ * Per D-06, D-16, EDM-06: EDM derivation happens after DataSource is ready (onModuleInit).
+ */
+@Injectable()
+export class TypeOrmEdmInitializer implements OnModuleInit {
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly edmRegistry: EdmRegistry,
+    @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleOptions,
+    @Inject(TYPEORM_ODATA_ENTITIES) private readonly entityClasses: EntityClass[],
+  ) {}
+
+  onModuleInit(): void {
+    const deriver = new TypeOrmEdmDeriver(
+      this.options.namespace ?? 'Default',
+      this.options.unmappedTypeStrategy ?? 'skip',
+    )
+    const metadatas = this.entityClasses.map((cls) => this.dataSource.getMetadata(cls))
+    const configs: EdmEntityConfig[] = deriver.deriveEntityTypes(this.entityClasses, metadatas)
+
+    for (const config of configs) {
+      const namespace = this.options.namespace ?? 'Default'
+      const entityType: EdmEntityType = {
+        name: config.entityTypeName,
+        namespace,
+        properties: config.properties,
+        navigationProperties: config.navigationProperties,
+        keyProperties: config.keyProperties,
+        isReadOnly: config.isReadOnly,
+      }
+      const entitySet: EdmEntitySet = {
+        name: config.entitySetName,
+        entityTypeName: config.entityTypeName,
+        namespace,
+        isReadOnly: config.isReadOnly,
+      }
+      this.edmRegistry.register(entityType, entitySet)
+    }
+  }
+}
+
+/**
  * TypeORM adapter module for @nestjs-odata/core.
  *
  * Wraps TypeOrmModule.forFeature() and registers the entity classes
- * under the TYPEORM_ODATA_ENTITIES token so that TypeOrmEdmDeriver
- * (Plan 03) can auto-derive OData EDM metadata from TypeORM entity metadata.
+ * under the TYPEORM_ODATA_ENTITIES token. TypeOrmEdmInitializer runs
+ * at onModuleInit to derive and register OData EDM metadata from TypeORM.
  *
  * ODataModule.forRoot() must be imported in the application root module —
  * EdmRegistry is @Global() so it is available here without an explicit import.
@@ -27,7 +75,8 @@ export class ODataTypeOrmModule {
    * Register TypeORM entity classes for OData auto-derivation.
    *
    * @param entities - Array of TypeORM entity classes (decorated with @Entity())
-   * @returns DynamicModule that imports TypeOrmModule.forFeature and exposes TYPEORM_ODATA_ENTITIES
+   * @returns DynamicModule that imports TypeOrmModule.forFeature, provides TYPEORM_ODATA_ENTITIES,
+   *          and wires TypeOrmEdmInitializer to populate the EdmRegistry at onModuleInit
    */
   static forFeature(entities: EntityClassOrSchema[]): DynamicModule {
     return {
@@ -38,7 +87,7 @@ export class ODataTypeOrmModule {
           provide: TYPEORM_ODATA_ENTITIES,
           useValue: entities,
         },
-        // TypeOrmEdmDeriver will be added in Plan 03 when the deriver is implemented.
+        TypeOrmEdmInitializer,
       ],
       exports: [TYPEORM_ODATA_ENTITIES],
     }

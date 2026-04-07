@@ -5,6 +5,7 @@ import {
   Global,
   Module,
 } from '@nestjs/common'
+import { PATH_METADATA } from '@nestjs/common/constants.js'
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import { EdmRegistry } from './edm/edm-registry.js'
@@ -71,6 +72,21 @@ const resolvedOptionsProvider = {
 }
 
 /**
+ * Patch the MetadataController's PATH_METADATA to use the given serviceRoot.
+ * This allows the controller to serve routes under the correct path without
+ * hardcoding the serviceRoot.
+ *
+ * Uses Reflect.defineMetadata to set the NestJS controller path at module
+ * registration time (before the DI container compiles the module).
+ */
+function createMetadataControllerWithPath(serviceRoot: string): typeof MetadataController {
+  // Normalize: remove leading slash to match NestJS path convention
+  const path = serviceRoot.startsWith('/') ? serviceRoot.slice(1) : serviceRoot
+  Reflect.defineMetadata(PATH_METADATA, path, MetadataController)
+  return MetadataController
+}
+
+/**
  * Core OData module — ORM-agnostic.
  *
  * Usage:
@@ -92,6 +108,7 @@ export class ODataModule extends ConfigurableModuleClass {
   /** Override forRoot to inject the resolved-options provider into the dynamic module. */
   static override forRoot(options: ODataModuleOptions): DynamicModule {
     const parent = super.forRoot(options)
+    const controller = createMetadataControllerWithPath(options.serviceRoot)
     return {
       ...parent,
       providers: [
@@ -100,7 +117,7 @@ export class ODataModule extends ConfigurableModuleClass {
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
-      controllers: [...(parent.controllers ?? []), MetadataController],
+      controllers: [...(parent.controllers ?? []), controller],
       exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
@@ -110,6 +127,9 @@ export class ODataModule extends ConfigurableModuleClass {
     options: ConfigurableModuleAsyncOptions<ODataModuleOptions>,
   ): DynamicModule {
     const parent = super.forRootAsync(options)
+    // For async, we can't know the serviceRoot at this point.
+    // Default to empty prefix; consumers should use forRoot for synchronous config.
+    const controller = MetadataController
     return {
       ...parent,
       providers: [
@@ -118,7 +138,7 @@ export class ODataModule extends ConfigurableModuleClass {
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
-      controllers: [...(parent.controllers ?? []), MetadataController],
+      controllers: [...(parent.controllers ?? []), controller],
       exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
