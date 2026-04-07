@@ -114,6 +114,9 @@ importers:
       '@nestjs/common':
         specifier: ^10.0.0 || ^11.0.0
         version: 11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      pluralize:
+        specifier: ^8.0.0
+        version: 8.0.0
       reflect-metadata:
         specifier: ^0.1.13 || ^0.2.0
         version: 0.2.2
@@ -124,6 +127,9 @@ importers:
       '@swc/core':
         specifier: ^1.15.24
         version: 1.15.24
+      '@types/pluralize':
+        specifier: ^0.0.33
+        version: 0.0.33
       tsdown:
         specifier: ^0.21.7
         version: 0.21.7(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(typescript@5.9.3)
@@ -1390,6 +1396,9 @@ packages:
 
   '@types/node@22.19.17':
     resolution: {integrity: sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==}
+
+  '@types/pluralize@0.0.33':
+    resolution: {integrity: sha512-JOqsl+ZoCpP4e8TDke9W79FDcSgPAR0l6pixx2JHkhnRjvShyYiAYw2LVsnA7K08Y6DeOnaU6ujmENO4os/cYg==}
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
@@ -2811,6 +2820,10 @@ packages:
   pify@4.0.1:
     resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
     engines: {node: '>=6'}
+
+  pluralize@8.0.0:
+    resolution: {integrity: sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA==}
+    engines: {node: '>=4'}
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -4730,6 +4743,8 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/pluralize@0.0.33': {}
+
   '@types/unist@3.0.3': {}
 
   '@types/web-bluetooth@0.0.21': {}
@@ -6176,6 +6191,8 @@ snapshots:
   picomatch@4.0.4: {}
 
   pify@4.0.1: {}
+
+  pluralize@8.0.0: {}
 
   possible-typed-array-names@1.1.0: {}
 
