@@ -12,3 +12,6 @@ export const ODATA_KEY_KEY = Symbol('nestjs-odata:odata-key')
 
 /** Metadata key for @ODataView() class decorator — stores ODataViewOptions */
 export const ODATA_VIEW_KEY = Symbol('nestjs-odata:odata-view')
+
+/** Metadata key for @ODataGet() method decorator — marks a route as an OData route */
+export const ODATA_ROUTE_KEY = Symbol('ODATA_ROUTE')
