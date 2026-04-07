@@ -93,7 +93,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 3. `GET /api/health` on the same NestJS app returns plain JSON, not wrapped in an OData envelope, after `ODataModule.forRoot()` is registered
 4. Adding `@ODataController(Product)` to a module auto-wires GET, POST, PATCH, DELETE routes with no additional configuration beyond `ODataModule.forFeature([Product])`
 5. 80%+ code coverage across `packages/core` and `packages/typeorm` is reported in CI
-   **Plans**: TBD
+   **Plans:** 5 plans
+   Plans:
+
+- [ ] 04-01-PLAN.md — $expand AST types (ExpandNode/ExpandItem), parser extension, ODataQuery expand field, key parser utility
+- [ ] 04-02-PLAN.md — CRUD decorators (@ODataPost, @ODataPatch, @ODataDelete, @ODataGetByKey), @ODataController class decorator, interceptor single-entity support
+- [ ] 04-03-PLAN.md — TypeOrmExpandVisitor (JOIN translation), CRUD handlers in TypeOrmAutoHandler, $expand validation in ODataQueryPipe
+- [ ] 04-04-PLAN.md — Module system wiring (@ODataController path patching with serviceRoot in forRoot)
+- [ ] 04-05-PLAN.md — Test-app OData controller, health controller, e2e tests (CRUD, $expand, route isolation), coverage verification
 
 ### Phase 5: $batch, Security, and v1 Hardening
 
@@ -120,5 +127,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation and Parser Spike        | 0/4            | Planning complete | -          |
 | 2. EDM and $metadata                  | 5/5            | Complete          | 2026-04-07 |
 | 3. Query Engine and Response Format   | 0/4            | Planning complete | -          |
-| 4. CRUD, $expand, and Module System   | 0/TBD          | Not started       | -          |
+| 4. CRUD, $expand, and Module System   | 0/5            | Planning complete | -          |
 | 5. $batch, Security, and v1 Hardening | 0/TBD          | Not started       | -          |
