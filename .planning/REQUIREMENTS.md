@@ -140,58 +140,58 @@
 | SCAF-09 | Phase 1 | Pending |
 | SCAF-10 | Phase 1 | Pending |
 | SCAF-11 | Phase 1 | Pending |
-| EDM-01 | TBD | Pending |
-| EDM-02 | TBD | Pending |
-| EDM-03 | TBD | Pending |
-| EDM-04 | TBD | Pending |
-| EDM-05 | TBD | Pending |
-| EDM-06 | TBD | Pending |
-| QUERY-01 | TBD | Pending |
-| QUERY-02 | TBD | Pending |
-| QUERY-03 | TBD | Pending |
-| QUERY-04 | TBD | Pending |
-| QUERY-05 | TBD | Pending |
-| QUERY-06 | TBD | Pending |
-| QUERY-07 | TBD | Pending |
-| QUERY-08 | TBD | Pending |
-| QUERY-09 | TBD | Pending |
-| RESP-01 | TBD | Pending |
-| RESP-02 | TBD | Pending |
-| RESP-03 | TBD | Pending |
-| CRUD-01 | TBD | Pending |
-| CRUD-02 | TBD | Pending |
-| CRUD-03 | TBD | Pending |
-| CRUD-04 | TBD | Pending |
-| BATCH-01 | TBD | Pending |
-| BATCH-02 | TBD | Pending |
-| BATCH-03 | TBD | Pending |
-| MOD-01 | TBD | Pending |
-| MOD-02 | TBD | Pending |
-| MOD-03 | TBD | Pending |
-| MOD-04 | TBD | Pending |
-| MOD-05 | TBD | Pending |
-| MOD-06 | TBD | Pending |
-| SEC-01 | TBD | Pending |
-| SEC-02 | TBD | Pending |
-| SEC-03 | TBD | Pending |
-| SEC-04 | TBD | Pending |
-| TEST-01 | TBD | Pending |
-| TEST-02 | TBD | Pending |
-| TEST-03 | TBD | Pending |
-| TEST-04 | TBD | Pending |
-| TEST-05 | TBD | Pending |
-| TEST-06 | TBD | Pending |
-| PKG-01 | TBD | Pending |
-| PKG-02 | TBD | Pending |
-| PKG-03 | TBD | Pending |
-| PKG-04 | TBD | Pending |
-| PKG-05 | TBD | Pending |
+| EDM-01 | Phase 2 | Pending |
+| EDM-02 | Phase 2 | Pending |
+| EDM-03 | Phase 2 | Pending |
+| EDM-04 | Phase 2 | Pending |
+| EDM-05 | Phase 2 | Pending |
+| EDM-06 | Phase 2 | Pending |
+| QUERY-01 | Phase 3 | Pending |
+| QUERY-02 | Phase 3 | Pending |
+| QUERY-03 | Phase 3 | Pending |
+| QUERY-04 | Phase 3 | Pending |
+| QUERY-05 | Phase 3 | Pending |
+| QUERY-06 | Phase 3 | Pending |
+| QUERY-07 | Phase 4 | Pending |
+| QUERY-08 | Phase 4 | Pending |
+| QUERY-09 | Phase 3 | Pending |
+| RESP-01 | Phase 3 | Pending |
+| RESP-02 | Phase 3 | Pending |
+| RESP-03 | Phase 4 | Pending |
+| CRUD-01 | Phase 4 | Pending |
+| CRUD-02 | Phase 4 | Pending |
+| CRUD-03 | Phase 4 | Pending |
+| CRUD-04 | Phase 4 | Pending |
+| BATCH-01 | Phase 5 | Pending |
+| BATCH-02 | Phase 5 | Pending |
+| BATCH-03 | Phase 5 | Pending |
+| MOD-01 | Phase 4 | Pending |
+| MOD-02 | Phase 4 | Pending |
+| MOD-03 | Phase 4 | Pending |
+| MOD-04 | Phase 4 | Pending |
+| MOD-05 | Phase 4 | Pending |
+| MOD-06 | Phase 4 | Pending |
+| SEC-01 | Phase 5 | Pending |
+| SEC-02 | Phase 5 | Pending |
+| SEC-03 | Phase 5 | Pending |
+| SEC-04 | Phase 5 | Pending |
+| TEST-01 | Phase 3 | Pending |
+| TEST-02 | Phase 3 | Pending |
+| TEST-03 | Phase 2 | Pending |
+| TEST-04 | Phase 4 | Pending |
+| TEST-05 | Phase 2 | Pending |
+| TEST-06 | Phase 4 | Pending |
+| PKG-01 | Phase 2 | Pending |
+| PKG-02 | Phase 2 | Pending |
+| PKG-03 | Phase 2 | Pending |
+| PKG-04 | Phase 2 | Pending |
+| PKG-05 | Phase 2 | Pending |
 
 **Coverage:**
 - v1 requirements: 50 total
-- Mapped to phases: 11 (SCAF-* to Phase 1)
-- Unmapped: 39 (roadmapper will assign)
+- Mapped to phases: 50/50
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-07*
-*Last updated: 2026-04-07 after initial definition*
+*Last updated: 2026-04-07 after roadmap creation*
