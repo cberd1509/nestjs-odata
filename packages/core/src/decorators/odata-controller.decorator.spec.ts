@@ -3,8 +3,6 @@ import { describe, it, expect } from 'vitest'
 import { INTERCEPTORS_METADATA, FILTERS_METADATA, PATH_METADATA } from '@nestjs/common/constants.js'
 import { ODataController } from './odata-controller.decorator.js'
 import { ODATA_CONTROLLER_KEY } from './metadata-keys.js'
-import { ODataResponseInterceptor } from '../response/odata-response.interceptor.js'
-import { ODataExceptionFilter } from '../response/odata-exception.filter.js'
 
 @ODataController('Products')
 class ProductsController {}
@@ -28,13 +26,20 @@ describe('@ODataController()', () => {
     expect(path).toBe('custom-orders')
   })
 
-  it('Test 4: applies UseInterceptors(ODataResponseInterceptor) at class level', () => {
-    const interceptors = Reflect.getMetadata(INTERCEPTORS_METADATA, ProductsController) as unknown[]
-    expect(interceptors).toContain(ODataResponseInterceptor)
+  it('Test 4: does NOT apply class-level UseInterceptors (each method decorator handles interceptors)', () => {
+    // Interceptors are applied per-method by @ODataGet/@ODataPost/etc, not at class level,
+    // to avoid double-wrapping when @ODataController is combined with CRUD method decorators.
+    const interceptors = Reflect.getMetadata(INTERCEPTORS_METADATA, ProductsController) as
+      | unknown[]
+      | undefined
+    expect(interceptors).toBeUndefined()
   })
 
-  it('Test 5: applies UseFilters(ODataExceptionFilter) at class level', () => {
-    const filters = Reflect.getMetadata(FILTERS_METADATA, ProductsController) as unknown[]
-    expect(filters).toContain(ODataExceptionFilter)
+  it('Test 5: does NOT apply class-level UseFilters (each method decorator handles filters)', () => {
+    // Filters are applied per-method by @ODataGet/@ODataPost/etc, not at class level.
+    const filters = Reflect.getMetadata(FILTERS_METADATA, ProductsController) as
+      | unknown[]
+      | undefined
+    expect(filters).toBeUndefined()
   })
 })

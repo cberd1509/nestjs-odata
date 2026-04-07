@@ -5,12 +5,20 @@ import { ODataModule } from '@nestjs-odata/core'
 import { ODataTypeOrmModule } from '@nestjs-odata/typeorm'
 import { Product, Category, Customer, Order, OrderItem, Tag } from './entities/index.js'
 import { ProductsModule } from './products/products.module.js'
+import { HealthModule } from './health/health.module.js'
 
 /**
  * Test application module that wires ODataModule + ODataTypeOrmModule
  * with an in-memory SQLite database using all 6 test entities.
  *
- * Used for e2e tests that validate the $metadata endpoint and OData query surface.
+ * ProductsController is registered in ProductsModule (which imports
+ * ODataTypeOrmModule.forFeature providing TypeOrmAutoHandler).
+ * ODataModule.forRoot patches PATH_METADATA for @ODataController classes
+ * listed in controllers — ProductsController's path is patched here too
+ * via the same mechanism used by ODataModule.forRoot.
+ *
+ * HealthModule provides a plain NestJS controller at /api/health for
+ * route isolation testing (RESP-03, MOD-05, T-04-14).
  */
 @Module({
   imports: [
@@ -26,6 +34,7 @@ import { ProductsModule } from './products/products.module.js'
     }),
     ODataTypeOrmModule.forFeature([Product, Category, Customer, Order, OrderItem, Tag]),
     ProductsModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
