@@ -30,7 +30,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The OData sub-agent exists and can correctly answer questions about OData v4 filter expression syntax
   4. A `$filter` parser spike correctly parses representative OASIS ABNF test vectors (e.g., `Price gt 5`, `contains(Name,'Alice')`, `Year eq 2024 and Active eq true`)
   5. Running `changeset version` produces a correct semver bump and changelog entry
-**Plans**: TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 01-01-PLAN.md — Scaffold Turborepo monorepo, tsdown dual-build, Vitest + unplugin-swc, e-commerce test entities
+- [ ] 01-02-PLAN.md — ESLint 9 flat config, Prettier, Husky, commitlint, Changesets, VitePress docs
+- [ ] 01-03-PLAN.md — GitHub Actions CI/CD, Dependabot, CodeQL, GitHub templates, OData sub-agent
+- [ ] 01-04-PLAN.md — OData v4 query parser spike (TDD: lexer, recursive descent parser, AST, visitor)
 
 ### Phase 2: EDM and $metadata
 **Goal**: TypeORM entities are automatically reflected into a valid OData EDM, and the `$metadata` endpoint serves correct CSDL XML that enterprise OData clients can consume
@@ -87,7 +92,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation and Parser Spike | 0/TBD | Not started | - |
+| 1. Foundation and Parser Spike | 0/4 | Planning complete | - |
 | 2. EDM and $metadata | 0/TBD | Not started | - |
 | 3. Query Engine and Response Format | 0/TBD | Not started | - |
 | 4. CRUD, $expand, and Module System | 0/TBD | Not started | - |
