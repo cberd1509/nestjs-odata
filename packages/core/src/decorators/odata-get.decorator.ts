@@ -35,7 +35,7 @@ export interface ODataGetOptions {
  */
 export function ODataGet(entitySetName: string, options?: ODataGetOptions): MethodDecorator {
   return applyDecorators(
-    Get(options?.path ?? ''),
+    Get(options?.path ?? entitySetName),
     SetMetadata(ODATA_ROUTE_KEY, {
       entitySetName,
       autoHandler: options?.autoHandler ?? false,

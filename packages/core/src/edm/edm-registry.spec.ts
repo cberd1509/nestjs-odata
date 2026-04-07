@@ -58,13 +58,21 @@ describe('EdmRegistry', () => {
     expect(sets.get('Products')).toEqual(entitySet)
   })
 
-  it('Test 4: register() with duplicate entity type name throws error', () => {
+  it('Test 4: register() with duplicate entity type name is idempotent (skips silently)', () => {
     const entityType = makeEntityType('Product')
-    registry.register(entityType, makeEntitySet('Products', 'Product'))
+    const entitySet = makeEntitySet('Products', 'Product')
+    registry.register(entityType, entitySet)
 
+    // Second registration with same name is silently skipped — no error thrown
     expect(() => {
       registry.register(entityType, makeEntitySet('Products2', 'Product'))
-    }).toThrow(/duplicate/i)
+    }).not.toThrow()
+
+    // Original registration is preserved
+    expect(registry.getEntityType('Product')).toEqual(entityType)
+    expect(registry.getEntitySets().size).toBe(1)
+    expect(registry.getEntitySet('Products')).toEqual(entitySet)
+    expect(registry.getEntitySet('Products2')).toBeUndefined()
   })
 
   it('Test 5: getEntityType("Unknown") returns undefined', () => {

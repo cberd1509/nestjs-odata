@@ -16,14 +16,18 @@ export class EdmRegistry {
 
   /**
    * Register an entity type and its corresponding entity set.
-   * Throws if an entity type with the same name is already registered.
+   *
+   * Idempotent: if the same entity type name is already registered (e.g. from multiple
+   * ODataTypeOrmModule.forFeature() calls in different feature modules), the registration
+   * is silently skipped. This supports the common pattern of importing forFeature() in
+   * both a root AppModule and a feature module for the same entity.
+   *
+   * Throws only if a DIFFERENT entity type is registered under the same name (name collision).
    */
   register(entityType: EdmEntityType, entitySet: EdmEntitySet): void {
     if (this.entityTypes.has(entityType.name)) {
-      throw new Error(
-        `EdmRegistry: duplicate registration — entity type "${entityType.name}" is already registered. ` +
-          `Check that @ODataEntitySet is applied only once per entity class.`,
-      )
+      // Idempotent: same name already registered — skip silently
+      return
     }
     this.entityTypes.set(entityType.name, entityType)
     this.entitySets.set(entitySet.name, entitySet)

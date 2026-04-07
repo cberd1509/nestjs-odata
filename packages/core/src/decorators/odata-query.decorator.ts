@@ -11,14 +11,15 @@ import type { ExecutionContext } from '@nestjs/common'
  * The decorator passes the entitySetName as `data` so that the ODataQueryPipe
  * can inject it into the query object for context URL construction and field validation.
  *
- * Per D-14: returns { query: req.query, entitySetName: data } so ODataQueryPipe
- * can extract both the raw query params and the entity set context.
+ * Per D-14: returns req.query directly (the raw query params map). The entitySetName
+ * is available to ODataQueryPipe via metadata.data (the 'Products' argument stored by
+ * NestJS createParamDecorator as the pipe's ArgumentMetadata.data).
  *
  * Zero TypeORM imports — per PKG-01 architecture constraint.
  */
 export const ODataQueryParam = createParamDecorator(
-  (data: string | undefined, ctx: ExecutionContext) => {
+  (_data: string | undefined, ctx: ExecutionContext) => {
     const request = ctx.switchToHttp().getRequest<{ query: Record<string, string> }>()
-    return { query: request.query, entitySetName: data }
+    return request.query
   },
 )
