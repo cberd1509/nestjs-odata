@@ -57,6 +57,10 @@ Auto-derive OData Entity Data Model from TypeORM entity metadata and serve a spe
 
 - **D-20:** TypeORM `@ManyToOne` → `NavigationProperty Type="Namespace.Target"`. `@OneToMany` and `@ManyToMany` → `NavigationProperty Type="Collection(Namespace.Target)"`. Auto-derived from TypeORM relation metadata.
 
+### Service Document
+
+- **D-24:** Serve an OData service document at the `serviceRoot` URL (e.g., `GET /odata/`). Returns JSON listing all available EntitySets with their URLs. This is the discovery entry point — clients hit this first, then `$metadata` for full schema. Trivial to implement since the EDM registry already knows all EntitySets.
+
 ### View Support
 
 - **D-21:** Support TypeORM `@ViewEntity()` as read-only OData EntitySets. Auto-detect view entities and mark them as read-only in the EDM — no POST/PATCH/DELETE routes generated. `@ViewColumn()` columns are derived the same way as regular `@Column()`.
