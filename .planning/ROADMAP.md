@@ -14,7 +14,7 @@ Starting from an empty repo, this roadmap delivers a spec-compliant OData v4 Nes
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Foundation and Parser Spike** - Monorepo scaffolding, OSS tooling, OData sub-agent, and query parser spike
-- [ ] **Phase 2: EDM and $metadata** - Auto-derive entity data model from TypeORM and serve $metadata
+- [x] **Phase 2: EDM and $metadata** - Auto-derive entity data model from TypeORM and serve $metadata (completed 2026-04-07)
 - [ ] **Phase 3: Query Engine and Response Format** - Full OData query surface and JSON envelope
 - [ ] **Phase 4: CRUD, $expand, and Module System** - Write operations, relation expansion, and NestJS consumer API
 - [ ] **Phase 5: $batch, Security, and v1 Hardening** - Batch atomicity, security guards, full release pipeline, and CI compliance checks
@@ -53,13 +53,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 3. TypeORM `Date` columns map to `Edm.DateTimeOffset`, `number` to `Edm.Int32` or `Edm.Decimal`, `string` to `Edm.String` — verified by unit tests
 4. `OneToMany`, `ManyToOne`, and `ManyToMany` TypeORM relations appear as navigation properties in the CSDL output
 5. `@nestjs-odata/core` has zero imports from `typeorm` — verified by `publint` and `@arethetypeswrong/cli` in CI
-   **Plans:** 4 plans
+   **Plans:** 5 plans (4 complete, 1 gap closure)
    Plans:
 
-- [ ] 02-01-PLAN.md — EDM types, adapter interfaces (IEdmDeriver, IQueryTranslator), OData decorators, EdmRegistry
-- [ ] 02-02-PLAN.md — NestJS module system (ODataModule.forRoot/forFeature, ODataTypeOrmModule.forFeature)
-- [ ] 02-03-PLAN.md — TypeORM-to-EDM type mapper and entity deriver (TDD)
-- [ ] 02-04-PLAN.md — CSDL XML builder, $metadata controller, service document, test-app e2e + odata2ts validation
+- [x] 02-01-PLAN.md — EDM types, adapter interfaces (IEdmDeriver, IQueryTranslator), OData decorators, EdmRegistry
+- [x] 02-02-PLAN.md — NestJS module system (ODataModule.forRoot/forFeature, ODataTypeOrmModule.forFeature)
+- [x] 02-03-PLAN.md — TypeORM-to-EDM type mapper and entity deriver (TDD)
+- [x] 02-04-PLAN.md — CSDL XML builder, $metadata controller, service document, test-app e2e + odata2ts validation
+- [ ] 02-05-PLAN.md — Gap closure: odata2ts validation of $metadata CSDL (TEST-05)
 
 ### Phase 3: Query Engine and Response Format
 
@@ -108,10 +109,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase                                 | Plans Complete | Status            | Completed |
-| ------------------------------------- | -------------- | ----------------- | --------- |
-| 1. Foundation and Parser Spike        | 0/4            | Planning complete | -         |
-| 2. EDM and $metadata                  | 0/4            | Planning complete | -         |
-| 3. Query Engine and Response Format   | 0/TBD          | Not started       | -         |
-| 4. CRUD, $expand, and Module System   | 0/TBD          | Not started       | -         |
-| 5. $batch, Security, and v1 Hardening | 0/TBD          | Not started       | -         |
+| Phase                                 | Plans Complete | Status            | Completed  |
+| ------------------------------------- | -------------- | ----------------- | ---------- |
+| 1. Foundation and Parser Spike        | 0/4            | Planning complete | -          |
+| 2. EDM and $metadata                  | 4/4            | Complete          | 2026-04-07 |
+| 3. Query Engine and Response Format   | 0/TBD          | Not started       | -          |
+| 4. CRUD, $expand, and Module System   | 0/TBD          | Not started       | -          |
+| 5. $batch, Security, and v1 Hardening | 0/TBD          | Not started       | -          |
