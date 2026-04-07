@@ -27,10 +27,16 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo build
-      - uses: changesets/action@v1
+      - name: Create or merge version PR (changesets)
+        id: changesets
+        uses: changesets/action@v1
         with:
-          publish: pnpm run release
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish to npm (OIDC)
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: pnpm publish -r --access public
+        env:
+          NPM_CONFIG_PROVENANCE: true

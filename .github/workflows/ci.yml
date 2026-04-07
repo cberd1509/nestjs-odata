@@ -25,8 +25,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo lint
       - run: pnpm turbo typecheck
-      - run: pnpm turbo test
       - run: pnpm turbo build
+      - name: Run tests with coverage
+        run: pnpm turbo test -- --coverage
       - name: Validate package exports (core)
         run: |
           pnpm dlx @arethetypeswrong/cli --pack packages/core
@@ -35,3 +36,7 @@ jobs:
         run: |
           pnpm dlx @arethetypeswrong/cli --pack packages/typeorm
           pnpm dlx publint packages/typeorm
+      - name: Verify publishability (dry-run)
+        run: |
+          pnpm --filter @nestjs-odata/core publish --dry-run --access public
+          pnpm --filter @nestjs-odata/typeorm publish --dry-run --access public
