@@ -110,10 +110,13 @@ export class TypeOrmEdmDeriver implements IEdmDeriver {
           return acc
         }
 
-        const columnType =
-          typeof col.type === 'string' ? col.type : ((col.type as { name?: string }).name ?? '')
+        const isConstructor = typeof col.type === 'function'
+        const columnType = typeof col.type === 'string' ? col.type : ''
+        const designType = isConstructor
+          ? (col.type as new (...args: unknown[]) => unknown)
+          : undefined
 
-        const edmType = mapColumnTypeToEdm(columnType, undefined, this.unmappedTypeStrategy)
+        const edmType = mapColumnTypeToEdm(columnType, designType, this.unmappedTypeStrategy)
         if (edmType === undefined) {
           // strategy is 'skip' — omit this property
           return acc

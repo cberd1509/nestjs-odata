@@ -23,6 +23,7 @@
   "devDependencies": {
     "@nestjs-odata/core": "workspace:*",
     "@nestjs-odata/typeorm": "workspace:*",
+    "@odata2ts/odata2ts": "^0.40.1",
     "@nestjs/testing": "^11.0.0",
     "@swc/core": "^1.15.24",
     "@types/better-sqlite3": "^7.6.0",
