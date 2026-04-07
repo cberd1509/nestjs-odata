@@ -5,6 +5,7 @@ export {
   ODATA_ENTITY_SET_KEY,
   ODATA_KEY_KEY,
   ODATA_VIEW_KEY,
+  ODATA_ROUTE_KEY,
 } from './metadata-keys.js'
 
 // @EdmType decorator
@@ -23,3 +24,10 @@ export { ODataKey, getKeyProperties } from './odata-key.decorator.js'
 // @ODataView decorator
 export type { ODataViewOptions } from './odata-view.decorator.js'
 export { ODataView, getODataViewOptions } from './odata-view.decorator.js'
+
+// @ODataGet route decorator
+export type { ODataGetOptions } from './odata-get.decorator.js'
+export { ODataGet } from './odata-get.decorator.js'
+
+// @ODataQueryParam parameter decorator
+export { ODataQueryParam } from './odata-query.decorator.js'
