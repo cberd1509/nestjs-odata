@@ -33,4 +33,52 @@ describe('ODataValidationError', () => {
     expect(err.propertyName).toBe(propertyName)
     expect(err.message).toBe(message)
   })
+
+  it('Test 4: accepts optional availableProperties array', () => {
+    const err = new ODataValidationError(
+      "Property 'prce' not found on entity 'Product'",
+      'Product',
+      'prce',
+      ['id', 'name', 'price'],
+    )
+
+    expect(err.availableProperties).toEqual(['id', 'name', 'price'])
+  })
+
+  it('Test 5: message includes available properties list when provided', () => {
+    const err = new ODataValidationError(
+      "Property 'prce' not found on entity 'Product'",
+      'Product',
+      'prce',
+      ['id', 'name', 'description', 'price', 'active', 'createdAt', 'updatedAt'],
+    )
+
+    expect(err.message).toContain(
+      'Available properties: id, name, description, price, active, createdAt, updatedAt',
+    )
+  })
+
+  it('Test 6: message without availableProperties remains unchanged', () => {
+    const err = new ODataValidationError(
+      "Property 'prce' not found on entity 'Product'",
+      'Product',
+      'prce',
+    )
+
+    expect(err.message).toBe("Property 'prce' not found on entity 'Product'")
+    expect(err.availableProperties).toBeUndefined()
+  })
+
+  it('Test 7: no "did you mean" text appears in error messages (D-11)', () => {
+    const err = new ODataValidationError(
+      "Property 'prce' not found on entity 'Product'",
+      'Product',
+      'prce',
+      ['id', 'name', 'price'],
+    )
+
+    expect(err.message.toLowerCase()).not.toContain('did you mean')
+    expect(err.message.toLowerCase()).not.toContain('suggest')
+    expect(err.message.toLowerCase()).not.toContain('similar')
+  })
 })

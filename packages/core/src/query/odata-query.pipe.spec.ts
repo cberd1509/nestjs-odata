@@ -129,7 +129,7 @@ describe('ODataQueryPipe', () => {
 
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(
-      "Property 'UnknownField' not found on entity 'Product'",
+      /Property 'UnknownField' not found on entity 'Product'/,
     )
   })
 
@@ -141,7 +141,7 @@ describe('ODataQueryPipe', () => {
 
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(
-      "Property 'FakeField' not found on entity 'Product'",
+      /Property 'FakeField' not found on entity 'Product'/,
     )
   })
 
@@ -153,7 +153,7 @@ describe('ODataQueryPipe', () => {
 
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(
-      "Property 'FakeField' not found on entity 'Product'",
+      /Property 'FakeField' not found on entity 'Product'/,
     )
   })
 
@@ -233,7 +233,7 @@ describe('ODataQueryPipe', () => {
 
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(ODataValidationError)
     expect(() => pipe.transform(rawQuery, metadata)).toThrow(
-      "Navigation property 'NonExistentNavProp' not found on entity 'Product'",
+      /Navigation property 'NonExistentNavProp' not found on entity 'Product'/,
     )
   })
 
@@ -259,6 +259,74 @@ describe('ODataQueryPipe', () => {
 
     expect(result.expand).toBeDefined()
     expect(result.expand?.items[0]?.navigationProperty).toBe('Category')
+  })
+
+  describe('Enriched error messages (D-09)', () => {
+    it('Test D-09a: validateFilterNode passes available property names to ODataValidationError', () => {
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = {
+        $filter: 'FakeField eq 1',
+      }
+
+      try {
+        pipe.transform(rawQuery, metadata)
+        expect.unreachable('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ODataValidationError)
+        const validationErr = err as ODataValidationError
+        expect(validationErr.availableProperties).toEqual(['Id', 'Name', 'Price'])
+        expect(validationErr.message).toContain('Available properties: Id, Name, Price')
+      }
+    })
+
+    it('Test D-09b: validateSelectItem passes available property names to ODataValidationError', () => {
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = {
+        $select: 'UnknownField',
+      }
+
+      try {
+        pipe.transform(rawQuery, metadata)
+        expect.unreachable('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ODataValidationError)
+        const validationErr = err as ODataValidationError
+        expect(validationErr.availableProperties).toEqual(['Id', 'Name', 'Price'])
+        expect(validationErr.message).toContain('Available properties: Id, Name, Price')
+      }
+    })
+
+    it('Test D-09c: validateExpandNode passes available nav property names to ODataValidationError', () => {
+      const pipe = createPipe()
+      const rawQuery: Record<string, string> = {
+        $expand: 'NonExistentNavProp',
+      }
+
+      try {
+        pipe.transform(rawQuery, metadata)
+        expect.unreachable('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ODataValidationError)
+        const validationErr = err as ODataValidationError
+        expect(validationErr.availableProperties).toEqual(['Category', 'Supplier'])
+        expect(validationErr.message).toContain('Available properties: Category, Supplier')
+      }
+    })
+
+    it('Test D-09d: no "did you mean" text in any validation error (D-11)', () => {
+      const pipe = createPipe()
+
+      try {
+        pipe.transform({ $filter: 'Prce eq 1' }, metadata)
+        expect.unreachable('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ODataValidationError)
+        const msg = (err as ODataValidationError).message.toLowerCase()
+        expect(msg).not.toContain('did you mean')
+        expect(msg).not.toContain('suggest')
+        expect(msg).not.toContain('levenshtein')
+      }
+    })
   })
 
   describe('Per-entity security overrides (D-07)', () => {

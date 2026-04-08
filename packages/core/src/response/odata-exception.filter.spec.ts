@@ -54,13 +54,9 @@ describe('ODataExceptionFilter', () => {
     filter.catch(error, host)
 
     expect(res.status).toHaveBeenCalledWith(400)
-    expect(res.json).toHaveBeenCalledWith({
-      error: {
-        code: 'BadRequest',
-        message: "Property 'Foo' not found on entity 'Product'",
-        details: [],
-      },
-    })
+    const body = res.json.mock.calls[0][0] as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('BadRequest')
+    expect(body.error.message).toContain("Property 'Foo' not found on entity 'Product'")
   })
 
   it('Test 12: Generic Error -> HTTP 500 with generic message, no stack trace', () => {
@@ -83,6 +79,51 @@ describe('ODataExceptionFilter', () => {
     expect(bodyStr).not.toContain('at ')
     expect(bodyStr).not.toContain('Error:')
     expect(bodyStr).not.toContain('Internal DB connection failed')
+  })
+
+  it('Test 12b: ODataParseError with queryContext includes context in details', () => {
+    const { host, res } = makeHost()
+    const error = new ODataParseError(
+      'Unexpected token at position 5',
+      5,
+      null,
+      '...Price gtt 5...',
+    )
+
+    filter.catch(error, host)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    const body = res.json.mock.calls[0][0] as { error: { details: unknown[] } }
+    expect(body.error.details).toEqual([{ target: '...Price gtt 5...' }])
+  })
+
+  it('Test 12c: ODataParseError without queryContext has empty details', () => {
+    const { host, res } = makeHost()
+    const error = new ODataParseError('Unexpected token at position 5', 5)
+
+    filter.catch(error, host)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    const body = res.json.mock.calls[0][0] as { error: { details: unknown[] } }
+    expect(body.error.details).toEqual([])
+  })
+
+  it('Test 12d: ODataValidationError with availableProperties includes them in details', () => {
+    const { host, res } = makeHost()
+    const error = new ODataValidationError(
+      "Property 'prce' not found on entity 'Product'. Available properties: id, name, price",
+      'Product',
+      'prce',
+      ['id', 'name', 'price'],
+    )
+
+    filter.catch(error, host)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    const body = res.json.mock.calls[0][0] as { error: { details: unknown[] } }
+    expect(body.error.details).toEqual([
+      { target: 'availableProperties', value: ['id', 'name', 'price'] },
+    ])
   })
 
   it('Test 13: HttpException (NotFoundException) uses exception status and message', () => {

@@ -19,8 +19,13 @@ export class ODataValidationError extends Error {
     message: string,
     public readonly entityTypeName: string,
     public readonly propertyName: string,
+    public readonly availableProperties?: readonly string[],
   ) {
-    super(message)
+    const enrichedMessage =
+      availableProperties && availableProperties.length > 0
+        ? `${message}. Available properties: ${availableProperties.join(', ')}`
+        : message
+    super(enrichedMessage)
     this.name = 'ODataValidationError'
     // Ensure instanceof works correctly when transpiled to ES5
     Object.setPrototypeOf(this, new.target.prototype)

@@ -44,20 +44,25 @@ export class ODataExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof ODataParseError) {
       status = HttpStatus.BAD_REQUEST
+      const details: unknown[] = exception.queryContext ? [{ target: exception.queryContext }] : []
       body = {
         error: {
           code: 'BadRequest',
           message: exception.message,
-          details: [],
+          details,
         },
       }
     } else if (exception instanceof ODataValidationError) {
       status = HttpStatus.BAD_REQUEST
+      const details: unknown[] =
+        exception.availableProperties && exception.availableProperties.length > 0
+          ? [{ target: 'availableProperties', value: [...exception.availableProperties] }]
+          : []
       body = {
         error: {
           code: 'BadRequest',
           message: exception.message,
-          details: [],
+          details,
         },
       }
     } else if (exception instanceof HttpException) {

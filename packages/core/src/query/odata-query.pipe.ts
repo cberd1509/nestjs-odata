@@ -135,6 +135,7 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
             `Property '${propertyName}' not found on entity '${entityType.name}'`,
             entityType.name,
             propertyName,
+            knownNames,
           )
         }
         break
@@ -178,6 +179,7 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
           `Navigation property '${item.navigationProperty}' not found on entity '${entityType.name}'`,
           entityType.name,
           item.navigationProperty,
+          navNames,
         )
       }
     }
@@ -197,6 +199,7 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
         `Property '${propertyName}' not found on entity '${entityType.name}'`,
         entityType.name,
         propertyName,
+        knownNames,
       )
     }
   }
