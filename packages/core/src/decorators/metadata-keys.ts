@@ -21,3 +21,6 @@ export const ODATA_CONTROLLER_KEY = Symbol('nestjs-odata:odata-controller')
 
 /** Metadata key for @ODataETag() property decorator — stores the ETag source property name */
 export const ODATA_ETAG_KEY = Symbol('nestjs-odata:odata-etag')
+
+/** Metadata key for @ODataSearchable() property decorator — stores string[] of searchable property names */
+export const ODATA_SEARCHABLE_KEY = Symbol('nestjs-odata:odata-searchable')

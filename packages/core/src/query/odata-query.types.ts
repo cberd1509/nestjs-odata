@@ -7,7 +7,14 @@
  *   - entitySetName (string): for context URL construction and field validation
  */
 
-import type { FilterNode, SelectNode, OrderByItem, ExpandNode } from '../parser/ast.js'
+import type {
+  FilterNode,
+  SelectNode,
+  OrderByItem,
+  ExpandNode,
+  SearchNode,
+  ApplyNode,
+} from '../parser/ast.js'
 
 /**
  * Per-entity security option overrides.
@@ -41,6 +48,10 @@ export interface ODataQuery {
   readonly entitySetName: string
   /** Parsed $expand value — navigation properties to expand */
   readonly expand?: ExpandNode
+  /** Parsed $search value — full-text search expression */
+  readonly search?: SearchNode
+  /** Parsed $apply value — aggregation/transformation pipeline */
+  readonly apply?: ApplyNode
 }
 
 /**
@@ -54,4 +65,8 @@ export interface ODataQueryResult<T = unknown> {
   readonly count?: number
   readonly nextLink?: string
   readonly select?: SelectNode
+  /** True when the result was produced by a $apply aggregation pipeline */
+  readonly isAggregated?: boolean
+  /** Property names present in aggregation output (for context URL construction) */
+  readonly applyProperties?: string[]
 }

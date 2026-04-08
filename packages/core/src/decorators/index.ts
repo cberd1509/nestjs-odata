@@ -8,10 +8,14 @@ export {
   ODATA_ROUTE_KEY,
   ODATA_CONTROLLER_KEY,
   ODATA_ETAG_KEY,
+  ODATA_SEARCHABLE_KEY,
 } from './metadata-keys.js'
 
 // @ODataETag decorator
 export { ODataETag, getETagProperty } from './odata-etag.decorator.js'
+
+// @ODataSearchable decorator
+export { ODataSearchable, getSearchableProperties } from './odata-searchable.decorator.js'
 
 // @EdmType decorator
 export type { EdmTypeOptions } from './edm-type.decorator.js'

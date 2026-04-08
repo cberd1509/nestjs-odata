@@ -175,3 +175,69 @@ export interface QueryOptions {
   readonly skip?: number
   readonly expand?: ExpandNode
 }
+
+// ---------------------------------------------------------------------------
+// $search AST — OData v4 Part 2 Section 4.6
+// ---------------------------------------------------------------------------
+
+/** A single search term, optionally negated. Quoted phrases are stored as a single value. */
+export interface SearchTermNode {
+  readonly kind: 'SearchTerm'
+  readonly value: string
+  readonly negated?: boolean
+}
+
+/** Binary search expression combining two search nodes with AND or OR. */
+export interface SearchBinaryNode {
+  readonly kind: 'SearchBinary'
+  readonly operator: 'AND' | 'OR'
+  readonly left: SearchNode
+  readonly right: SearchNode
+}
+
+/** Union of all $search expression node types. */
+export type SearchNode = SearchTermNode | SearchBinaryNode
+
+// ---------------------------------------------------------------------------
+// $apply AST — OData v4 Extension for Data Aggregation (OASIS Part 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single aggregate method expression: `property with method as alias`
+ * or `$count as alias` (property='$count', method='count').
+ */
+export interface AggregateExpression {
+  readonly property: string
+  readonly method: 'sum' | 'count' | 'avg' | 'min' | 'max' | 'countdistinct'
+  readonly alias: string
+}
+
+/** filter() transformation step — applies a filter expression to the current set. */
+export interface ApplyFilterStep {
+  readonly kind: 'ApplyFilter'
+  readonly filter: FilterNode
+}
+
+/**
+ * groupby() transformation step — partitions by property list with optional
+ * aggregate expressions inside.
+ */
+export interface ApplyGroupByStep {
+  readonly kind: 'ApplyGroupBy'
+  readonly properties: string[]
+  readonly aggregate?: readonly AggregateExpression[]
+}
+
+/** aggregate() transformation step — computes aggregate values across the set. */
+export interface ApplyAggregateStep {
+  readonly kind: 'ApplyAggregate'
+  readonly expressions: readonly AggregateExpression[]
+}
+
+/** Union of all $apply transformation step types. */
+export type ApplyStep = ApplyFilterStep | ApplyGroupByStep | ApplyAggregateStep
+
+/** Root $apply node — an ordered pipeline of transformation steps. */
+export interface ApplyNode {
+  readonly steps: readonly ApplyStep[]
+}
