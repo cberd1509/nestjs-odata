@@ -12,26 +12,21 @@ OData query power with zero double-declaration: define your entities once in Typ
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] Turborepo monorepo with core package, TypeORM adapter, and test NestJS app — Validated in Phases 1-5
+- [x] Auto-derive OData EDM from TypeORM entity metadata — Validated in Phase 2
+- [x] `$metadata` endpoint auto-generated from registered entities — Validated in Phase 2
+- [x] `$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count` query support — Validated in Phase 3
+- [x] OData v4 response envelope and error format — Validated in Phase 3
+- [x] `$expand` query support for navigation properties — Validated in Phase 4
+- [x] OData-compliant CRUD operations (POST, PATCH, DELETE) — Validated in Phase 4
+- [x] `ODataModule.forRoot()` / `forFeature()` registration — Validated in Phase 4
+- [x] Flexible API surface: `@ODataController()` + `@ODataGet()`/`@ODataPost()` decorators — Validated in Phase 4
+- [x] `$batch` request support for multi-operation requests — Validated in Phase 5
+- [x] TDD approach with comprehensive tests — Validated in Phase 5 (80%+ coverage enforced)
 
 ### Active
 
-- [ ] Turborepo monorepo with core package, TypeORM adapter, and test NestJS app
-- [ ] Flexible API surface: high-level `@ODataController()` for auto-CRUD + low-level `@ODataGet()`/`@ODataPost()` decorators for custom routes
 - [ ] OData and non-OData routes mix seamlessly on the same controller or module — no routing conflicts, no serialization leaking
-- [ ] `ODataModule.forRoot()` / `forFeature()` registration following NestJS conventions
-- [ ] Auto-derive OData EDM (Entity Data Model) from TypeORM entity metadata (columns, relations, types)
-- [ ] `$filter` query support with full OData v4 filter expression parsing
-- [ ] `$select` query support for field projection
-- [ ] `$expand` query support for related entity expansion (navigation properties)
-- [ ] `$orderby` query support for sorting
-- [ ] `$top`, `$skip`, `$count` query support for pagination
-- [ ] `$metadata` endpoint auto-generated from registered entities — always reflects reality
-- [ ] OData-compliant CRUD operations (POST, PATCH, DELETE) with proper response formats
-- [ ] `$batch` request support for multi-operation requests
-- [ ] OData v4 error response format
-- [ ] OData v4 response envelope (`@odata.context`, `value`, `@odata.count`, `@odata.nextLink`)
-- [ ] TDD approach: comprehensive unit tests and integration tests against the OData spec
 - [ ] OData expert sub-agent built from the OData v4 specification
 
 ### Out of Scope
@@ -63,20 +58,21 @@ OData query power with zero double-declaration: define your entities once in Typ
 
 ## Key Decisions
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Turborepo monorepo | Separate core from ORM adapters for independent distribution | — Pending |
-| Auto-derive EDM from TypeORM | Eliminates the #1 pain point from .NET OData (double declaration) | — Pending |
-| Both controller + decorator API | Flexibility to mix OData and non-OData routes — solving the .NET mixing pain | — Pending |
-| TDD from day one | OData spec is well-defined, tests can be written against expected behavior first | — Pending |
-| OData v4 only | Focus on current standard; folder structure allows future version packages | — Pending |
-| Dedicated OData sub-agent | Deep spec knowledge for implementation guidance and doc lookup | — Pending |
+| Decision                        | Rationale                                                                        | Outcome   |
+| ------------------------------- | -------------------------------------------------------------------------------- | --------- |
+| Turborepo monorepo              | Separate core from ORM adapters for independent distribution                     | — Pending |
+| Auto-derive EDM from TypeORM    | Eliminates the #1 pain point from .NET OData (double declaration)                | — Pending |
+| Both controller + decorator API | Flexibility to mix OData and non-OData routes — solving the .NET mixing pain     | — Pending |
+| TDD from day one                | OData spec is well-defined, tests can be written against expected behavior first | — Pending |
+| OData v4 only                   | Focus on current standard; folder structure allows future version packages       | — Pending |
+| Dedicated OData sub-agent       | Deep spec knowledge for implementation guidance and doc lookup                   | — Pending |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 **After each phase transition** (via `/gsd-transition`):
+
 1. Requirements invalidated? → Move to Out of Scope with reason
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active
@@ -84,10 +80,12 @@ This document evolves at phase transitions and milestone boundaries.
 5. "What This Is" still accurate? → Update if drifted
 
 **After each milestone** (via `/gsd-complete-milestone`):
+
 1. Full review of all sections
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 after initialization*
+
+_Last updated: 2026-04-07 — Phase 5 complete, all v1 milestone phases delivered_
