@@ -171,7 +171,7 @@ export class ODataModule extends ConfigurableModuleClass {
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
-      controllers: [...(parent.controllers ?? []), metadataController, ...odataControllers],
+      controllers: [...(parent.controllers ?? []), metadataController],
       exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
   }
