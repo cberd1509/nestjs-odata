@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { INTERCEPTORS_METADATA, FILTERS_METADATA, PATH_METADATA } from '@nestjs/common/constants.js'
 import { ODataController } from './odata-controller.decorator.js'
 import { ODATA_CONTROLLER_KEY } from './metadata-keys.js'
+import { ODataModule } from '../odata.module.js'
 
 @ODataController('Products')
 class ProductsController {}
@@ -41,5 +42,43 @@ describe('@ODataController()', () => {
       | unknown[]
       | undefined
     expect(filters).toBeUndefined()
+  })
+})
+
+describe('ODataModule.forRoot() controller patching', () => {
+  it('Test 3b: forRoot() patches PATH_METADATA on controllers with serviceRoot prefix', () => {
+    // Create a fresh controller class to avoid polluting other tests
+    @ODataController('Categories')
+    class CategoriesController {}
+
+    // Before forRoot: path should be just the entitySetName
+    expect(Reflect.getMetadata(PATH_METADATA, CategoriesController)).toBe('Categories')
+
+    // Call forRoot with controllers array
+    ODataModule.forRoot({
+      serviceRoot: '/odata',
+      controllers: [CategoriesController],
+    })
+
+    // After forRoot: path should be serviceRoot/entitySetName
+    expect(Reflect.getMetadata(PATH_METADATA, CategoriesController)).toBe('odata/Categories')
+  })
+
+  it('Test 3c: forRoot() stores serviceRoot on static registeredServiceRoot property', () => {
+    ODataModule.forRoot({
+      serviceRoot: '/api/odata',
+      controllers: [],
+    })
+
+    expect(ODataModule.registeredServiceRoot).toBe('/api/odata')
+  })
+
+  it('Test 3d: forRoot() validates serviceRoot is a non-empty string (T-12-01)', () => {
+    expect(() =>
+      ODataModule.forRoot({
+        serviceRoot: '',
+        controllers: [],
+      }),
+    ).toThrow()
   })
 })
