@@ -1,8 +1,27 @@
 {
   "name": "@nestjs-odata/core",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "description": "Core OData v4 library for NestJS — parser, EDM, decorators, module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cberd1509/nestjs-odata.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/cberd1509/nestjs-odata#readme",
+  "bugs": {
+    "url": "https://github.com/cberd1509/nestjs-odata/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "odata",
+    "odata-v4",
+    "rest",
+    "api",
+    "edm",
+    "metadata",
+    "nestjs-module"
+  ],
   "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -21,8 +40,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "CHANGELOG.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsdown",

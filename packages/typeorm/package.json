@@ -1,8 +1,27 @@
 {
   "name": "@nestjs-odata/typeorm",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "TypeORM adapter for @nestjs-odata/core — auto-derives OData EDM from TypeORM entity metadata",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cberd1509/nestjs-odata.git",
+    "directory": "packages/typeorm"
+  },
+  "homepage": "https://github.com/cberd1509/nestjs-odata#readme",
+  "bugs": {
+    "url": "https://github.com/cberd1509/nestjs-odata/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "odata",
+    "odata-v4",
+    "typeorm",
+    "rest",
+    "api",
+    "edm",
+    "orm-adapter"
+  ],
   "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -21,8 +40,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "CHANGELOG.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsdown",
@@ -31,7 +49,7 @@
     "lint": "eslint ."
   },
   "peerDependencies": {
-    "@nestjs-odata/core": ">=0.0.1",
+    "@nestjs-odata/core": ">=1.0.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0",
     "@nestjs/typeorm": "^10.0.0 || ^11.0.0",
     "reflect-metadata": "^0.1.13 || ^0.2.0",
