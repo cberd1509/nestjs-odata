@@ -207,8 +207,8 @@ Plans:
 **Plans:** 2 plans
 Plans:
 
-- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
-- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
+- [x] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [x] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ### Phase 10: Advanced Write Operations
 
@@ -224,8 +224,8 @@ Plans:
 **Plans:** 2 plans
 Plans:
 
-- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
-- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
+- [x] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [x] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ### Phase 11: $search and $apply
 
@@ -242,7 +242,7 @@ Plans:
 **Plans:** 2 plans
 Plans:
 
-- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [x] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
 - [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ## Progress
