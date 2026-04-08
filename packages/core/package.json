@@ -1,6 +1,6 @@
 {
   "name": "@nestjs-odata/core",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Core OData v4 library for NestJS — parser, EDM, decorators, module",
   "license": "MIT",
   "sideEffects": false,
