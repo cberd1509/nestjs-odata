@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 5 context gathered
-last_updated: '2026-04-08T00:09:23.596Z'
+last_updated: '2026-04-08T01:27:18.653Z'
 last_activity: 2026-04-08
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 23
-  completed_plans: 23
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 25
+  completed_plans: 25
   percent: 100
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** OData query power with zero double-declaration — define entities once in TypeORM, get spec-compliant OData v4 automatically, mixing cleanly with regular NestJS routes.
-**Current focus:** Phase 05 — batch-security-and-v1-hardening
+**Current focus:** Phase 06 — v1-polish-and-config-wiring
 
 ## Current Position
 
-Phase: 05
+Phase: 06
 Plan: Not started
-Status: Executing Phase 05
+Status: Executing Phase 06
 Last activity: 2026-04-08
 
 Progress: [░░░░░░░░░░] 0%
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 27
+- Total plans completed: 29
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -50,6 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 | 4     | 5     | -     | -        |
 | 5     | 4     | -     | -        |
 | 05    | 5     | -     | -        |
+| 06    | 2     | -     | -        |
 
 **Recent Trend:**
 

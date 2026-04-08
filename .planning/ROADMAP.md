@@ -140,8 +140,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 2 plans
 Plans:
 
-- [ ] 06-01-PLAN.md — Wire maxFilterDepth to TypeOrmFilterVisitor (SEC-04) and add EdmFeatureInitializer to forFeature() (MOD-02)
-- [ ] 06-02-PLAN.md — Fix peer dep version mismatch and validate odata-expert sub-agent (SCAF-08)
+- [x] 06-01-PLAN.md — Wire maxFilterDepth to TypeOrmFilterVisitor (SEC-04) and add EdmFeatureInitializer to forFeature() (MOD-02)
+- [x] 06-02-PLAN.md — Fix peer dep version mismatch and validate odata-expert sub-agent (SCAF-08)
 
 ## Progress
 
