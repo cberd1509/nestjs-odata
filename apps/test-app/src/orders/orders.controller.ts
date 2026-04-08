@@ -1,4 +1,4 @@
-import { Body, Get, Header, Headers, Param, Req, UsePipes } from '@nestjs/common'
+import { Body, Get, Header, Headers, Param, Req } from '@nestjs/common'
 import {
   ODataController,
   ODataGet,
@@ -8,7 +8,6 @@ import {
   ODataPut,
   ODataDelete,
   ODataQueryParam,
-  ODataQueryPipe,
   type ODataQuery,
 } from '@nestjs-odata/core'
 import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
@@ -18,7 +17,7 @@ import { DataSource } from 'typeorm'
  * OrdersController — demonstrates @ODataController + CRUD + PUT decorator pattern.
  *
  * @ODataController('Orders') sets the initial path to 'Orders'.
- * Patched via PATH_METADATA in OrdersModule to /odata/Orders.
+ * ODataModule.forRoot({ controllers }) patches PATH_METADATA to /odata/Orders.
  *
  * All methods delegate to TypeOrmAutoHandler for zero-boilerplate OData
  * query execution and CRUD operations including PUT full replacement.
@@ -34,7 +33,6 @@ export class OrdersController {
    * GET /odata/Orders
    */
   @ODataGet('Orders', { path: '' })
-  @UsePipes(ODataQueryPipe)
   async getOrders(
     @ODataQueryParam('Orders') query: ODataQuery,
     @Req() req: { originalUrl: string },
@@ -47,7 +45,6 @@ export class OrdersController {
    */
   @Get('$count')
   @Header('Content-Type', 'text/plain')
-  @UsePipes(ODataQueryPipe)
   async count(@ODataQueryParam('Orders') query: ODataQuery): Promise<number> {
     return this.handler.handleCount(query)
   }

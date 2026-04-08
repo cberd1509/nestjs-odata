@@ -1,4 +1,4 @@
-import { Body, Get, Header, Headers, Param, Req, UsePipes } from '@nestjs/common'
+import { Body, Get, Header, Headers, Param, Req } from '@nestjs/common'
 import {
   ODataController,
   ODataGet,
@@ -7,7 +7,6 @@ import {
   ODataPatch,
   ODataDelete,
   ODataQueryParam,
-  ODataQueryPipe,
   type ODataQuery,
 } from '@nestjs-odata/core'
 import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
@@ -34,7 +33,6 @@ export class ProductsController {
    * @odata.count / @odata.nextLink.
    */
   @ODataGet('Products', { path: '' })
-  @UsePipes(ODataQueryPipe)
   async getProducts(
     @ODataQueryParam('Products') query: ODataQuery,
     @Req() req: { originalUrl: string },
@@ -51,7 +49,6 @@ export class ProductsController {
    */
   @Get('$count')
   @Header('Content-Type', 'text/plain')
-  @UsePipes(ODataQueryPipe)
   async count(@ODataQueryParam('Products') query: ODataQuery): Promise<number> {
     return this.handler.handleCount(query)
   }
