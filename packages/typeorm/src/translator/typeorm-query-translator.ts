@@ -60,9 +60,14 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<SelectQueryBuild
       const dbType = this.repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
       const dialect: 'sqlite' | 'postgres' | 'ansi' =
         dbType === 'sqlite' || dbType === 'postgres' ? dbType : 'ansi'
-      new TypeOrmFilterVisitor(qb, alias, entityType, this.options.maxFilterDepth, dialect).visit(
-        query.filter,
-      )
+      new TypeOrmFilterVisitor(
+        qb,
+        alias,
+        entityType,
+        this.options.maxFilterDepth,
+        dialect,
+        this.repo,
+      ).visit(query.filter)
     }
 
     // 2. Select

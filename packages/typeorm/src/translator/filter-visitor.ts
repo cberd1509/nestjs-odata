@@ -1,4 +1,4 @@
-import { Brackets, type SelectQueryBuilder, type ObjectLiteral } from 'typeorm'
+import { Brackets, type SelectQueryBuilder, type ObjectLiteral, type Repository } from 'typeorm'
 import type {
   BinaryExprNode,
   FunctionCallNode,
@@ -87,6 +87,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     private readonly entityType: EdmEntityType,
     private readonly maxFilterDepth: number = 10,
     private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
+    private readonly repo?: Repository<ObjectLiteral>,
   ) {}
 
   /** Entry point: dispatch the root FilterNode to the appropriate visit method */
@@ -122,6 +123,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.entityType,
             this.maxFilterDepth,
             this.dialect,
+            this.repo,
           )
           leftVisitor.paramCount = this.paramCount
           leftVisitor.currentDepth = depthAtEntry
@@ -134,6 +136,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.entityType,
             this.maxFilterDepth,
             this.dialect,
+            this.repo,
           )
           rightVisitor.paramCount = this.paramCount
           rightVisitor.currentDepth = depthAtEntry
@@ -191,9 +194,96 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     // Direct FunctionCall at the top level is not a WHERE condition — skip.
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  visitLambdaExpr(_node: LambdaExprNode): void {
-    // Lambda expressions (any/all) require JOIN-based translation — not implemented in this phase
+  visitLambdaExpr(node: LambdaExprNode): void {
+    if (!this.repo) return // no metadata available — skip (test isolation fallback)
+
+    const relation = this.repo.metadata.relations.find(
+      (r) => r.propertyName.toLowerCase() === node.collection.toLowerCase(),
+    )
+    if (!relation) return // unknown relation — skip silently
+
+    if (relation.relationType === 'many-to-many') {
+      throw new ODataValidationError(
+        `Lambda expressions on ManyToMany relations are not supported`,
+        this.entityType.name,
+        '$filter',
+      )
+    }
+
+    if (node.operator === 'all' && !node.predicate) {
+      // vacuous truth — add no condition
+      return
+    }
+
+    this.paramCount++ // reserve one count for alias suffix to prevent collision
+    const subAlias = `${node.variable ?? 'sub'}_lambda_${this.paramCount}`
+    const targetTable = relation.inverseEntityMetadata.tableName
+    // For OneToMany: FK lives on related side — use inverseRelation.joinColumns
+    const fkCol =
+      relation.inverseRelation?.joinColumns[0]?.databaseName ??
+      relation.joinColumns[0]?.databaseName ??
+      'id'
+    const pkCol = this.repo.metadata.primaryColumns[0]?.databaseName ?? 'id'
+
+    if (node.operator === 'any') {
+      this.buildAnyClause(node, subAlias, targetTable, fkCol, pkCol)
+    } else {
+      this.buildAllClause(node, subAlias, targetTable, fkCol, pkCol)
+    }
+  }
+
+  private buildAnyClause(
+    node: LambdaExprNode,
+    subAlias: string,
+    targetTable: string,
+    fkCol: string,
+    pkCol: string,
+  ): void {
+    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}`
+
+    if (!node.predicate) {
+      // any() — check collection is non-empty
+      this.qb.andWhere(`EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate})`)
+      return
+    }
+
+    const builder = new InnerFilterExprBuilder(
+      subAlias,
+      this.entityType,
+      this.paramCount,
+      this.dialect,
+    )
+    const result = builder.build(node.predicate)
+    this.paramCount = result.finalCount
+
+    this.qb.andWhere(
+      `EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND ${result.expr})`,
+      result.params,
+    )
+  }
+
+  private buildAllClause(
+    node: LambdaExprNode,
+    subAlias: string,
+    targetTable: string,
+    fkCol: string,
+    pkCol: string,
+  ): void {
+    // node.predicate is guaranteed non-null here (vacuous truth handled above)
+    const builder = new InnerFilterExprBuilder(
+      subAlias,
+      this.entityType,
+      this.paramCount,
+      this.dialect,
+    )
+    const result = builder.build(node.predicate!)
+    this.paramCount = result.finalCount
+
+    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}`
+    this.qb.andWhere(
+      `NOT EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND NOT (${result.expr}))`,
+      result.params,
+    )
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
