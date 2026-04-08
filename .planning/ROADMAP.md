@@ -171,7 +171,7 @@ Plans:
 
 ### Phase 8: Documentation, GitHub Pages, and llms.txt
 
-**Goal:** VitePress documentation site deployed to GitHub Pages, covering everything built so far (Phases 1-7): installation/setup guide, getting started tutorial, decorator API reference (auto-generated from TypeScript source), query options guide ($filter, $select, $orderby, $top, $skip, $count, $expand), CRUD operations guide, $batch usage, configuration reference, security/limits guide, and migration/upgrade notes. Plus llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server. Once established, every subsequent phase must ship with documentation updates.
+**Goal:** VitePress documentation site deployed to GitHub Pages, covering everything built so far (Phases 1-7): installation/setup guide, getting started tutorial, decorator API reference (auto-generated from TypeScript source), query options guide ($filter, $select, $orderby, $top, $skip, $count, $expand), CRUD operations guide, $batch usage, configuration reference, security/limits guide, and migration/upgrade notes. Plus llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server. Also: create a project-level documentation sub-agent (or skill) that evaluates whether code changes require doc updates and applies them automatically — ensuring docs never drift from implementation in future phases.
 **Depends on**: Phase 7
 **Requirements**: TBD
 **Research needed:**
