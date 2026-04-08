@@ -10,10 +10,16 @@ import type {
   EntityClass,
   ODataModuleResolvedOptions,
 } from '@nestjs-odata/core'
-import { EdmRegistry, ODATA_MODULE_OPTIONS, type ODataModuleOptions } from '@nestjs-odata/core'
+import {
+  EdmRegistry,
+  ETAG_PROVIDER,
+  ODATA_MODULE_OPTIONS,
+  type ODataModuleOptions,
+} from '@nestjs-odata/core'
 import { TypeOrmEdmDeriver } from './deriver/typeorm-edm-deriver.js'
 import { TypeOrmQueryTranslator } from './translator/typeorm-query-translator.js'
 import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
+import { TypeOrmETagProvider } from './etag/typeorm-etag.provider.js'
 import { BatchController } from './batch/batch-controller.js'
 
 /**
@@ -133,24 +139,48 @@ export class ODataTypeOrmModule {
           inject: [DataSource, EdmRegistry, ODATA_MODULE_OPTIONS],
         },
         {
+          provide: TypeOrmETagProvider,
+          useFactory: (dataSource: DataSource, edmRegistry: EdmRegistry): TypeOrmETagProvider => {
+            return new TypeOrmETagProvider(dataSource, edmRegistry)
+          },
+          inject: [DataSource, EdmRegistry],
+        },
+        {
+          provide: ETAG_PROVIDER,
+          useExisting: TypeOrmETagProvider,
+        },
+        {
           provide: TypeOrmAutoHandler,
           useFactory: (
             translator: TypeOrmQueryTranslator,
             edmRegistry: EdmRegistry,
             options: ODataModuleResolvedOptions,
             dataSource: DataSource,
+            etagProvider: TypeOrmETagProvider,
           ): TypeOrmAutoHandler => {
             const firstEntity = entities[0]
             if (!firstEntity) {
               throw new Error('ODataTypeOrmModule.forFeature() requires at least one entity class')
             }
             const repo = dataSource.getRepository(firstEntity as new () => ObjectLiteral)
-            return new TypeOrmAutoHandler(translator, edmRegistry, options, repo)
+            return new TypeOrmAutoHandler(translator, edmRegistry, options, repo, etagProvider)
           },
-          inject: [TypeOrmQueryTranslator, EdmRegistry, ODATA_MODULE_OPTIONS, DataSource],
+          inject: [
+            TypeOrmQueryTranslator,
+            EdmRegistry,
+            ODATA_MODULE_OPTIONS,
+            DataSource,
+            TypeOrmETagProvider,
+          ],
         },
       ],
-      exports: [TYPEORM_ODATA_ENTITIES, TypeOrmQueryTranslator, TypeOrmAutoHandler],
+      exports: [
+        TYPEORM_ODATA_ENTITIES,
+        TypeOrmQueryTranslator,
+        TypeOrmAutoHandler,
+        TypeOrmETagProvider,
+        ETAG_PROVIDER,
+      ],
     }
   }
 }

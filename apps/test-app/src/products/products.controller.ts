@@ -1,4 +1,4 @@
-import { Body, Get, Header, Param, Req, UsePipes } from '@nestjs/common'
+import { Body, Get, Header, Headers, Param, Req, UsePipes } from '@nestjs/common'
 import {
   ODataController,
   ODataGet,
@@ -63,8 +63,8 @@ export class ProductsController {
    * Returns 404 if entity not found.
    */
   @ODataGetByKey('Products')
-  async getProduct(@Param('key') key: string) {
-    return this.handler.handleGetByKey(key, 'Products')
+  async getProduct(@Param('key') key: string, @Headers('if-none-match') ifNoneMatch?: string) {
+    return this.handler.handleGetByKey(key, 'Products', ifNoneMatch)
   }
 
   /**
@@ -85,8 +85,12 @@ export class ProductsController {
    * Returns 200 with the updated entity. Returns 404 if entity not found.
    */
   @ODataPatch('Products')
-  async updateProduct(@Param('key') key: string, @Body() body: Record<string, unknown>) {
-    return this.handler.handleUpdate(key, body, 'Products')
+  async updateProduct(
+    @Param('key') key: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('if-match') ifMatch?: string,
+  ) {
+    return this.handler.handleUpdate(key, body, 'Products', ifMatch)
   }
 
   /**
@@ -96,7 +100,7 @@ export class ProductsController {
    * Returns 404 if entity not found.
    */
   @ODataDelete('Products')
-  async deleteProduct(@Param('key') key: string) {
-    return this.handler.handleDelete(key, 'Products')
+  async deleteProduct(@Param('key') key: string, @Headers('if-match') ifMatch?: string) {
+    return this.handler.handleDelete(key, 'Products', ifMatch)
   }
 }

@@ -80,17 +80,24 @@ describe('ODataTypeOrmModule', () => {
   })
 
   it('Test 6: TypeOrmQueryTranslator factory throws when no entities provided', async () => {
-    const { ODataTypeOrmModule, TYPEORM_ODATA_ENTITIES } = await import('./odata-typeorm.module.js')
+    const {
+      ODataTypeOrmModule,
+      TYPEORM_ODATA_ENTITIES,
+      TypeOrmQueryTranslator,
+      TypeOrmAutoHandler,
+    } = await import('./odata-typeorm.module.js')
 
     const dynamicModule = ODataTypeOrmModule.forFeature([])
     const providers = dynamicModule.providers ?? []
 
-    // Find the first useFactory provider (TypeOrmQueryTranslator)
-    const factories = providers.filter(
+    // Find factories specifically for TypeOrmQueryTranslator and TypeOrmAutoHandler
+    // (these require at least one entity class and should throw when none provided)
+    const entityRequiringFactories = providers.filter(
       (p) =>
         typeof p === 'object' &&
         'provide' in p &&
         p.provide !== TYPEORM_ODATA_ENTITIES &&
+        (p.provide === TypeOrmQueryTranslator || p.provide === TypeOrmAutoHandler) &&
         'useFactory' in p &&
         typeof (p as { useFactory: unknown }).useFactory === 'function',
     ) as Array<{ useFactory: (...args: unknown[]) => unknown }>
@@ -105,7 +112,7 @@ describe('ODataTypeOrmModule', () => {
     }
 
     // Both factory functions (translator + autoHandler) should throw with no entities
-    for (const factory of factories) {
+    for (const factory of entityRequiringFactories) {
       expect(() => factory.useFactory(mockDs, mockReg, mockOpts, mockDs)).toThrow(
         'ODataTypeOrmModule.forFeature() requires at least one entity class',
       )

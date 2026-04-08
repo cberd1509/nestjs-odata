@@ -465,7 +465,8 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
     const setHeader = vi.fn()
-    const status = vi.fn().mockReturnThis()
+    const end = vi.fn()
+    const status = vi.fn().mockReturnValue({ end })
     const ctx = {
       getHandler: vi.fn().mockReturnValue({}),
       switchToHttp: vi.fn().mockReturnValue({
@@ -482,6 +483,8 @@ describe('ODataResponseInterceptor', () => {
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
 
     expect(setHeader).toHaveBeenCalledWith('ETag', 'W/"abc123"')
+    expect(status).toHaveBeenCalledWith(304)
+    expect(end).toHaveBeenCalled()
     // Response should be empty (null/undefined)
     expect(resp == null || resp === '').toBe(true)
   })

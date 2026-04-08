@@ -116,10 +116,11 @@ export class ODataResponseInterceptor implements NestInterceptor {
             const etag = entityResult['etag'] as string
             const httpResponse = context.switchToHttp().getResponse<{
               setHeader: (k: string, v: string) => void
-              status: (code: number) => void
+              status: (code: number) => { end: () => void }
             }>()
             httpResponse.setHeader('ETag', etag)
-            // Return null to produce an empty body for 304
+            // Set 304 status and end the response directly — no body for 304
+            httpResponse.status(304).end()
             return null
           }
 

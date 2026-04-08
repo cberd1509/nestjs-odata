@@ -1,4 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, ManyToMany, JoinTable } from 'typeorm'
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  OneToMany,
+  ManyToMany,
+  JoinTable,
+  UpdateDateColumn,
+} from 'typeorm'
 import { Category } from './category.entity'
 import { OrderItem } from './order-item.entity'
 import { Tag } from './tag.entity'
@@ -22,6 +31,9 @@ export class Product {
 
   @Column({ type: 'datetime' })
   createdAt: Date
+
+  @UpdateDateColumn()
+  updatedAt: Date
 
   @ManyToOne(() => Category, (category) => category.products)
   category: Category
