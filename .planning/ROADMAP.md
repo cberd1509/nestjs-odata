@@ -4,6 +4,8 @@
 
 Starting from an empty repo, this roadmap delivers a spec-compliant OData v4 NestJS library in five phases. Phase 1 lays the monorepo foundation and validates the highest-risk decision — the custom OData parser — before any other code is written. Phase 2 builds the EDM Registry, the central data structure that every subsequent component reads from. Phase 3 delivers the full read-only query surface. Phase 4 wires in CRUD, $expand, and the NestJS module API that library consumers actually touch. Phase 5 adds $batch atomicity and hardens the library for v1 release, including end-to-end validation of the full CI/CD release pipeline.
 
+**v1.1 milestone (Phases 7-10)** closes the OData v4 spec gaps — bringing the library from ~65% to ~90% spec coverage via filter function translation, response annotations, ETag concurrency control, advanced write operations, and the $search/$apply query subsystems.
+
 ## Phases
 
 **Phase Numbering:**
@@ -19,6 +21,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: CRUD, $expand, and Module System** - Write operations, relation expansion, and NestJS consumer API (completed 2026-04-07)
 - [x] **Phase 5: $batch, Security, and v1 Hardening** - Batch atomicity, security guards, full release pipeline, and CI compliance checks (completed 2026-04-07)
 - [ ] **Phase 6: v1 Polish and Config Wiring** - Close all audit gaps: config wiring, peer dep fix, changeset fix, adapter seam, sub-agent validation
+- [ ] **Phase 7: Filter Functions** - Lambda expressions and date/time, arithmetic, string functions translate to SQL
+- [ ] **Phase 8: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
+- [ ] **Phase 9: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
+- [ ] **Phase 10: $search and $apply** - Full-text search and data aggregation query subsystems
 
 ## Phase Details
 
@@ -143,10 +149,66 @@ Plans:
 - [x] 06-01-PLAN.md — Wire maxFilterDepth to TypeOrmFilterVisitor (SEC-04) and add EdmFeatureInitializer to forFeature() (MOD-02)
 - [x] 06-02-PLAN.md — Fix peer dep version mismatch and validate odata-expert sub-agent (SCAF-08)
 
+### Phase 7: Filter Functions
+
+**Goal**: Lambda expressions (`any`/`all`) and date/time, arithmetic, and string functions in `$filter` translate to correct SQL — completing the filter translator surface
+**Depends on**: Phase 6
+**Requirements**: FILT-01, FILT-02, FILT-03, FILT-04, FILT-05
+**Success Criteria** (what must be TRUE):
+
+1. `GET /Orders?$filter=Items/any(i: i/Price gt 100)` returns only orders that have at least one item with Price > 100 — translated to an EXISTS subquery, not post-fetch filtering
+2. `GET /Orders?$filter=Items/all(i: i/Shipped eq true)` returns only orders where every item is shipped — translated to a NOT EXISTS subquery
+3. `GET /Products?$filter=year(CreatedAt) eq 2024` returns products created in 2024 — date extraction runs in SQL, not application memory
+4. `GET /Products?$filter=Price add Tax gt 50` returns products whose sum of Price and Tax exceeds 50 — arithmetic evaluated in SQL
+5. `GET /Products?$filter=indexof(Name,'Pro') ge 0` and `contains`, `substring`, `concat` string function variants return correct results — translated to SQL LIKE or equivalent database functions
+
+**Plans**: TBD
+
+### Phase 8: Response Annotations and ETags
+
+**Goal**: Every entity response carries OData-required metadata annotations, and the server enforces ETag-based concurrency control so clients can perform optimistic locking
+**Depends on**: Phase 7
+**Requirements**: RESP-04, RESP-05, RESP-06, ETAG-01, ETAG-02, ETAG-03
+**Success Criteria** (what must be TRUE):
+
+1. `GET /Products(1)` returns a response body that includes `@odata.id`, `@odata.type`, and `@odata.navigationLink` annotations alongside entity fields — an OData v4 validator accepts the response as spec-compliant
+2. `GET /Products` returns an `ETag` response header derived from the entity's version/timestamp column; the same value appears as `@odata.etag` in the entity body
+3. `PATCH /Products(1)` with a stale `If-Match` header value returns HTTP 412 Precondition Failed with an OData error body — the update is not applied
+4. `GET /Products(1)` with `If-None-Match` matching the current ETag returns HTTP 304 Not Modified with no body
+
+**Plans**: TBD
+
+### Phase 9: Advanced Write Operations
+
+**Goal**: PUT replaces entire entities, POST can atomically create a resource and its related entities in one request, and `$batch` changesets support Content-ID cross-references
+**Depends on**: Phase 6
+**Requirements**: WRITE-01, WRITE-02, WRITE-03
+**Success Criteria** (what must be TRUE):
+
+1. `PUT /Products(1)` with a partial body resets unspecified fields to their column defaults — a subsequent GET confirms no residual values from the previous state
+2. `POST /Orders` with a nested `Items` array in the body creates the order and all items in a single database transaction — if any item fails validation, neither the order nor any item is persisted
+3. A `$batch` changeset that POSTs an entity in request `r1` and then references `$1` in a subsequent request URL resolves `$1` to the created entity's key — the second operation succeeds without the client knowing the server-assigned key in advance
+
+**Plans**: TBD
+
+### Phase 10: $search and $apply
+
+**Goal**: Clients can issue free-text `$search` queries and data-aggregation `$apply` pipelines — two independent query subsystems that extend the existing query parsing and translation infrastructure
+**Depends on**: Phase 6
+**Requirements**: SRCH-01, SRCH-02, AGG-01, AGG-02, AGG-03
+**Success Criteria** (what must be TRUE):
+
+1. `GET /Products?$search=laptop` returns products matching "laptop" across configured searchable fields — falling back to SQL LIKE when full-text search is not configured, with the backend pluggable via the existing translator interface
+2. `GET /Orders?$apply=groupby((CustomerId),aggregate($count as OrderCount))` returns one row per customer with a count — translated to a SQL GROUP BY query
+3. `GET /Orders?$apply=aggregate(Total with sum as GrandTotal)` returns a single aggregated row with the sum — not a collection of raw entities
+4. `GET /Orders?$apply=filter(Status eq 'open')/groupby((CustomerId),aggregate($count as OpenOrders))` executes the filter transformation before grouping — pipeline steps compose correctly
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 | Phase                                 | Plans Complete | Status            | Completed  |
 | ------------------------------------- | -------------- | ----------------- | ---------- |
@@ -156,3 +218,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 4. CRUD, $expand, and Module System   | 5/5            | Complete          | 2026-04-07 |
 | 5. $batch, Security, and v1 Hardening | 5/5            | Complete          | 2026-04-07 |
 | 6. v1 Polish and Config Wiring        | 0/2            | Planning complete | -          |
+| 7. Filter Functions                   | 0/TBD          | Not started       | -          |
+| 8. Response Annotations and ETags     | 0/TBD          | Not started       | -          |
+| 9. Advanced Write Operations          | 0/TBD          | Not started       | -          |
+| 10. $search and $apply                | 0/TBD          | Not started       | -          |

@@ -74,33 +74,33 @@
 
 | Requirement | Phase | Status  |
 | ----------- | ----- | ------- |
-| FILT-01     | TBD   | Pending |
-| FILT-02     | TBD   | Pending |
-| FILT-03     | TBD   | Pending |
-| FILT-04     | TBD   | Pending |
-| FILT-05     | TBD   | Pending |
-| SRCH-01     | TBD   | Pending |
-| SRCH-02     | TBD   | Pending |
-| WRITE-01    | TBD   | Pending |
-| WRITE-02    | TBD   | Pending |
-| WRITE-03    | TBD   | Pending |
-| RESP-04     | TBD   | Pending |
-| RESP-05     | TBD   | Pending |
-| RESP-06     | TBD   | Pending |
-| ETAG-01     | TBD   | Pending |
-| ETAG-02     | TBD   | Pending |
-| ETAG-03     | TBD   | Pending |
-| AGG-01      | TBD   | Pending |
-| AGG-02      | TBD   | Pending |
-| AGG-03      | TBD   | Pending |
+| FILT-01     | 7     | Pending |
+| FILT-02     | 7     | Pending |
+| FILT-03     | 7     | Pending |
+| FILT-04     | 7     | Pending |
+| FILT-05     | 7     | Pending |
+| SRCH-01     | 10    | Pending |
+| SRCH-02     | 10    | Pending |
+| WRITE-01    | 9     | Pending |
+| WRITE-02    | 9     | Pending |
+| WRITE-03    | 9     | Pending |
+| RESP-04     | 8     | Pending |
+| RESP-05     | 8     | Pending |
+| RESP-06     | 8     | Pending |
+| ETAG-01     | 8     | Pending |
+| ETAG-02     | 8     | Pending |
+| ETAG-03     | 8     | Pending |
+| AGG-01      | 10    | Pending |
+| AGG-02      | 10    | Pending |
+| AGG-03      | 10    | Pending |
 
 **Coverage:**
 
 - v1.1 requirements: 19 total
-- Mapped to phases: 0/19
-- Unmapped: 19
+- Mapped to phases: 19/19
+- Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-04-07_
-_Last updated: 2026-04-07 after milestone v1.1 definition_
+_Last updated: 2026-04-08 after v1.1 roadmap creation (Phases 7-10)_
