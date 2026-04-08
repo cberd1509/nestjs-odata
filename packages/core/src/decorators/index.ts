@@ -45,6 +45,10 @@ export { ODataPost } from './odata-post.decorator.js'
 export type { ODataPatchOptions } from './odata-patch.decorator.js'
 export { ODataPatch } from './odata-patch.decorator.js'
 
+// @ODataPut route decorator
+export type { ODataPutOptions } from './odata-put.decorator.js'
+export { ODataPut } from './odata-put.decorator.js'
+
 // @ODataDelete route decorator
 export type { ODataDeleteOptions } from './odata-delete.decorator.js'
 export { ODataDelete } from './odata-delete.decorator.js'

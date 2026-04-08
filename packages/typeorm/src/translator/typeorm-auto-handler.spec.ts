@@ -83,7 +83,17 @@ function makeMockQb(rows: ObjectLiteral[] = [], totalCount = 0): MockQbResult {
 
 // ── Mock Repository ───────────────────────────────────────────────────────────
 
-function makeMockRepo() {
+interface MockColumnMetadata {
+  propertyName: string
+  isPrimary?: boolean
+  isNullable?: boolean
+  isCreateDate?: boolean
+  isUpdateDate?: boolean
+  isVersion?: boolean
+  default?: unknown
+}
+
+function makeMockRepo(columns: MockColumnMetadata[] = []) {
   const findOne = vi.fn()
   const create = vi.fn()
   const save = vi.fn()
@@ -96,6 +106,7 @@ function makeMockRepo() {
     save,
     preload,
     delete: deleteMethod,
+    metadata: { columns },
   } as unknown as Repository<ObjectLiteral>
 
   return { repo, findOne, create, save, preload, deleteMethod }
@@ -542,6 +553,119 @@ describe('TypeOrmAutoHandler', () => {
       await expect(autoHandler.handleDelete('1', 'Products', 'W/"stale"')).rejects.toMatchObject({
         status: 412,
       })
+    })
+  })
+
+  describe('handleReplace()', () => {
+    // Columns used for the Product entity in replace tests
+    const replaceColumns: MockColumnMetadata[] = [
+      { propertyName: 'id', isPrimary: true },
+      { propertyName: 'name', isNullable: true },
+      { propertyName: 'price', isNullable: false },
+      { propertyName: 'category', isNullable: true },
+      { propertyName: 'status', isNullable: false, default: 'active' },
+    ]
+
+    it('Test R1: resets nullable unspecified fields to null', async () => {
+      const existing = {
+        id: 1,
+        name: 'Widget',
+        price: 10,
+        category: 'electronics',
+        status: 'active',
+      }
+      const { repo, findOne, create, save } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue(existing)
+      create.mockImplementation((v: ObjectLiteral) => v)
+      save.mockResolvedValue({ id: 1, name: null, price: 20, category: null, status: 'active' })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      // Omit `name` and `category` (both nullable) — they should reset to null
+      const result = await autoHandler.handleReplace('1', { price: 20 }, 'Products')
+
+      // create() should be called with name=null, category=null (nullable reset)
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: null, category: null, price: 20, id: 1 }),
+      )
+      expect(result).toBeDefined()
+    })
+
+    it('Test R2: resets fields with column defaults to their default value when omitted from body', async () => {
+      const existing = { id: 1, name: 'Widget', price: 10, status: 'shipped' }
+      const { repo, findOne, create, save } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue(existing)
+      create.mockImplementation((v: ObjectLiteral) => v)
+      save.mockResolvedValue({ id: 1, name: null, price: 99, status: 'active' })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      // Omit `status` — it has default='active', should reset
+      const result = await autoHandler.handleReplace('1', { price: 99 }, 'Products')
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'active', price: 99, id: 1 }),
+      )
+      expect(result).toBeDefined()
+    })
+
+    it('Test R3: body key mismatch returns 400 HttpException', async () => {
+      const { repo, findOne } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue({ id: 1, name: 'Widget', price: 10 })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      // body has id=2 but URL key is 1 — should reject
+      await expect(
+        autoHandler.handleReplace('1', { id: 2, price: 50 }, 'Products'),
+      ).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('Test R4: throws NotFoundException when entity does not exist', async () => {
+      const { repo, findOne } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue(null)
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await expect(autoHandler.handleReplace('99999', { price: 50 }, 'Products')).rejects.toThrow(
+        NotFoundException,
+      )
+    })
+
+    it('Test R5: ETag mismatch returns 412 HttpException', async () => {
+      const entity = { id: 1, name: 'Widget', price: 10, updatedAt: new Date() }
+      const { repo, findOne } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue(entity)
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"current"'),
+        validateIfMatch: vi.fn().mockReturnValue(false),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+
+      await expect(
+        autoHandler.handleReplace('1', { price: 50 }, 'Products', 'W/"stale"'),
+      ).rejects.toMatchObject({ status: 412 })
+    })
+
+    it('Test R6: skips isPrimary columns when building replacement (key comes from URL)', async () => {
+      const existing = { id: 1, price: 10 }
+      const { repo, findOne, create, save } = makeMockRepo(replaceColumns)
+      findOne.mockResolvedValue(existing)
+      create.mockImplementation((v: ObjectLiteral) => v)
+      save.mockResolvedValue({ id: 1, price: 50 })
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      await autoHandler.handleReplace('1', { price: 50 }, 'Products')
+
+      // The key (id) must be set from URL, but create() must NOT receive id from column iteration
+      // (it should receive id from the explicit where assignment)
+      const callArg = (create.mock.calls[0] as [ObjectLiteral])[0]
+      expect(callArg['id']).toBe(1)
     })
   })
 

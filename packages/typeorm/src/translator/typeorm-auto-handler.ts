@@ -302,6 +302,107 @@ export class TypeOrmAutoHandler {
   }
 
   /**
+   * Handle OData PUT — full entity replacement.
+   *
+   * Per D-01 (OData v4 spec): PUT replaces ALL entity properties.
+   * Unspecified fields reset to column defaults (null for nullable, default value otherwise).
+   * This is distinct from PATCH merge semantics.
+   *
+   * Implementation:
+   *  1. Parse key from URL
+   *  2. Validate body key matches URL key (reject 400 on mismatch)
+   *  3. Find existing entity — throw 404 if not found
+   *  4. Validate ETag If-Match (412 on mismatch)
+   *  5. Build full replacement using repo.metadata.columns:
+   *     - Skip isPrimary, isCreateDate, isUpdateDate, isVersion columns
+   *     - body value > column default > null (if nullable) > absent
+   *  6. Save and return
+   *
+   * Per T-10-01: body key mismatch rejected before DB write.
+   * Per T-10-02: repo.create() only maps declared entity columns — mass assignment safe.
+   * Per T-10-03: managed columns (PK, timestamps, version) skipped.
+   * Per T-10-04: ETag If-Match enforcement identical to handleUpdate().
+   */
+  async handleReplace(
+    keyStr: string,
+    body: Record<string, unknown>,
+    entitySetName: string,
+    ifMatchHeader?: string,
+  ): Promise<unknown> {
+    const entityType = this.resolveEntityType(entitySetName)
+    const where = parseODataKey(keyStr, entityType.keyProperties)
+
+    // Validate key in body matches URL key (D-01 spec compliance — T-10-01)
+    for (const kp of entityType.keyProperties) {
+      const bodyKeyValue = body[kp]
+      const urlKeyValue = where[kp]
+      if (bodyKeyValue !== undefined && bodyKeyValue !== urlKeyValue) {
+        throw new HttpException(
+          { error: { code: '400', message: 'Key in body does not match URL key' } },
+          400,
+        )
+      }
+    }
+
+    // Find existing entity to confirm it exists
+    const existing = await this.repo.findOne({ where })
+    if (!existing) {
+      throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
+    }
+
+    // ETag If-Match validation (identical block to handleUpdate — T-10-04)
+    if (this.etagProvider && ifMatchHeader) {
+      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
+      if (etagColumn) {
+        if (
+          !this.etagProvider.validateIfMatch(
+            ifMatchHeader,
+            existing as Record<string, unknown>,
+            etagColumn,
+          )
+        ) {
+          throw new HttpException(
+            {
+              error: {
+                code: '412',
+                message: 'The ETag value does not match the current version of the entity',
+              },
+            },
+            412,
+          )
+        }
+      }
+    }
+
+    // Build full replacement entity using column metadata (Pattern 1 from RESEARCH)
+    // repo.metadata.columns gives us all column metadata without needing DataSource injection
+    const replacement: Record<string, unknown> = {}
+
+    // Set key values from URL
+    for (const kp of entityType.keyProperties) {
+      replacement[kp] = where[kp]
+    }
+
+    for (const col of this.repo.metadata.columns) {
+      if (col.isPrimary) continue // key already set from URL
+      if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue // TypeORM-managed
+
+      const propName = col.propertyName
+      if (Object.prototype.hasOwnProperty.call(body, propName)) {
+        replacement[propName] = body[propName] // use body value
+      } else if (col.default !== undefined) {
+        replacement[propName] = col.default // reset to column default
+      } else if (col.isNullable) {
+        replacement[propName] = null // reset nullable to null
+      }
+      // else: omit — DB-managed default (e.g., CURRENT_TIMESTAMP)
+    }
+
+    const entity = this.repo.create(replacement as ObjectLiteral)
+    return this.repo.save(entity)
+  }
+
+  /**
    * Handle OData DELETE — remove entity.
    *
    * Per D-04: returns 204 No Content (void return value).
