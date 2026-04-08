@@ -105,6 +105,34 @@ Content-Type: application/json
 - Changesets cannot contain `GET` requests (reads are never transactional per OData spec)
 - `Content-ID` headers allow referencing the result of one changeset operation in a subsequent one
 
+### Content-ID references
+
+Use `Content-ID` to reference the result of a previous changeset operation in a subsequent request. Reference the Content-ID value with a `$` prefix in the URL:
+
+```
+--changeset_def456
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+Content-ID: 1
+
+POST /odata/Orders HTTP/1.1
+Content-Type: application/json
+
+{"orderDate":"2025-06-15T10:30:00Z","totalAmount":149.97,"status":"pending","customerId":1}
+--changeset_def456
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+Content-ID: 2
+
+POST /odata/OrderItems HTTP/1.1
+Content-Type: application/json
+
+{"quantity":3,"unitPrice":49.99,"orderId":"$1","productId":1}
+--changeset_def456--
+```
+
+In this example, `$1` in the second request's body resolves to the server-assigned key of the entity created by the first request (Content-ID: 1). This allows creating related entities in a single atomic changeset without knowing the parent's key in advance.
+
 ## Complete curl example
 
 ```bash
@@ -144,10 +172,7 @@ curl -X POST http://localhost:3000/odata/$batch \
 @Module({
   imports: [
     ODataModule.forRoot({ serviceRoot: '/odata' }),
-    ODataTypeOrmModule.forFeature(
-      [Product, Category],
-      { serviceRoot: '/odata' }, // Routes POST /odata/$batch
-    ),
+    ODataTypeOrmModule.forFeature([Product, Category]), // $batch route inherits serviceRoot automatically
   ],
 })
 export class AppModule {}

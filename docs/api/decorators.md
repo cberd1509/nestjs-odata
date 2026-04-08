@@ -68,7 +68,6 @@ Registers a `GET` handler for an entity set collection.
 
 ```typescript
 @ODataGet('Products', { path: '' })
-@UsePipes(ODataQueryPipe)
 async getProducts(
   @ODataQueryParam('Products') query: ODataQuery,
   @Req() req: { originalUrl: string },
@@ -131,6 +130,27 @@ async updateProduct(
 }
 ```
 
+### @ODataPut()
+
+```typescript
+@ODataPut(entitySetName: string, options?: ODataPutOptions)
+```
+
+Registers a `PUT /{entitySet}/:key` handler for full entity replacement. Unlike `PATCH` (merge-patch), `PUT` resets all unspecified fields to their column defaults.
+
+**Example:**
+
+```typescript
+@ODataPut('Products')
+async replaceProduct(
+  @Param('key') key: string,
+  @Body() body: Record<string, unknown>,
+  @Headers('if-match') ifMatch?: string,
+) {
+  return this.handler.handleReplace(key, body, 'Products', ifMatch)
+}
+```
+
 ### @ODataDelete()
 
 ```typescript
@@ -155,10 +175,12 @@ async deleteProduct(@Param('key') key: string) {
 ### @ODataQueryParam()
 
 ```typescript
-@ODataQueryParam(entitySetName: string)
+@ODataQueryParam(entitySetName?: string)
 ```
 
-Parameter decorator that injects the parsed `ODataQuery` object. Must be used with `@UsePipes(ODataQueryPipe)` on the method.
+Parameter decorator that injects the parsed `ODataQuery` object. **Auto-applies `ODataQueryPipe`** -- no `@UsePipes(ODataQueryPipe)` needed on the method.
+
+The `entitySetName` argument is passed to the pipe for context URL construction and field validation.
 
 **ODataQuery type:**
 
@@ -172,6 +194,8 @@ interface ODataQuery {
   readonly count?: boolean // true when $count=true
   readonly entitySetName: string // The entity set name
   readonly expand?: ExpandNode // Parsed $expand
+  readonly search?: SearchNode // Parsed $search
+  readonly apply?: ApplyNode // Parsed $apply
 }
 ```
 
@@ -179,15 +203,18 @@ interface ODataQuery {
 
 ```typescript
 @ODataGet('Products', { path: '' })
-@UsePipes(ODataQueryPipe)
 async getProducts(
   @ODataQueryParam('Products') query: ODataQuery,
   @Req() req: { originalUrl: string },
 ) {
-  // query.filter, query.top, query.skip, query.orderBy, etc.
+  // query.filter, query.top, query.skip, query.orderBy, query.search, etc.
   return this.handler.handleGet(query, req.originalUrl)
 }
 ```
+
+::: tip Migration from earlier versions
+If your code uses `@UsePipes(ODataQueryPipe)`, you can safely remove it. `@ODataQueryParam` now auto-applies the pipe. `ODataQueryPipe` remains exported for advanced use cases where you need it independently.
+:::
 
 ---
 
@@ -301,4 +328,65 @@ export class ProductSummary {
   @Column()
   name: string
 }
+```
+
+### @ODataETag()
+
+```typescript
+@ODataETag()
+```
+
+Marks a property as the ETag source for optimistic concurrency control. When an entity has an `@ODataETag` property:
+
+- `GET` single entity responses include an `ETag` response header and `@odata.etag` annotation
+- `PATCH`, `PUT`, and `DELETE` enforce `If-Match` header validation (returns `412 Precondition Failed` on mismatch)
+- `GET` supports `If-None-Match` (returns `304 Not Modified` when unchanged)
+
+```typescript
+@Entity()
+export class Product {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column()
+  name: string
+
+  @UpdateDateColumn()
+  @ODataETag() // Use the update timestamp as ETag source
+  updatedAt: Date
+}
+```
+
+### @ODataSearchable()
+
+```typescript
+@ODataSearchable()
+```
+
+Marks a property as searchable via OData `$search`. Multiple properties on the same entity can be decorated. When `$search=term` is used, all `@ODataSearchable` fields are searched with SQL `LIKE`.
+
+```typescript
+@Entity()
+export class Product {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column()
+  @ODataSearchable() // Include in $search queries
+  name: string
+
+  @Column({ type: 'text', nullable: true })
+  @ODataSearchable() // Include in $search queries
+  description: string | null
+
+  @Column()
+  price: number // NOT searchable — numeric fields typically excluded
+}
+```
+
+Usage:
+
+```bash
+# Search products by name or description
+curl 'http://localhost:3000/odata/Products?$search=Widget'
 ```

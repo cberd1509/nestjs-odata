@@ -179,9 +179,137 @@ curl 'http://localhost:3000/odata/Products/$count?$filter=inStock eq true'
 # Returns: 28
 ```
 
+## $search
+
+Full-text search across fields decorated with `@ODataSearchable()`. Falls back to SQL `LIKE` by default.
+
+### Basic search
+
+```bash
+# Search products by name or description
+curl 'http://localhost:3000/odata/Products?$search=Widget'
+```
+
+### Boolean operators
+
+`$search` supports AND, OR, and NOT operators:
+
+```bash
+# Products matching "Widget" AND "Pro"
+curl 'http://localhost:3000/odata/Products?$search=Widget AND Pro'
+
+# Products matching "Widget" OR "Gadget"
+curl 'http://localhost:3000/odata/Products?$search=Widget OR Gadget'
+
+# Products matching "Widget" but NOT "Mini"
+curl 'http://localhost:3000/odata/Products?$search=Widget NOT Mini'
+```
+
+### Entity setup
+
+Mark properties as searchable with `@ODataSearchable()`:
+
+```typescript
+import { ODataSearchable } from '@nestjs-odata/core'
+
+@Entity()
+export class Product {
+  @Column()
+  @ODataSearchable()
+  name: string
+
+  @Column({ type: 'text', nullable: true })
+  @ODataSearchable()
+  description: string | null
+}
+```
+
+### Custom search provider
+
+For advanced full-text search (Elasticsearch, PostgreSQL `tsvector`, etc.), implement the `ISearchProvider` interface and register it with the `SEARCH_PROVIDER` token:
+
+```typescript
+import { SEARCH_PROVIDER, type ISearchProvider } from '@nestjs-odata/core'
+
+@Module({
+  providers: [
+    {
+      provide: SEARCH_PROVIDER,
+      useClass: ElasticsearchSearchProvider,
+    },
+  ],
+})
+export class AppModule {}
+```
+
+## $apply
+
+Aggregation and grouping operations. Supports aggregate functions, GROUP BY, and pipeline composition.
+
+### Aggregate
+
+```bash
+# Sum of all product prices
+curl 'http://localhost:3000/odata/Products?$apply=aggregate(price with sum as TotalPrice)'
+
+# Multiple aggregations
+curl 'http://localhost:3000/odata/Products?$apply=aggregate(price with sum as TotalPrice, price with avg as AvgPrice, id with count as ProductCount)'
+```
+
+Response:
+
+```json
+{
+  "@odata.context": "...",
+  "value": [{ "TotalPrice": 1299.5, "AvgPrice": 25.99, "ProductCount": 50 }]
+}
+```
+
+Supported aggregate functions: `sum`, `count`, `avg`, `min`, `max`, `countdistinct`.
+
+### Group by
+
+```bash
+# Total revenue by category
+curl 'http://localhost:3000/odata/Products?$apply=groupby((categoryId), aggregate(price with sum as TotalPrice))'
+
+# Count products by active status
+curl 'http://localhost:3000/odata/Products?$apply=groupby((active), aggregate(id with count as ProductCount))'
+```
+
+Response:
+
+```json
+{
+  "@odata.context": "...",
+  "value": [
+    { "categoryId": 1, "TotalPrice": 499.5 },
+    { "categoryId": 2, "TotalPrice": 800.0 }
+  ]
+}
+```
+
+### Pipeline composition
+
+Chain `filter` and `groupby`/`aggregate` operations with `/`:
+
+```bash
+# Filter to active products, then group by category with totals
+curl 'http://localhost:3000/odata/Products?$apply=filter(active eq true)/groupby((categoryId), aggregate(price with sum as TotalPrice))'
+```
+
 ## Advanced filter functions
 
 For lambda expressions (`any`/`all`), arithmetic operators, date/time extraction functions, and additional string functions (`indexof`, `substring`, `concat`) — see the [Filter Functions guide](./filter-functions.md).
+
+## Response annotations
+
+All entity responses include OData v4 annotations:
+
+- `@odata.id` — canonical URL of the entity (e.g. `Products(1)`)
+- `@odata.type` — fully qualified type name (e.g. `#Default.Product`)
+- `{navigationProperty}@odata.navigationLink` — URL to navigate to related entities
+- `@odata.etag` — ETag value (only on entities with `@ODataETag()`)
 
 ## Combining query options
 

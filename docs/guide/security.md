@@ -138,6 +138,45 @@ export class AppModule {}
 2. Global `ODataModuleOptions`
 3. Built-in defaults (lowest priority)
 
+## ETag concurrency control
+
+Entities decorated with `@ODataETag()` get automatic optimistic concurrency control:
+
+- **Write protection**: `PATCH`, `PUT`, and `DELETE` require an `If-Match` header containing the current ETag value. If the ETag does not match (another client modified the entity), the server returns `412 Precondition Failed`.
+- **Read optimization**: `GET` single entity supports `If-None-Match`. If the ETag matches (entity unchanged), the server returns `304 Not Modified` with no body.
+
+This prevents lost-update scenarios in concurrent environments without pessimistic locking.
+
+```typescript
+import { ODataETag } from '@nestjs-odata/core'
+
+@Entity()
+export class Product {
+  @UpdateDateColumn()
+  @ODataETag()
+  updatedAt: Date
+}
+```
+
+## Enriched error details
+
+Validation and parse errors include additional context to help developers diagnose issues:
+
+- **`availableProperties`**: When a `$select` or `$filter` references an unknown property, the error response includes the list of valid property names for the entity set.
+- **`queryContext`**: When a `$filter` or other query option has a parse error, the error response includes a snippet of the query around the error position.
+
+```json
+{
+  "error": {
+    "code": "InvalidQueryOption",
+    "message": "Unknown property 'naem' in $select for entity set Products",
+    "details": {
+      "availableProperties": ["id", "name", "price", "inStock"]
+    }
+  }
+}
+```
+
 ## Parameterized queries
 
 All `$filter` values are translated to **parameterized TypeORM queries** — never string interpolation. This prevents SQL injection.

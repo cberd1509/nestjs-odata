@@ -35,6 +35,12 @@ interface ODataModuleOptions {
   unmappedTypeStrategy?: 'skip' | 'error'
 
   /**
+   * Maximum nesting depth for deep insert POST bodies. Default: 5.
+   * Prevents denial-of-service via unbounded recursion.
+   */
+  maxDeepInsertDepth?: number
+
+  /**
    * @ODataController classes to register and path-patch with serviceRoot.
    * Controllers listed here have their route prefix set to `{serviceRoot}/{entitySetName}`.
    */
@@ -78,6 +84,14 @@ ODataModule.forRootAsync({
 })
 ```
 
+### ODataModule.registeredServiceRoot
+
+```typescript
+static get registeredServiceRoot(): string
+```
+
+Returns the `serviceRoot` registered via `forRoot()`. Used by adapter modules (e.g. `ODataTypeOrmModule`) to inherit the service root without requiring it to be passed again.
+
 ### ODataModule.forFeature()
 
 ```typescript
@@ -105,23 +119,24 @@ Registers TypeORM entities for OData auto-derivation.
 
 **Parameters:**
 
-| Parameter             | Type                    | Description                                                                             |
-| --------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
-| `entities`            | `EntityClassOrSchema[]` | TypeORM entity classes decorated with `@Entity()`                                       |
-| `options.serviceRoot` | `string`                | Must match `ODataModule.forRoot` serviceRoot. Used to route `POST {serviceRoot}/$batch` |
+| Parameter             | Type                    | Description                                                                                                                  |
+| --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `entities`            | `EntityClassOrSchema[]` | TypeORM entity classes decorated with `@Entity()`                                                                            |
+| `options.serviceRoot` | `string?`               | Optional. Inherits from `ODataModule.registeredServiceRoot` by default. Only needed to override the `$batch` controller path |
 
 **What it does:**
 
 1. Wraps `TypeOrmModule.forFeature(entities)` for repository injection
 2. Registers `TypeOrmEdmInitializer` which runs `onModuleInit` to derive EDM from TypeORM metadata
-3. Registers `TypeOrmQueryTranslator` for `$filter`, `$select`, `$orderby`, `$expand` translation
-4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling
-5. Registers `BatchController` at `POST {serviceRoot}/$batch`
+3. Registers `TypeOrmQueryTranslator` for `$filter`, `$select`, `$orderby`, `$expand`, `$search`, `$apply` translation
+4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling (including PUT replace and deep insert)
+5. Registers `TypeOrmETagProvider` and `TypeOrmSearchProvider` for ETag concurrency and `$search` support
+6. Registers `BatchController` at `POST {serviceRoot}/$batch`
 
 **Example:**
 
 ```typescript
-ODataTypeOrmModule.forFeature([Product, Category, Order, OrderItem], { serviceRoot: '/odata' })
+ODataTypeOrmModule.forFeature([Product, Category, Order, OrderItem])
 ```
 
 ---
@@ -154,6 +169,7 @@ interface ODataModuleResolvedOptions {
   maxExpandDepth: number // Always set (default: 2)
   maxFilterDepth: number // Always set (default: 10)
   unmappedTypeStrategy: UnmappedTypeStrategy
+  maxDeepInsertDepth: number // Always set (default: 5)
 }
 ```
 

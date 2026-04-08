@@ -64,7 +64,7 @@ No OData-specific decorators required. The library reads TypeORM metadata automa
 
 ```typescript
 // products.controller.ts
-import { Body, Param, Req, UsePipes } from '@nestjs/common'
+import { Body, Param, Req, Headers } from '@nestjs/common'
 import {
   ODataController,
   ODataGet,
@@ -73,7 +73,6 @@ import {
   ODataPatch,
   ODataDelete,
   ODataQueryParam,
-  ODataQueryPipe,
   type ODataQuery,
 } from '@nestjs-odata/core'
 import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
@@ -83,7 +82,6 @@ export class ProductsController {
   constructor(private readonly handler: TypeOrmAutoHandler) {}
 
   @ODataGet('Products', { path: '' })
-  @UsePipes(ODataQueryPipe)
   async getProducts(
     @ODataQueryParam('Products') query: ODataQuery,
     @Req() req: { originalUrl: string },
@@ -92,8 +90,8 @@ export class ProductsController {
   }
 
   @ODataGetByKey('Products')
-  async getProduct(@Param('key') key: string) {
-    return this.handler.handleGetByKey(key, 'Products')
+  async getProduct(@Param('key') key: string, @Headers('if-none-match') ifNoneMatch?: string) {
+    return this.handler.handleGetByKey(key, 'Products', ifNoneMatch)
   }
 
   @ODataPost('Products')
@@ -102,13 +100,17 @@ export class ProductsController {
   }
 
   @ODataPatch('Products')
-  async updateProduct(@Param('key') key: string, @Body() body: Record<string, unknown>) {
-    return this.handler.handleUpdate(key, body, 'Products')
+  async updateProduct(
+    @Param('key') key: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('if-match') ifMatch?: string,
+  ) {
+    return this.handler.handleUpdate(key, body, 'Products', ifMatch)
   }
 
   @ODataDelete('Products')
-  async deleteProduct(@Param('key') key: string) {
-    return this.handler.handleDelete(key, 'Products')
+  async deleteProduct(@Param('key') key: string, @Headers('if-match') ifMatch?: string) {
+    return this.handler.handleDelete(key, 'Products', ifMatch)
   }
 }
 ```
@@ -142,7 +144,7 @@ import { ProductsController } from './products.controller'
       serviceRoot: '/odata',
       controllers: [ProductsController],
     }),
-    ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' }),
+    ODataTypeOrmModule.forFeature([Product]),
   ],
 })
 export class AppModule {}
@@ -188,8 +190,22 @@ curl http://localhost:3000/odata/$metadata
 {
   "@odata.context": "http://localhost:3000/odata/$metadata#Products",
   "value": [
-    { "id": 1, "name": "Widget", "price": 9.99, "inStock": true },
-    { "id": 2, "name": "Gadget", "price": 49.99, "inStock": false }
+    {
+      "@odata.id": "Products(1)",
+      "@odata.type": "#Default.Product",
+      "id": 1,
+      "name": "Widget",
+      "price": 9.99,
+      "inStock": true
+    },
+    {
+      "@odata.id": "Products(2)",
+      "@odata.type": "#Default.Product",
+      "id": 2,
+      "name": "Gadget",
+      "price": 49.99,
+      "inStock": false
+    }
   ]
 }
 ```
@@ -205,7 +221,7 @@ curl http://localhost:3000/odata/$metadata
 ## Next steps
 
 - [Configuration](./configuration.md) — Global limits, namespace, async setup
-- [Query Options](./query-options.md) — Full `$filter`, `$select`, `$orderby`, pagination reference
+- [Query Options](./query-options.md) — `$filter`, `$select`, `$orderby`, `$search`, `$apply`, pagination
 - [Filter Functions](./filter-functions.md) — Lambda `any`/`all`, arithmetic, date/time, string functions
-- [CRUD Operations](./crud.md) — Create, update, delete request/response shapes
-- [Security](./security.md) — `maxTop`, `maxExpandDepth`, `maxFilterDepth`, per-entity overrides
+- [CRUD Operations](./crud.md) — Create, update, replace, delete, deep insert, ETag concurrency
+- [Security](./security.md) — `maxTop`, `maxExpandDepth`, `maxFilterDepth`, ETag concurrency control

@@ -8,7 +8,7 @@ OData routes and regular NestJS routes coexist cleanly. Use `@ODataController` f
 
 ```typescript
 // products/products.controller.ts
-import { Body, Controller, Get, Header, HttpCode, Param, Post, Req, UsePipes } from '@nestjs/common'
+import { Body, Controller, Get, Header, Headers, HttpCode, Param, Post, Req } from '@nestjs/common'
 import {
   ODataController,
   ODataGet,
@@ -17,7 +17,6 @@ import {
   ODataPatch,
   ODataDelete,
   ODataQueryParam,
-  ODataQueryPipe,
   type ODataQuery,
 } from '@nestjs-odata/core'
 import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
@@ -33,7 +32,6 @@ export class ProductsController {
   // --- OData routes ---
 
   @ODataGet('Products', { path: '' })
-  @UsePipes(ODataQueryPipe)
   async getProducts(
     @ODataQueryParam('Products') query: ODataQuery,
     @Req() req: { originalUrl: string },
@@ -43,14 +41,13 @@ export class ProductsController {
 
   @Get('$count')
   @Header('Content-Type', 'text/plain')
-  @UsePipes(ODataQueryPipe)
   async count(@ODataQueryParam('Products') query: ODataQuery): Promise<number> {
     return this.handler.handleCount(query)
   }
 
   @ODataGetByKey('Products')
-  async getProduct(@Param('key') key: string) {
-    return this.handler.handleGetByKey(key, 'Products')
+  async getProduct(@Param('key') key: string, @Headers('if-none-match') ifNoneMatch?: string) {
+    return this.handler.handleGetByKey(key, 'Products', ifNoneMatch)
   }
 
   @ODataPost('Products')
@@ -59,13 +56,17 @@ export class ProductsController {
   }
 
   @ODataPatch('Products')
-  async updateProduct(@Param('key') key: string, @Body() body: Record<string, unknown>) {
-    return this.handler.handleUpdate(key, body, 'Products')
+  async updateProduct(
+    @Param('key') key: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('if-match') ifMatch?: string,
+  ) {
+    return this.handler.handleUpdate(key, body, 'Products', ifMatch)
   }
 
   @ODataDelete('Products')
-  async deleteProduct(@Param('key') key: string) {
-    return this.handler.handleDelete(key, 'Products')
+  async deleteProduct(@Param('key') key: string, @Headers('if-match') ifMatch?: string) {
+    return this.handler.handleDelete(key, 'Products', ifMatch)
   }
 
   // --- Custom non-OData routes ---
@@ -136,7 +137,7 @@ import { HealthModule } from './health/health.module'
       namespace: 'Default',
       controllers: [ProductsController],
     }),
-    ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' }),
+    ODataTypeOrmModule.forFeature([Product]),
     ProductsModule,
     HealthModule, // Plain NestJS module — no OData involvement
   ],

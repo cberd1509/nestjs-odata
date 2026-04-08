@@ -11,6 +11,7 @@ ODataModule.forRoot({
   maxTop: 500, // Default: 1000
   maxExpandDepth: 3, // Default: 2
   maxFilterDepth: 15, // Default: 10
+  maxDeepInsertDepth: 3, // Default: 5
   unmappedTypeStrategy: 'skip', // Default: 'skip'
   controllers: [ProductsController, CategoriesController],
 })
@@ -26,6 +27,7 @@ ODataModule.forRoot({
 | `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                      |
 | `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                           |
 | `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive     |
+| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                        |
 | `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot` |
 
 ::: warning maxTop is a hard limit
@@ -60,13 +62,15 @@ export class AppModule {}
 ## ODataTypeOrmModule.forFeature() options
 
 ```typescript
-ODataTypeOrmModule.forFeature(
-  [Product, Category, Order],
-  { serviceRoot: '/odata' }, // Must match ODataModule.forRoot serviceRoot
-)
+ODataTypeOrmModule.forFeature([Product, Category, Order])
 ```
 
-The `serviceRoot` option in `forFeature()` is used to patch the `$batch` controller's route. It must match the value passed to `ODataModule.forRoot()`.
+The `serviceRoot` option in `forFeature()` is **optional**. It defaults to the value registered by `ODataModule.forRoot()` via `ODataModule.registeredServiceRoot`. You only need to pass it explicitly if you have multiple OData services with different roots:
+
+```typescript
+// Explicit override (rarely needed)
+ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/api/v2' })
+```
 
 ## Per-entity security overrides
 
