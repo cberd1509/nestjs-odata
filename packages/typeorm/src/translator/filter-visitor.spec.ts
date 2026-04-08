@@ -25,6 +25,10 @@ function makeQb(): MockQb {
       if (p) Object.assign(params, p)
       return qb
     }),
+    setParameter: vi.fn().mockImplementation((name: string, value: unknown) => {
+      params[name] = value
+      return qb
+    }),
     _conditions: conditions,
     _params: params,
   } as unknown as MockQb
@@ -369,6 +373,305 @@ describe('TypeOrmFilterVisitor', () => {
         expect(sql).not.toContain('SecretValue')
         expect(sql).not.toContain('9.99')
       }
+    })
+  })
+
+  describe('arithmetic operators (FILT-04)', () => {
+    it('translates Price add 10 gt 50 to (entity.Price + :p1) > :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'gt',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'add',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 10 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 50 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price + :p1) > :p2', { p1: 10, p2: 50 })
+    })
+
+    it('translates Price sub 5 lt 20 to (entity.Price - :p1) < :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'lt',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'sub',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 5 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 20 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price - :p1) < :p2', { p1: 5, p2: 20 })
+    })
+
+    it('translates Price mul 2 ge 100 to (entity.Price * :p1) >= :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'ge',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'mul',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 2 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 100 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price * :p1) >= :p2', { p1: 2, p2: 100 })
+    })
+
+    it('translates Price div 4 eq 5 to (entity.Price / :p1) = :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'div',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 4 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 5 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price / :p1) = :p2', { p1: 4, p2: 5 })
+    })
+
+    it('translates Price divby 4 eq 5 to (entity.Price / :p1) = :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'divby',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 4 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 5 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price / :p1) = :p2', { p1: 4, p2: 5 })
+    })
+
+    it('translates Price mod 3 eq 0 to (entity.Price % :p1) = :p2', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'mod',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 3 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 0 },
+      }
+      visitor.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('(entity.Price % :p1) = :p2', { p1: 3, p2: 0 })
+    })
+
+    it('SEC: arithmetic SQL string does not contain raw literal numbers', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'gt',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'add',
+          left: { kind: 'PropertyAccess', path: ['Price'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 10 },
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 50 },
+      }
+      visitor.visit(node)
+      const sql = (qb.andWhere as MockInstance).mock.calls[0][0] as string
+      expect(sql).not.toContain('10')
+      expect(sql).not.toContain('50')
+      expect(sql).toMatch(/:p\d+/)
+    })
+
+    it('NOT(Price add 5 gt 10) — InnerFilterExprBuilder handles arithmetic', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      const node: UnaryExprNode = {
+        kind: 'UnaryExpr',
+        operator: 'not',
+        operand: {
+          kind: 'BinaryExpr',
+          operator: 'gt',
+          left: {
+            kind: 'BinaryExpr',
+            operator: 'add',
+            left: { kind: 'PropertyAccess', path: ['Price'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 5 },
+          },
+          right: { kind: 'Literal', literalKind: 'number', value: 10 },
+        },
+      }
+      visitor.visit(node)
+      const call = (qb.andWhere as MockInstance).mock.calls[0]
+      expect(call[0]).toMatch(/NOT\s*\(/)
+      expect(call[0]).toContain('entity.Price + :p')
+    })
+  })
+
+  describe('date/time functions (FILT-03)', () => {
+    it('year(CreatedAt) eq 2024 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'year',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 2024 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%Y', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 2024 },
+      )
+    })
+
+    it('month(CreatedAt) eq 6 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'month',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 6 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%m', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 6 },
+      )
+    })
+
+    it('day(CreatedAt) eq 15 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'day',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 15 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%d', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 15 },
+      )
+    })
+
+    it('hour(CreatedAt) eq 10 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'hour',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 10 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%H', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 10 },
+      )
+    })
+
+    it('minute(CreatedAt) eq 30 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'minute',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 30 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%M', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 30 },
+      )
+    })
+
+    it('second(CreatedAt) eq 0 in sqlite dialect', () => {
+      const visitorSqlite = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'second',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 0 },
+      }
+      visitorSqlite.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "CAST(strftime('%S', entity.CreatedAt) AS INTEGER) = :p1",
+        { p1: 0 },
+      )
+    })
+
+    it('year(CreatedAt) eq 2024 in postgres dialect', () => {
+      const visitorPg = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'postgres')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'year',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 2024 },
+      }
+      visitorPg.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('EXTRACT(YEAR FROM entity.CreatedAt) = :p1', {
+        p1: 2024,
+      })
+    })
+
+    it('year(CreatedAt) eq 2024 in ansi (default) dialect', () => {
+      const visitorAnsi = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'ansi')
+      const node: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: {
+          kind: 'FunctionCall',
+          name: 'year',
+          args: [{ kind: 'PropertyAccess', path: ['CreatedAt'] }],
+        },
+        right: { kind: 'Literal', literalKind: 'number', value: 2024 },
+      }
+      visitorAnsi.visit(node)
+      expect(qb.andWhere).toHaveBeenCalledWith('EXTRACT(YEAR FROM entity.CreatedAt) = :p1', {
+        p1: 2024,
+      })
     })
   })
 

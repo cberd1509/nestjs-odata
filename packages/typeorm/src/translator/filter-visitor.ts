@@ -30,6 +30,36 @@ const SCALAR_FUNCTIONS: Record<string, string> = {
   trim: 'TRIM',
 }
 
+/** Map of OData arithmetic operators to SQL operators */
+const ARITH_OPS: Record<string, string> = {
+  add: '+',
+  sub: '-',
+  mul: '*',
+  div: '/',
+  divby: '/',
+  mod: '%',
+}
+
+/** SQLite strftime format strings for date/time functions */
+const DATE_STRFTIME: Record<string, string> = {
+  year: '%Y',
+  month: '%m',
+  day: '%d',
+  hour: '%H',
+  minute: '%M',
+  second: '%S',
+}
+
+/** ANSI/Postgres EXTRACT field names for date/time functions */
+const DATE_EXTRACT: Record<string, string> = {
+  year: 'YEAR',
+  month: 'MONTH',
+  day: 'DAY',
+  hour: 'HOUR',
+  minute: 'MINUTE',
+  second: 'SECOND',
+}
+
 /**
  * TypeOrmFilterVisitor — translates an OData filter AST into TypeORM
  * SelectQueryBuilder.andWhere() calls with named parameters.
@@ -48,12 +78,15 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
   paramCount = 0
   /** Current nesting depth — propagated to sub-visitors for or branches */
   currentDepth = 0
+  /** Accumulated params from resolveExpression (e.g. arithmetic operands) to merge into andWhere */
+  private pendingParams: Record<string, unknown> = {}
 
   constructor(
     private readonly qb: SelectQueryBuilder<ObjectLiteral>,
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
     private readonly maxFilterDepth: number = 10,
+    private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
   ) {}
 
   /** Entry point: dispatch the root FilterNode to the appropriate visit method */
@@ -88,6 +121,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.alias,
             this.entityType,
             this.maxFilterDepth,
+            this.dialect,
           )
           leftVisitor.paramCount = this.paramCount
           leftVisitor.currentDepth = depthAtEntry
@@ -99,6 +133,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.alias,
             this.entityType,
             this.maxFilterDepth,
+            this.dialect,
           )
           rightVisitor.paramCount = this.paramCount
           rightVisitor.currentDepth = depthAtEntry
@@ -112,10 +147,13 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
     const sqlOp = COMPARISON_OPS[operator]
     if (sqlOp) {
+      this.pendingParams = {}
       const leftExpr = this.resolveExpression(left)
       const paramName = this.nextParam()
       const literalValue = this.extractLiteralValue(right)
-      this.qb.andWhere(`${leftExpr} ${sqlOp} :${paramName}`, { [paramName]: literalValue })
+      const allParams = { ...this.pendingParams, [paramName]: literalValue }
+      this.pendingParams = {}
+      this.qb.andWhere(`${leftExpr} ${sqlOp} :${paramName}`, allParams)
       this.currentDepth--
       return
     }
@@ -126,7 +164,12 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
   visitUnaryExpr(node: UnaryExprNode): void {
     if (node.operator === 'not') {
-      const innerVisitor = new InnerFilterExprBuilder(this.alias, this.entityType, this.paramCount)
+      const innerVisitor = new InnerFilterExprBuilder(
+        this.alias,
+        this.entityType,
+        this.paramCount,
+        this.dialect,
+      )
       const { expr, params, finalCount } = innerVisitor.build(node.operand)
       this.paramCount = finalCount
       this.qb.andWhere(`NOT (${expr})`, params)
@@ -180,19 +223,55 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     if (node.kind === 'PropertyAccess') {
       return `${this.alias}.${node.path[0]}`
     }
+    if (node.kind === 'BinaryExpr') {
+      const sqlArith = ARITH_OPS[node.operator]
+      if (sqlArith) {
+        const left = this.resolveExpression(node.left)
+        const right = this.resolveArithOperand(node.right)
+        return `(${left} ${sqlArith} ${right})`
+      }
+    }
     if (node.kind === 'FunctionCall') {
       const fnName = node.name.toLowerCase()
+      const dateResult = this.resolveDateFunction(fnName, node)
+      if (dateResult !== null) return dateResult
       const sqlFn = SCALAR_FUNCTIONS[fnName]
       if (sqlFn && node.args.length >= 1) {
         const inner = this.resolveExpression(node.args[0])
         return `${sqlFn}(${inner})`
       }
     }
-    // Fallback: treat as raw literal string (should not occur in valid OData filters)
     if (node.kind === 'Literal') {
-      return String(node.value)
+      const paramName = this.nextParam()
+      this.pendingParams[paramName] = node.value
+      return `:${paramName}`
     }
     return ''
+  }
+
+  /** Resolve date/time function to dialect-correct SQL. Returns null if not a date function. */
+  private resolveDateFunction(
+    fnName: string,
+    node: FilterNode & { kind: 'FunctionCall' },
+  ): string | null {
+    const strftimeFmt = DATE_STRFTIME[fnName]
+    const extractField = DATE_EXTRACT[fnName]
+    if (!strftimeFmt || !extractField) return null
+    const inner = this.resolveExpression(node.args[0])
+    if (this.dialect === 'sqlite') {
+      return `CAST(strftime('${strftimeFmt}', ${inner}) AS INTEGER)`
+    }
+    return `EXTRACT(${extractField} FROM ${inner})`
+  }
+
+  /** Bind an arithmetic operand: Literal nodes become named params; others recurse. */
+  private resolveArithOperand(node: FilterNode): string {
+    if (node.kind === 'Literal') {
+      const paramName = this.nextParam()
+      this.pendingParams[paramName] = node.value
+      return `:${paramName}`
+    }
+    return this.resolveExpression(node)
   }
 
   /** Extract the raw JS value from a LiteralNode */
@@ -244,6 +323,7 @@ class InnerFilterExprBuilder {
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
     startCount: number,
+    private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
   ) {
     this.paramCount = startCount
   }
@@ -255,6 +335,12 @@ class InnerFilterExprBuilder {
 
   private buildExpr(node: FilterNode): string {
     if (node.kind === 'BinaryExpr') {
+      const sqlArith = ARITH_OPS[node.operator]
+      if (sqlArith) {
+        const left = this.buildExpr(node.left)
+        const right = this.resolveArithOperand(node.right)
+        return `(${left} ${sqlArith} ${right})`
+      }
       const sqlOp = COMPARISON_OPS[node.operator]
       if (sqlOp) {
         const left = this.buildExpr(node.left)
@@ -281,6 +367,8 @@ class InnerFilterExprBuilder {
         this.params[paramName] = pattern
         return `${prop} LIKE :${paramName}`
       }
+      const dateResult = this.resolveDateFunction(name, node)
+      if (dateResult !== null) return dateResult
       const sqlFn = SCALAR_FUNCTIONS[name]
       if (sqlFn && node.args.length >= 1) {
         const inner = this.buildExpr(node.args[0])
@@ -297,5 +385,31 @@ class InnerFilterExprBuilder {
       return `:${paramName}`
     }
     return ''
+  }
+
+  /** Resolve date/time function to dialect-correct SQL. Returns null if not a date function. */
+  private resolveDateFunction(
+    fnName: string,
+    node: FilterNode & { kind: 'FunctionCall' },
+  ): string | null {
+    const strftimeFmt = DATE_STRFTIME[fnName]
+    const extractField = DATE_EXTRACT[fnName]
+    if (!strftimeFmt || !extractField) return null
+    const inner = this.buildExpr(node.args[0])
+    if (this.dialect === 'sqlite') {
+      return `CAST(strftime('${strftimeFmt}', ${inner}) AS INTEGER)`
+    }
+    return `EXTRACT(${extractField} FROM ${inner})`
+  }
+
+  /** Bind an arithmetic operand: Literal nodes become named params; others recurse via buildExpr. */
+  private resolveArithOperand(node: FilterNode): string {
+    if (node.kind === 'Literal') {
+      this.paramCount++
+      const paramName = `p${this.paramCount}`
+      this.params[paramName] = node.value
+      return `:${paramName}`
+    }
+    return this.buildExpr(node)
   }
 }

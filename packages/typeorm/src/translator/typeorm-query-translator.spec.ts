@@ -27,6 +27,7 @@ function makeQb(): MockQb {
     addOrderBy: vi.fn().mockReturnThis(),
     take: vi.fn().mockReturnThis(),
     skip: vi.fn().mockReturnThis(),
+    setParameter: vi.fn().mockReturnThis(),
     getMany: vi.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
     getManyAndCount: vi.fn().mockResolvedValue([[{ id: 1 }, { id: 2 }], 2]),
   } as unknown as MockQb
@@ -35,6 +36,11 @@ function makeQb(): MockQb {
 function makeRepo(qb: MockQb): MockRepo {
   return {
     createQueryBuilder: vi.fn().mockReturnValue(qb),
+    manager: {
+      connection: {
+        options: { type: 'sqlite' },
+      },
+    },
   } as unknown as MockRepo
 }
 
