@@ -235,6 +235,8 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       const fnName = node.name.toLowerCase()
       const dateResult = this.resolveDateFunction(fnName, node)
       if (dateResult !== null) return dateResult
+      const strResult = this.resolveStringFunction(fnName, node)
+      if (strResult !== null) return strResult
       const sqlFn = SCALAR_FUNCTIONS[fnName]
       if (sqlFn && node.args.length >= 1) {
         const inner = this.resolveExpression(node.args[0])
@@ -272,6 +274,37 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       return `:${paramName}`
     }
     return this.resolveExpression(node)
+  }
+
+  /** Resolve indexof/substring/concat to parameterized SQL. Returns null if not a string fn. */
+  private resolveStringFunction(
+    fnName: string,
+    node: FilterNode & { kind: 'FunctionCall' },
+  ): string | null {
+    if (fnName === 'indexof' && node.args.length >= 2) {
+      const str = this.resolveExpression(node.args[0])
+      const subParam = this.nextParam()
+      this.pendingParams[subParam] = (node.args[1] as LiteralNode).value
+      const sqlFn = this.dialect === 'sqlite' ? 'INSTR' : 'STRPOS'
+      return `${sqlFn}(${str}, :${subParam}) - 1`
+    }
+    if (fnName === 'substring' && node.args.length >= 2) {
+      const str = this.resolveExpression(node.args[0])
+      const startParam = this.nextParam()
+      this.pendingParams[startParam] = ((node.args[1] as LiteralNode).value as number) + 1
+      if (node.args.length >= 3) {
+        const lenParam = this.nextParam()
+        this.pendingParams[lenParam] = (node.args[2] as LiteralNode).value
+        return `SUBSTR(${str}, :${startParam}, :${lenParam})`
+      }
+      return `SUBSTR(${str}, :${startParam})`
+    }
+    if (fnName === 'concat' && node.args.length >= 2) {
+      const left = this.resolveExpression(node.args[0])
+      const right = this.resolveExpression(node.args[1])
+      return `${left} || ${right}`
+    }
+    return null
   }
 
   /** Extract the raw JS value from a LiteralNode */
@@ -369,6 +402,8 @@ class InnerFilterExprBuilder {
       }
       const dateResult = this.resolveDateFunction(name, node)
       if (dateResult !== null) return dateResult
+      const strResult = this.resolveStringFunction(name, node)
+      if (strResult !== null) return strResult
       const sqlFn = SCALAR_FUNCTIONS[name]
       if (sqlFn && node.args.length >= 1) {
         const inner = this.buildExpr(node.args[0])
@@ -400,6 +435,40 @@ class InnerFilterExprBuilder {
       return `CAST(strftime('${strftimeFmt}', ${inner}) AS INTEGER)`
     }
     return `EXTRACT(${extractField} FROM ${inner})`
+  }
+
+  /** Resolve indexof/substring/concat to parameterized SQL. Returns null if not a string fn. */
+  private resolveStringFunction(
+    fnName: string,
+    node: FilterNode & { kind: 'FunctionCall' },
+  ): string | null {
+    if (fnName === 'indexof' && node.args.length >= 2) {
+      const str = this.buildExpr(node.args[0])
+      this.paramCount++
+      const subParam = `p${this.paramCount}`
+      this.params[subParam] = (node.args[1] as LiteralNode).value
+      const sqlFn = this.dialect === 'sqlite' ? 'INSTR' : 'STRPOS'
+      return `${sqlFn}(${str}, :${subParam}) - 1`
+    }
+    if (fnName === 'substring' && node.args.length >= 2) {
+      const str = this.buildExpr(node.args[0])
+      this.paramCount++
+      const startParam = `p${this.paramCount}`
+      this.params[startParam] = ((node.args[1] as LiteralNode).value as number) + 1
+      if (node.args.length >= 3) {
+        this.paramCount++
+        const lenParam = `p${this.paramCount}`
+        this.params[lenParam] = (node.args[2] as LiteralNode).value
+        return `SUBSTR(${str}, :${startParam}, :${lenParam})`
+      }
+      return `SUBSTR(${str}, :${startParam})`
+    }
+    if (fnName === 'concat' && node.args.length >= 2) {
+      const left = this.buildExpr(node.args[0])
+      const right = this.buildExpr(node.args[1])
+      return `${left} || ${right}`
+    }
+    return null
   }
 
   /** Bind an arithmetic operand: Literal nodes become named params; others recurse via buildExpr. */

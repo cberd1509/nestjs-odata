@@ -675,6 +675,235 @@ describe('TypeOrmFilterVisitor', () => {
     })
   })
 
+  describe('string functions (FILT-05)', () => {
+    describe('indexof', () => {
+      it('indexof(Name, "Pro") ge 0 in sqlite dialect → INSTR', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'ge',
+          left: {
+            kind: 'FunctionCall',
+            name: 'indexof',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'string', value: 'Pro' },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'number', value: 0 },
+        }
+        visitor.visit(node)
+        expect(qb.andWhere).toHaveBeenCalledWith('INSTR(entity.Name, :p1) - 1 >= :p2', {
+          p1: 'Pro',
+          p2: 0,
+        })
+      })
+
+      it('indexof(Name, "Pro") ge 0 in postgres dialect → STRPOS', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'postgres')
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'ge',
+          left: {
+            kind: 'FunctionCall',
+            name: 'indexof',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'string', value: 'Pro' },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'number', value: 0 },
+        }
+        visitor.visit(node)
+        expect(qb.andWhere).toHaveBeenCalledWith('STRPOS(entity.Name, :p1) - 1 >= :p2', {
+          p1: 'Pro',
+          p2: 0,
+        })
+      })
+
+      it('indexof(Name, "Pro") ge 0 in ansi dialect → STRPOS', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'ansi')
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'ge',
+          left: {
+            kind: 'FunctionCall',
+            name: 'indexof',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'string', value: 'Pro' },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'number', value: 0 },
+        }
+        visitor.visit(node)
+        expect(qb.andWhere).toHaveBeenCalledWith('STRPOS(entity.Name, :p1) - 1 >= :p2', {
+          p1: 'Pro',
+          p2: 0,
+        })
+      })
+
+      it('NOT(indexof(Name,"x") ge 0) — InnerFilterExprBuilder handles indexof', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite')
+        const node: UnaryExprNode = {
+          kind: 'UnaryExpr',
+          operator: 'not',
+          operand: {
+            kind: 'BinaryExpr',
+            operator: 'ge',
+            left: {
+              kind: 'FunctionCall',
+              name: 'indexof',
+              args: [
+                { kind: 'PropertyAccess', path: ['Name'] },
+                { kind: 'Literal', literalKind: 'string', value: 'x' },
+              ],
+            },
+            right: { kind: 'Literal', literalKind: 'number', value: 0 },
+          },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/NOT\s*\(/)
+        expect(call[0]).toContain('INSTR(entity.Name, :p')
+      })
+    })
+
+    describe('substring', () => {
+      it('substring(Name, 0) eq "Pro" → SUBSTR(entity.Name, :p1)', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'substring',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'number', value: 0 },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'Pro' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/SUBSTR\(entity\.Name, :p\d+\) = :p\d+/)
+        expect(qb._params['p1']).toBe(1) // start 0 + 1
+      })
+
+      it('substring(Name, 2) eq "oduct" → SUBSTR(entity.Name, :p1) where p1=3', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'substring',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'number', value: 2 },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'oduct' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/SUBSTR\(entity\.Name, :p\d+\) = :p\d+/)
+        expect(qb._params['p1']).toBe(3) // start 2 + 1
+      })
+
+      it('substring(Name, 0, 3) eq "Pro" → SUBSTR(entity.Name, :p1, :p2)', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'substring',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'number', value: 0 },
+              { kind: 'Literal', literalKind: 'number', value: 3 },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'Pro' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/SUBSTR\(entity\.Name, :p\d+, :p\d+\) = :p\d+/)
+        expect(qb._params['p1']).toBe(1) // start 0 + 1
+        expect(qb._params['p2']).toBe(3) // length unchanged
+      })
+
+      it('substring(Name, 1, 2) eq "ro" → SUBSTR(entity.Name, :p1, :p2) where p1=2', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'substring',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'number', value: 1 },
+              { kind: 'Literal', literalKind: 'number', value: 2 },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'ro' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/SUBSTR\(entity\.Name, :p\d+, :p\d+\) = :p\d+/)
+        expect(qb._params['p1']).toBe(2) // start 1 + 1
+        expect(qb._params['p2']).toBe(2) // length unchanged
+      })
+    })
+
+    describe('concat', () => {
+      it('concat(Name, "suffix") eq "Prosuffix" → entity.Name || :p1 = :p2', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'concat',
+            args: [
+              { kind: 'PropertyAccess', path: ['Name'] },
+              { kind: 'Literal', literalKind: 'string', value: 'suffix' },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'Prosuffix' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/entity\.Name \|\| :p\d+ = :p\d+/)
+        expect(qb._params).toMatchObject({ p1: 'suffix', p2: 'Prosuffix' })
+      })
+
+      it('concat("prefix", Name) eq "prefixPro" → :p1 || entity.Name = :p2', () => {
+        const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+        const node: BinaryExprNode = {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: {
+            kind: 'FunctionCall',
+            name: 'concat',
+            args: [
+              { kind: 'Literal', literalKind: 'string', value: 'prefix' },
+              { kind: 'PropertyAccess', path: ['Name'] },
+            ],
+          },
+          right: { kind: 'Literal', literalKind: 'string', value: 'prefixPro' },
+        }
+        visitor.visit(node)
+        const call = (qb.andWhere as MockInstance).mock.calls[0]
+        expect(call[0]).toMatch(/:p\d+ \|\| entity\.Name = :p\d+/)
+        expect(qb._params).toMatchObject({ p1: 'prefix', p2: 'prefixPro' })
+      })
+    })
+  })
+
   describe('filter depth enforcement (SEC-04)', () => {
     it('SEC-04: throws ODataValidationError when filter nesting depth exceeds maxFilterDepth', () => {
       // Build a depth-4 filter: ((A eq 1 and B eq 2) and C eq 3) and D eq 4
