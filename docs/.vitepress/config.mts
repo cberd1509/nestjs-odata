@@ -47,6 +47,7 @@ export default defineConfig({
         { text: 'Overview', link: '/examples/' },
         { text: 'Basic CRUD', link: '/examples/basic-crud' },
         { text: 'Custom Controller', link: '/examples/custom-controller' },
+        { text: 'E-Commerce', link: '/examples/e-commerce' },
       ],
     },
     socialLinks: [{ icon: 'github', link: 'https://github.com/nestjs-odata/nestjs-odata' }],

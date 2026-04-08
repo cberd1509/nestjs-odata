@@ -1,5 +1,7 @@
 # Getting Started
 
+[OData](https://www.odata.org/) (Open Data Protocol) is a standardized REST protocol for queryable APIs, backed by OASIS and used by Microsoft, SAP, and enterprise clients. It defines conventions for filtering, sorting, pagination, and metadata — so clients and servers speak the same language.
+
 `nestjs-odata` gives you spec-compliant OData v4 endpoints in NestJS with zero double-declaration. Define your TypeORM entities once — the library auto-derives the EDM, `$metadata`, query translation, CRUD, and `$batch`.
 
 ## Installation
@@ -111,6 +113,10 @@ export class ProductsController {
 }
 ```
 
+**Why `req.originalUrl`?** The `handleGet` method needs the full request URL (including query string) to build the `@odata.context` URL in the response envelope. NestJS's `@Req()` provides the Express/Fastify request object, and `originalUrl` contains the unmodified path + query string (e.g. `/odata/Products?$top=10`).
+
+> **Auto-provided handler:** `TypeOrmAutoHandler` is automatically registered as an injectable provider by `ODataTypeOrmModule.forFeature()`. You do not need to add it to any `providers` array — just inject it in your controller constructor.
+
 ## Step 3 — Register the modules
 
 ```typescript
@@ -125,13 +131,10 @@ import { ProductsController } from './products.controller'
 
 @Module({
   imports: [
+    // SQLite in-memory for zero-friction setup — no external DB required
     TypeOrmModule.forRoot({
-      type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'user',
-      password: 'pass',
-      database: 'mydb',
+      type: 'better-sqlite3',
+      database: ':memory:',
       entities: [Product],
       synchronize: true,
     }),
@@ -143,6 +146,22 @@ import { ProductsController } from './products.controller'
   ],
 })
 export class AppModule {}
+```
+
+> **Switching databases:** The SQLite in-memory setup requires no external services — perfect for getting started and running tests. For production, swap in PostgreSQL, MySQL, or any [TypeORM-supported driver](https://typeorm.io/data-source-options) by changing the `TypeOrmModule.forRoot()` options (e.g. `type: 'postgres'`, `host`, `port`, `username`, `password`, `database`).
+
+## Step 3b — Bootstrap the application
+
+```typescript
+// main.ts
+import { NestFactory } from '@nestjs/core'
+import { AppModule } from './app.module'
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule)
+  await app.listen(3000)
+}
+bootstrap()
 ```
 
 ## Step 4 — Query your endpoint

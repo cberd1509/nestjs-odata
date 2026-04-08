@@ -12,6 +12,8 @@ hero:
       text: API Reference
       link: /api/
 features:
+  - title: What is OData?
+    details: OData (Open Data Protocol) is a standardized REST protocol for queryable APIs, backed by OASIS and used by Microsoft, SAP, and enterprise clients. It defines conventions for filtering, sorting, pagination, and metadata — so clients and servers speak the same language.
   - title: Zero Double-Declaration
     details: Auto-derive EDM from TypeORM entities. No manual OData schema maintenance.
   - title: Spec Compliant

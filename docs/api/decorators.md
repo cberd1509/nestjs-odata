@@ -12,16 +12,16 @@ Marks a class as an OData controller for the given entity set. Sets the initial 
 
 **Parameters:**
 
-| Parameter       | Type                      | Description                                                        |
-| --------------- | ------------------------- | ------------------------------------------------------------------ |
-| `entitySetName` | `string`                  | The OData entity set name (e.g. `'Products'`)                      |
-| `options`       | `ODataControllerOptions?` | Optional configuration                                             |
+| Parameter       | Type                      | Description                                   |
+| --------------- | ------------------------- | --------------------------------------------- |
+| `entitySetName` | `string`                  | The OData entity set name (e.g. `'Products'`) |
+| `options`       | `ODataControllerOptions?` | Optional configuration                        |
 
 **ODataControllerOptions:**
 
-| Option | Type     | Default           | Description                                      |
-| ------ | -------- | ----------------- | ------------------------------------------------ |
-| `path` | `string` | `entitySetName`   | Override the NestJS controller route path prefix |
+| Option | Type     | Default         | Description                                      |
+| ------ | -------- | --------------- | ------------------------------------------------ |
+| `path` | `string` | `entitySetName` | Override the NestJS controller route path prefix |
 
 **Requirements:**
 
@@ -60,10 +60,9 @@ Registers a `GET` handler for an entity set collection.
 
 **ODataGetOptions:**
 
-| Option        | Type      | Default | Description                                     |
-| ------------- | --------- | ------- | ----------------------------------------------- |
-| `path`        | `string`  | `''`    | Sub-path within the entity set route             |
-| `autoHandler` | `boolean` | `false` | Reserved for future auto-handler wiring support |
+| Option | Type     | Default | Description                          |
+| ------ | -------- | ------- | ------------------------------------ |
+| `path` | `string` | `''`    | Sub-path within the entity set route |
 
 **Example:**
 

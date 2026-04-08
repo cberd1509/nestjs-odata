@@ -105,18 +105,13 @@ import { Controller, Get } from '@nestjs/common'
 @Controller('api')
 export class HealthController {
   @Get('health')
-  health() {
+  getHealth() {
     return { status: 'ok', timestamp: new Date().toISOString() }
-  }
-
-  @Get('version')
-  version() {
-    return { version: '1.0.0' }
   }
 }
 ```
 
-This controller lives at `/api/health` and `/api/version` — completely separate from the OData service at `/odata/`.
+This controller lives at `/api/health` — completely separate from the OData service at `/odata/`.
 
 ## Module setup
 
@@ -138,6 +133,7 @@ import { HealthModule } from './health/health.module'
     }),
     ODataModule.forRoot({
       serviceRoot: '/odata',
+      namespace: 'Default',
       controllers: [ProductsController],
     }),
     ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' }),
@@ -161,7 +157,6 @@ Routes are completely isolated:
 | `POST /odata/Products/bulk-import` | `@Post`              | Custom REST endpoint                |
 | `GET /odata/Products/featured`     | `@Get`               | Custom REST endpoint                |
 | `GET /api/health`                  | `@Controller('api')` | Plain NestJS controller             |
-| `POST /odata/$batch`               | Auto-registered      | Batch endpoint                      |
 
 OData response serialization does not leak into non-OData routes. Regular NestJS routes return plain JSON using the default Express/Fastify serializer.
 

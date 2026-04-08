@@ -139,7 +139,6 @@ import { ProductsModule } from './products/products.module'
     ODataModule.forRoot({
       serviceRoot: '/odata',
       namespace: 'Default',
-      maxTop: 1000,
       controllers: [ProductsController],
     }),
     ProductsModule,
