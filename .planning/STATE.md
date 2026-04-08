@@ -71,6 +71,10 @@ Recent decisions affecting current work:
 - v1.1 Roadmap: Phase 9 (write ops) depends on Phase 6 not Phase 8 — PUT/deep insert/Content-ID are independent of annotation changes
 - v1.1 Roadmap: $search and $apply grouped last (Phase 10) — both are new query subsystems adding parser + translator branches; most complex, most isolated
 
+### Roadmap Evolution
+
+- Phase 11 added: Documentation, GitHub Pages, and llms.txt
+
 ### Pending Todos
 
 None yet.

@@ -25,6 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
 - [ ] **Phase 9: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
 - [ ] **Phase 10: $search and $apply** - Full-text search and data aggregation query subsystems
+- [ ] **Phase 11: Documentation, GitHub Pages, and llms.txt** - VitePress docs, auto-generated API reference, GitHub Pages deployment, llms.txt for LLM discoverability
 
 ## Phase Details
 
@@ -226,3 +227,14 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. Response Annotations and ETags     | 0/TBD          | Not started       | -          |
 | 9. Advanced Write Operations          | 0/TBD          | Not started       | -          |
 | 10. $search and $apply                | 0/TBD          | Not started       | -          |
+
+### Phase 11: Documentation, GitHub Pages, and llms.txt
+
+**Goal:** VitePress documentation site with auto-generated API reference from TypeScript source, manual usage guides, GitHub Pages deployment via GitHub Actions, and llms.txt/llms-full.txt for LLM discoverability
+**Requirements**: TBD
+**Depends on:** Phase 8
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
