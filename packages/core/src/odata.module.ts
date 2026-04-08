@@ -48,7 +48,8 @@ export interface ODataModuleOptions {
    * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
    * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
    */
-  controllers?: (new (...args: unknown[]) => unknown)[]
+
+  controllers?: (new (...args: any[]) => any)[]
 }
 
 /** Resolved options with all defaults applied */
