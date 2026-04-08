@@ -79,20 +79,20 @@
 | FILT-03     | 7     | Pending |
 | FILT-04     | 7     | Pending |
 | FILT-05     | 7     | Pending |
-| SRCH-01     | 10    | Pending |
-| SRCH-02     | 10    | Pending |
-| WRITE-01    | 9     | Pending |
-| WRITE-02    | 9     | Pending |
-| WRITE-03    | 9     | Pending |
-| RESP-04     | 8     | Pending |
-| RESP-05     | 8     | Pending |
-| RESP-06     | 8     | Pending |
-| ETAG-01     | 8     | Pending |
-| ETAG-02     | 8     | Pending |
-| ETAG-03     | 8     | Pending |
-| AGG-01      | 10    | Pending |
-| AGG-02      | 10    | Pending |
-| AGG-03      | 10    | Pending |
+| SRCH-01     | 11    | Pending |
+| SRCH-02     | 11    | Pending |
+| WRITE-01    | 10    | Pending |
+| WRITE-02    | 10    | Pending |
+| WRITE-03    | 10    | Pending |
+| RESP-04     | 9     | Pending |
+| RESP-05     | 9     | Pending |
+| RESP-06     | 9     | Pending |
+| ETAG-01     | 9     | Pending |
+| ETAG-02     | 9     | Pending |
+| ETAG-03     | 9     | Pending |
+| AGG-01      | 11    | Pending |
+| AGG-02      | 11    | Pending |
+| AGG-03      | 11    | Pending |
 
 **Coverage:**
 
@@ -103,4 +103,4 @@
 ---
 
 _Requirements defined: 2026-04-07_
-_Last updated: 2026-04-08 after v1.1 roadmap creation (Phases 7-10)_
+_Last updated: 2026-04-08 after phase reorder (Phases 7-11, docs moved to Phase 8)_

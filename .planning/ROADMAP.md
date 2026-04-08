@@ -4,7 +4,7 @@
 
 Starting from an empty repo, this roadmap delivers a spec-compliant OData v4 NestJS library in five phases. Phase 1 lays the monorepo foundation and validates the highest-risk decision — the custom OData parser — before any other code is written. Phase 2 builds the EDM Registry, the central data structure that every subsequent component reads from. Phase 3 delivers the full read-only query surface. Phase 4 wires in CRUD, $expand, and the NestJS module API that library consumers actually touch. Phase 5 adds $batch atomicity and hardens the library for v1 release, including end-to-end validation of the full CI/CD release pipeline.
 
-**v1.1 milestone (Phases 7-10)** closes the OData v4 spec gaps — bringing the library from ~65% to ~90% spec coverage via filter function translation, response annotations, ETag concurrency control, advanced write operations, and the $search/$apply query subsystems.
+**v1.1 milestone (Phases 7-11)** closes the OData v4 spec gaps — bringing the library from ~65% to ~90% spec coverage. Phase 8 establishes the documentation site so every subsequent phase ships with docs. Phases 9-11 add response annotations, ETags, advanced write operations, and $search/$apply.
 
 ## Phases
 
@@ -22,10 +22,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: $batch, Security, and v1 Hardening** - Batch atomicity, security guards, full release pipeline, and CI compliance checks (completed 2026-04-07)
 - [ ] **Phase 6: v1 Polish and Config Wiring** - Close all audit gaps: config wiring, peer dep fix, changeset fix, adapter seam, sub-agent validation
 - [ ] **Phase 7: Filter Functions** - Lambda expressions and date/time, arithmetic, string functions translate to SQL
-- [ ] **Phase 8: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
-- [ ] **Phase 9: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
-- [ ] **Phase 10: $search and $apply** - Full-text search and data aggregation query subsystems
-- [ ] **Phase 11: Documentation, GitHub Pages, and llms.txt** - VitePress docs, auto-generated API reference, GitHub Pages deployment, llms.txt for LLM discoverability
+- [ ] **Phase 8: Documentation, GitHub Pages, and llms.txt** - VitePress docs site, API reference, GitHub Pages deployment, llms.txt for LLM discoverability
+- [ ] **Phase 9: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
+- [ ] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
+- [ ] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems
 
 ## Phase Details
 
@@ -169,10 +169,23 @@ Plans:
 - [x] 07-01-PLAN.md — Arithmetic operators (FILT-04), date/time functions (FILT-03), string functions indexof/substring/concat (FILT-05)
 - [x] 07-02-PLAN.md — Lambda any/all EXISTS/NOT EXISTS subqueries (FILT-01, FILT-02)
 
-### Phase 8: Response Annotations and ETags
+### Phase 8: Documentation, GitHub Pages, and llms.txt
+
+**Goal:** VitePress documentation site with auto-generated API reference from TypeScript source, manual usage guides, GitHub Pages deployment via GitHub Actions, llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server for the library. Once established, every subsequent phase must ship with documentation updates.
+**Depends on**: Phase 7
+**Requirements**: TBD
+**Research needed:**
+
+- `vitepress-plugin-llms` (https://github.com/okineadev/vitepress-plugin-llms) for auto-generating llms.txt from VitePress content
+- Libraries/tools for auto-generating MCP servers from TypeScript APIs or OpenAPI specs
+- typedoc + vitepress integration options for API reference generation
+
+**Plans**: TBD
+
+### Phase 9: Response Annotations and ETags
 
 **Goal**: Every entity response carries OData-required metadata annotations, and the server enforces ETag-based concurrency control so clients can perform optimistic locking
-**Depends on**: Phase 7
+**Depends on**: Phase 8
 **Requirements**: RESP-04, RESP-05, RESP-06, ETAG-01, ETAG-02, ETAG-03
 **Success Criteria** (what must be TRUE):
 
@@ -183,7 +196,7 @@ Plans:
 
 **Plans**: TBD
 
-### Phase 9: Advanced Write Operations
+### Phase 10: Advanced Write Operations
 
 **Goal**: PUT replaces entire entities, POST can atomically create a resource and its related entities in one request, and `$batch` changesets support Content-ID cross-references
 **Depends on**: Phase 6
@@ -196,7 +209,7 @@ Plans:
 
 **Plans**: TBD
 
-### Phase 10: $search and $apply
+### Phase 11: $search and $apply
 
 **Goal**: Clients can issue free-text `$search` queries and data-aggregation `$apply` pipelines — two independent query subsystems that extend the existing query parsing and translation infrastructure
 **Depends on**: Phase 6
@@ -213,33 +226,18 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11
 
-| Phase                                 | Plans Complete | Status            | Completed  |
-| ------------------------------------- | -------------- | ----------------- | ---------- |
-| 1. Foundation and Parser Spike        | 0/4            | Planning complete | -          |
-| 2. EDM and $metadata                  | 5/5            | Complete          | 2026-04-07 |
-| 3. Query Engine and Response Format   | 0/4            | Planning complete | -          |
-| 4. CRUD, $expand, and Module System   | 5/5            | Complete          | 2026-04-07 |
-| 5. $batch, Security, and v1 Hardening | 5/5            | Complete          | 2026-04-07 |
-| 6. v1 Polish and Config Wiring        | 0/2            | Planning complete | -          |
-| 7. Filter Functions                   | 0/TBD          | Not started       | -          |
-| 8. Response Annotations and ETags     | 0/TBD          | Not started       | -          |
-| 9. Advanced Write Operations          | 0/TBD          | Not started       | -          |
-| 10. $search and $apply                | 0/TBD          | Not started       | -          |
-
-### Phase 11: Documentation, GitHub Pages, and llms.txt
-
-**Goal:** VitePress documentation site with auto-generated API reference from TypeScript source, manual usage guides, GitHub Pages deployment via GitHub Actions, llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server for the library
-**Requirements**: TBD
-**Depends on:** Phase 8
-**Research needed:**
-
-- `vitepress-plugin-llms` (https://github.com/okineadev/vitepress-plugin-llms) for auto-generating llms.txt from VitePress content
-- Libraries/tools for auto-generating MCP servers from TypeScript APIs or OpenAPI specs
-- typedoc + vitepress integration options for API reference generation
-  **Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (run /gsd-plan-phase 11 to break down)
+| Phase                                        | Plans Complete | Status            | Completed  |
+| -------------------------------------------- | -------------- | ----------------- | ---------- |
+| 1. Foundation and Parser Spike               | 0/4            | Planning complete | -          |
+| 2. EDM and $metadata                         | 5/5            | Complete          | 2026-04-07 |
+| 3. Query Engine and Response Format          | 0/4            | Planning complete | -          |
+| 4. CRUD, $expand, and Module System          | 5/5            | Complete          | 2026-04-07 |
+| 5. $batch, Security, and v1 Hardening        | 5/5            | Complete          | 2026-04-07 |
+| 6. v1 Polish and Config Wiring               | 0/2            | Planning complete | -          |
+| 7. Filter Functions                          | 2/2            | Complete          | 2026-04-08 |
+| 8. Documentation, GitHub Pages, and llms.txt | 0/TBD          | Not started       | -          |
+| 9. Response Annotations and ETags            | 0/TBD          | Not started       | -          |
+| 10. Advanced Write Operations                | 0/TBD          | Not started       | -          |
+| 11. $search and $apply                       | 0/TBD          | Not started       | -          |
