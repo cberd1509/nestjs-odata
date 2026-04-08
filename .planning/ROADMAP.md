@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Documentation, GitHub Pages, and llms.txt** - VitePress docs site, API reference, GitHub Pages deployment, llms.txt for LLM discoverability
 - [ ] **Phase 9: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
 - [x] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references (completed 2026-04-08)
-- [ ] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems
+- [x] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems (completed 2026-04-08)
 - [ ] **Phase 12: Developer Experience Audit and API Simplification** - Eliminate API friction, simplify module wiring, full DX audit
 
 ## Phase Details
@@ -239,12 +239,12 @@ Plans:
 3. `GET /Orders?$apply=aggregate(Total with sum as GrandTotal)` returns a single aggregated row with the sum — not a collection of raw entities
 4. `GET /Orders?$apply=filter(Status eq 'open')/groupby((CustomerId),aggregate($count as OpenOrders))` executes the filter transformation before grouping — pipeline steps compose correctly
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
 
-- [ ] 11-01-PLAN.md — AST types, parsers (parseSearch/parseApply), ISearchProvider interface, @ODataSearchable decorator
-- [ ] 11-02-PLAN.md — TypeOrmSearchProvider, TypeOrmApplyVisitor, translator extension, SEARCH_PROVIDER DI registration
-- [ ] 11-03-PLAN.md — ODataQueryPipe/interceptor wiring, @ODataSearchable on test entities, e2e tests
+- [x] 11-01-PLAN.md — AST types, parsers (parseSearch/parseApply), ISearchProvider interface, @ODataSearchable decorator
+- [x] 11-02-PLAN.md — TypeOrmSearchProvider, TypeOrmApplyVisitor, translator extension, SEARCH_PROVIDER DI registration
+- [x] 11-03-PLAN.md — ODataQueryPipe/interceptor wiring, @ODataSearchable on test entities, e2e tests
 
 ## Progress
 
@@ -263,7 +263,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. Documentation, GitHub Pages, and llms.txt          | 3/3            | Complete          | 2026-04-08 |
 | 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
 | 10. Advanced Write Operations                         | 2/2            | Complete          | 2026-04-08 |
-| 11. $search and $apply                                | 0/3            | Planning complete | -          |
+| 11. $search and $apply                                | 3/3            | Complete          | 2026-04-08 |
 | 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
 
 ### Phase 12: Developer Experience Audit and API Simplification
