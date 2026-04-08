@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-04-07)
 Phase: 12
 Plan: Not started
 Status: Ready to execute
-Last activity: 2026-04-08
+Last activity: 2026-04-08 - Completed quick task 260408-ox4: Fix npm publish metadata
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -87,6 +87,12 @@ None yet.
 
 - [Phase 7] Lambda `any`/`all` require EXISTS/NOT EXISTS subqueries — TypeOrmFilterVisitor needs to emit correlated subqueries for collection navigation properties; verify TypeORM QueryBuilder supports this
 - [Phase 10] `$apply` aggregation pipeline is the most complex feature — OASIS Part 2 section 3 defines the transformation sequence; read spec before planning
+
+### Quick Tasks Completed
+
+| #          | Description                                                                              | Date       | Commit  | Directory                                                                  |
+| ---------- | ---------------------------------------------------------------------------------------- | ---------- | ------- | -------------------------------------------------------------------------- |
+| 260408-ox4 | Fix npm publish metadata: version 1.0.0, repository, keywords, READMEs, changeset config | 2026-04-08 | 3848e04 | [260408-ox4](./quick/260408-ox4-fix-npm-publish-metadata-for-both-packag/) |
 
 ## Session Continuity
 
