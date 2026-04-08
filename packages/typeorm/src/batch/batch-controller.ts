@@ -45,6 +45,7 @@ import {
   type ODataModuleResolvedOptions,
   type BatchResponsePart,
   type BatchRequestPart,
+  type EdmEntityType,
 } from '@nestjs-odata/core'
 import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
@@ -373,13 +374,13 @@ export class BatchController {
           entityClass,
           manager,
         )
-      } else if (method === 'PATCH' || method === 'PUT') {
+      } else if (method === 'PATCH') {
         if (key === undefined) {
           return {
             contentId: part.contentId,
             statusCode: 400,
             headers: {},
-            body: buildODataError('BadRequest', `PATCH/PUT requires a key: ${part.url}`),
+            body: buildODataError('BadRequest', `PATCH requires a key: ${part.url}`),
           }
         }
         return await this.dispatchUpdate(
@@ -387,6 +388,23 @@ export class BatchController {
           part,
           entitySetName,
           entityType.keyProperties,
+          entityClass,
+          manager,
+        )
+      } else if (method === 'PUT') {
+        if (key === undefined) {
+          return {
+            contentId: part.contentId,
+            statusCode: 400,
+            headers: {},
+            body: buildODataError('BadRequest', `PUT requires a key: ${part.url}`),
+          }
+        }
+        return await this.dispatchReplace(
+          key,
+          part,
+          entitySetName,
+          entityType,
           entityClass,
           manager,
         )
@@ -521,6 +539,89 @@ export class BatchController {
     // Merge patch fields onto the existing entity, then save
     const merged = manager.merge(EntityCls, existing, body as ObjectLiteral)
     const saved = await manager.save(EntityCls, merged)
+    return {
+      contentId: part.contentId,
+      statusCode: 200,
+      headers: {},
+      body: JSON.stringify(saved),
+    }
+  }
+
+  /**
+   * PUT /EntitySet(key) — full entity replacement.
+   *
+   * Per OData v4 spec (D-01): all entity properties replaced.
+   * Unspecified fields reset to column defaults (null for nullable, default value otherwise).
+   * Distinct from PATCH merge semantics used by dispatchUpdate().
+   *
+   * Uses repo.metadata.columns for column introspection — same pattern as handleReplace().
+   */
+  private async dispatchReplace(
+    keyStr: string,
+    part: BatchRequestPart,
+    entitySetName: string,
+    entityType: EdmEntityType,
+    entityClass: EntityClass,
+    manager: EntityManager,
+  ): Promise<BatchResponsePart> {
+    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
+    const where = parseODataKey(keyStr, entityType.keyProperties)
+    const EntityCls = entityClass as new () => ObjectLiteral
+
+    // Validate key in body matches URL key (T-10-01)
+    for (const kp of entityType.keyProperties) {
+      const bodyKeyValue = body[kp]
+      const urlKeyValue = where[kp]
+      if (bodyKeyValue !== undefined && bodyKeyValue !== urlKeyValue) {
+        return {
+          contentId: part.contentId,
+          statusCode: 400,
+          headers: {},
+          body: buildODataError('BadRequest', 'Key in body does not match URL key'),
+        }
+      }
+    }
+
+    const existing = await manager.findOne(EntityCls, { where })
+    if (!existing) {
+      return {
+        contentId: part.contentId,
+        statusCode: 404,
+        headers: {},
+        body: buildODataError(
+          'NotFound',
+          `Entity '${entitySetName}' with key '${keyStr}' not found`,
+        ),
+      }
+    }
+
+    // Build full replacement using column metadata — same logic as handleReplace()
+    const meta = this.dataSource.getMetadata(entityClass)
+    const replacement: Record<string, unknown> = {}
+
+    // Set key values from URL
+    for (const kp of entityType.keyProperties) {
+      replacement[kp] = where[kp]
+    }
+
+    for (const col of meta.columns) {
+      if (col.isPrimary) continue
+      if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue
+
+      const propName = col.propertyName
+      if (Object.prototype.hasOwnProperty.call(body, propName)) {
+        replacement[propName] = body[propName]
+      } else if (col.default !== undefined) {
+        replacement[propName] = col.default
+      } else if (col.isNullable) {
+        replacement[propName] = null
+      }
+    }
+
+    const repo = manager.getRepository(EntityCls)
+    const entity = repo.create(replacement as ObjectLiteral)
+    const saved = await manager.save(EntityCls, entity)
+
     return {
       contentId: part.contentId,
       statusCode: 200,

@@ -5,6 +5,7 @@ import { ODataModule } from '@nestjs-odata/core'
 import { ODataTypeOrmModule } from '@nestjs-odata/typeorm'
 import { Product, Category, Customer, Order, OrderItem, Tag } from './entities/index.js'
 import { ProductsModule } from './products/products.module.js'
+import { OrdersModule } from './orders/orders.module.js'
 import { HealthModule } from './health/health.module.js'
 
 /**
@@ -36,6 +37,7 @@ import { HealthModule } from './health/health.module.js'
       serviceRoot: '/odata',
     }),
     ProductsModule,
+    OrdersModule,
     HealthModule,
   ],
 })
