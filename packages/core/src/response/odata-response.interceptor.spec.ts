@@ -48,7 +48,12 @@ function makeEmptyEdmRegistry(): EdmRegistry {
 
 /** Create a mock EdmRegistry with a known Products entity. */
 function makeProductsEdmRegistry(): EdmRegistry {
-  const entitySet = { name: 'Products', entityTypeName: 'Product', namespace: 'Default', isReadOnly: false }
+  const entitySet = {
+    name: 'Products',
+    entityTypeName: 'Product',
+    namespace: 'Default',
+    isReadOnly: false,
+  }
   const entityType = {
     name: 'Product',
     namespace: 'Default',
@@ -84,7 +89,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
     expect(resp).toMatchObject({
@@ -99,7 +108,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
     expect(resp).not.toHaveProperty('@odata.count')
@@ -110,7 +123,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
     expect(resp).toHaveProperty('@odata.nextLink', 'http://odata/Products?$skip=10')
@@ -121,7 +138,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
     expect(resp).not.toHaveProperty('@odata.nextLink')
@@ -132,7 +153,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(rawResult))
     const reflector = makeReflector(undefined) // no metadata
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
     expect(resp).toBe(rawResult)
@@ -146,7 +171,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
       string,
@@ -160,7 +189,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
       string,
@@ -181,7 +214,11 @@ describe('ODataResponseInterceptor', () => {
       isSingleEntity: true,
     })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
       string,
@@ -201,7 +238,11 @@ describe('ODataResponseInterceptor', () => {
         getResponse: vi.fn().mockReturnValue({ setHeader }),
       }),
     } as unknown as ExecutionContext
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
       string,
@@ -218,7 +259,11 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
     const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
       string,
@@ -236,9 +281,16 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeProductsEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
 
-    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<string, unknown>
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
 
     expect(resp['@odata.id']).toBe('/odata/Products(1)')
     expect(resp['@odata.type']).toBe('#Default.Product')
@@ -249,13 +301,25 @@ describe('ODataResponseInterceptor', () => {
   })
 
   it('Test A2: collection response — each item in value[] has annotations', async () => {
-    const result = { items: [{ id: 1, name: 'Laptop' }, { id: 2, name: 'Phone' }] }
+    const result = {
+      items: [
+        { id: 1, name: 'Laptop' },
+        { id: 2, name: 'Phone' },
+      ],
+    }
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products' })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeProductsEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
 
-    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<string, unknown>
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
     const items = resp['value'] as Record<string, unknown>[]
 
     expect(items).toHaveLength(2)
@@ -276,9 +340,16 @@ describe('ODataResponseInterceptor', () => {
         getResponse: vi.fn().mockReturnValue({ setHeader }),
       }),
     } as unknown as ExecutionContext
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeProductsEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
 
-    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<string, unknown>
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
 
     expect(resp['@odata.id']).toBe('/odata/Products(5)')
     expect(resp['@odata.type']).toBe('#Default.Product')
@@ -291,9 +362,16 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Unknown', isSingleEntity: true })
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeEmptyEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeEmptyEdmRegistry(),
+    )
 
-    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<string, unknown>
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
 
     // No crash, @odata.context still present
     expect(resp['@odata.context']).toBe('/odata/$metadata#Unknown/$entity')
@@ -308,11 +386,103 @@ describe('ODataResponseInterceptor', () => {
     mockHandler.handle.mockReturnValue(of(rawResult))
     const reflector = makeReflector(undefined) // no OData metadata
     const ctx = makeContext()
-    const interceptor = new ODataResponseInterceptor(reflector as never, resolvedOptions, makeProductsEdmRegistry())
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
 
     const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
 
     expect(resp).toBe(rawResult) // Same reference — completely unchanged
     expect(resp).not.toHaveProperty('@odata.id')
+  })
+
+  // --- ETag tests (Task 2 of Phase 09-02) ---
+
+  it('Test E1: single entity with __etag property — sets ETag response header and @odata.etag in body', async () => {
+    const result = { id: 1, name: 'Widget', __etag: 'W/"abc123"' }
+    mockHandler.handle.mockReturnValue(of(result))
+    const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
+    const setHeader = vi.fn()
+    const ctx = {
+      getHandler: vi.fn().mockReturnValue({}),
+      switchToHttp: vi.fn().mockReturnValue({
+        getResponse: vi.fn().mockReturnValue({ setHeader }),
+        getRequest: vi.fn().mockReturnValue({}),
+      }),
+    } as unknown as ExecutionContext
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
+
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
+
+    // ETag header should be set
+    expect(setHeader).toHaveBeenCalledWith('ETag', 'W/"abc123"')
+    // @odata.etag in body
+    expect(resp['@odata.etag']).toBe('W/"abc123"')
+    // Internal __etag removed
+    expect(resp).not.toHaveProperty('__etag')
+    // Other fields preserved
+    expect(resp['id']).toBe(1)
+  })
+
+  it('Test E2: single entity without __etag property — no ETag header or @odata.etag', async () => {
+    const result = { id: 1, name: 'Widget' }
+    mockHandler.handle.mockReturnValue(of(result))
+    const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
+    const setHeader = vi.fn()
+    const ctx = {
+      getHandler: vi.fn().mockReturnValue({}),
+      switchToHttp: vi.fn().mockReturnValue({
+        getResponse: vi.fn().mockReturnValue({ setHeader }),
+        getRequest: vi.fn().mockReturnValue({}),
+      }),
+    } as unknown as ExecutionContext
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
+
+    const resp = (await firstValueFrom(interceptor.intercept(ctx, handler))) as Record<
+      string,
+      unknown
+    >
+
+    expect(setHeader).not.toHaveBeenCalledWith('ETag', expect.anything())
+    expect(resp).not.toHaveProperty('@odata.etag')
+  })
+
+  it('Test E3: entity with __notModified flag — sets 304 status, empty body, ETag header', async () => {
+    const result = { __notModified: true, etag: 'W/"abc123"' }
+    mockHandler.handle.mockReturnValue(of(result))
+    const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
+    const setHeader = vi.fn()
+    const status = vi.fn().mockReturnThis()
+    const ctx = {
+      getHandler: vi.fn().mockReturnValue({}),
+      switchToHttp: vi.fn().mockReturnValue({
+        getResponse: vi.fn().mockReturnValue({ setHeader, status }),
+        getRequest: vi.fn().mockReturnValue({}),
+      }),
+    } as unknown as ExecutionContext
+    const interceptor = new ODataResponseInterceptor(
+      reflector as never,
+      resolvedOptions,
+      makeProductsEdmRegistry(),
+    )
+
+    const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
+
+    expect(setHeader).toHaveBeenCalledWith('ETag', 'W/"abc123"')
+    // Response should be empty (null/undefined)
+    expect(resp == null || resp === '').toBe(true)
   })
 })

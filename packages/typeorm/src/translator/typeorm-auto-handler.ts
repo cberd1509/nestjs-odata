@@ -1,7 +1,8 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common'
-import type { ODataQuery, ODataQueryResult, EdmEntityType } from '@nestjs-odata/core'
+import { HttpException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common'
+import type { ODataQuery, ODataQueryResult, EdmEntityType, IETagProvider } from '@nestjs-odata/core'
 import {
   EdmRegistry,
+  ETAG_PROVIDER,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
   type ODataModuleResolvedOptions,
@@ -31,6 +32,7 @@ export class TypeOrmAutoHandler {
     private readonly edmRegistry: EdmRegistry,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
     private readonly repo: Repository<ObjectLiteral>,
+    @Optional() @Inject(ETAG_PROVIDER) private readonly etagProvider?: IETagProvider,
   ) {}
 
   /**
@@ -175,14 +177,47 @@ export class TypeOrmAutoHandler {
    * Per D-05: returns single entity, throws NotFoundException if not found.
    * Per D-02: key is parsed from parenthetical format.
    * Per T-04-08: parseODataKey returns typed values used in parameterized where clause.
+   * Per T-09-05: If-None-Match header supported — returns { __notModified, etag } signal when matched.
    */
-  async handleGetByKey(keyStr: string, entitySetName: string): Promise<unknown> {
+  async handleGetByKey(
+    keyStr: string,
+    entitySetName: string,
+    ifNoneMatchHeader?: string,
+  ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
     const entity = await this.repo.findOne({ where })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
+
+    // ETag support: check If-None-Match for cache validation
+    if (this.etagProvider) {
+      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
+      if (etagColumn) {
+        const currentEtag = this.etagProvider.computeETag(
+          entity as Record<string, unknown>,
+          etagColumn,
+        )
+        // Attach ETag to entity for interceptor to pick up
+        const entityWithEtag = { ...(entity as Record<string, unknown>), __etag: currentEtag }
+
+        // If-None-Match: return 304 signal when ETag matches (resource not modified)
+        if (
+          ifNoneMatchHeader &&
+          this.etagProvider.validateIfMatch(
+            ifNoneMatchHeader,
+            entity as Record<string, unknown>,
+            etagColumn,
+          )
+        ) {
+          return { __notModified: true, etag: currentEtag }
+        }
+
+        return entityWithEtag
+      }
+    }
+
     return entity
   }
 
@@ -219,14 +254,45 @@ export class TypeOrmAutoHandler {
    * Per D-01: send only changed fields, server merges with existing entity.
    * Per Pitfall 4: checks preload result for undefined (entity not found case).
    * Per T-04-08: parseODataKey returns typed values for safe parameterized queries.
+   * Per T-09-04: If-Match header enforces optimistic concurrency — 412 on stale ETag.
    */
   async handleUpdate(
     keyStr: string,
     body: Record<string, unknown>,
     entitySetName: string,
+    ifMatchHeader?: string,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+
+    // ETag If-Match validation before update
+    if (this.etagProvider && ifMatchHeader) {
+      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
+      if (etagColumn) {
+        const current = await this.repo.findOne({ where })
+        if (!current) {
+          throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
+        }
+        if (
+          !this.etagProvider.validateIfMatch(
+            ifMatchHeader,
+            current as Record<string, unknown>,
+            etagColumn,
+          )
+        ) {
+          throw new HttpException(
+            {
+              error: {
+                code: '412',
+                message: 'The ETag value does not match the current version of the entity',
+              },
+            },
+            412,
+          )
+        }
+      }
+    }
+
     const merged = { ...where, ...body }
     const preloaded = await this.repo.preload(merged as ObjectLiteral)
     if (!preloaded) {
@@ -240,10 +306,40 @@ export class TypeOrmAutoHandler {
    *
    * Per D-04: returns 204 No Content (void return value).
    * Per T-04-08: parseODataKey returns typed values for safe parameterized queries.
+   * Per T-09-04: If-Match header enforces optimistic concurrency — 412 on stale ETag.
    */
-  async handleDelete(keyStr: string, entitySetName: string): Promise<void> {
+  async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+
+    // ETag If-Match validation before delete
+    if (this.etagProvider && ifMatchHeader) {
+      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
+      if (etagColumn) {
+        const current = await this.repo.findOne({ where })
+        if (!current) {
+          throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
+        }
+        if (
+          !this.etagProvider.validateIfMatch(
+            ifMatchHeader,
+            current as Record<string, unknown>,
+            etagColumn,
+          )
+        ) {
+          throw new HttpException(
+            {
+              error: {
+                code: '412',
+                message: 'The ETag value does not match the current version of the entity',
+              },
+            },
+            412,
+          )
+        }
+      }
+    }
+
     const result = await this.repo.delete(where)
     if (result.affected === 0) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)

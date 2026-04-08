@@ -432,4 +432,169 @@ describe('TypeOrmAutoHandler', () => {
       expect(result.nextLink).toContain('$skip=2')
     })
   })
+
+  // --- ETag / If-Match / If-None-Match tests (Task 2 of Phase 09-02) ---
+
+  describe('handleUpdate() with If-Match', () => {
+    it('Test E1: handleUpdate with matching If-Match succeeds', async () => {
+      const entity = { id: 1, name: 'Widget', updatedAt: new Date('2024-01-01T00:00:00Z') }
+      const { repo, findOne, preload, save } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+      preload.mockResolvedValue({ ...entity, name: 'Updated' })
+      save.mockResolvedValue({ ...entity, name: 'Updated' })
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"dXBkYXRlZEF0"'),
+        validateIfMatch: vi.fn().mockReturnValue(true),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+      const result = await autoHandler.handleUpdate(
+        '1',
+        { name: 'Updated' },
+        'Products',
+        'W/"dXBkYXRlZEF0"',
+      )
+
+      expect(etagProvider.validateIfMatch).toHaveBeenCalled()
+      expect(result).toBeDefined()
+    })
+
+    it('Test E2: handleUpdate with stale If-Match throws PreconditionFailedException (412)', async () => {
+      const entity = { id: 1, name: 'Widget', updatedAt: new Date('2024-01-01T00:00:00Z') }
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"current"'),
+        validateIfMatch: vi.fn().mockReturnValue(false),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+
+      await expect(
+        autoHandler.handleUpdate('1', { name: 'Updated' }, 'Products', 'W/"stale"'),
+      ).rejects.toMatchObject({ status: 412 })
+    })
+
+    it('Test E3: handleUpdate without If-Match header on ETag-enabled entity proceeds (no enforcement)', async () => {
+      const entity = { id: 1, name: 'Widget' }
+      const { repo, preload, save } = makeMockRepo()
+      preload.mockResolvedValue(entity)
+      save.mockResolvedValue({ ...entity, name: 'Updated' })
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn(),
+        validateIfMatch: vi.fn(),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+      // No ifMatchHeader provided
+      const result = await autoHandler.handleUpdate('1', { name: 'Updated' }, 'Products')
+
+      // validateIfMatch should NOT be called when no header
+      expect(etagProvider.validateIfMatch).not.toHaveBeenCalled()
+      expect(result).toBeDefined()
+    })
+  })
+
+  describe('handleDelete() with If-Match', () => {
+    it('Test E4: handleDelete with stale If-Match throws PreconditionFailedException (412)', async () => {
+      const entity = { id: 1, name: 'Widget' }
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"current"'),
+        validateIfMatch: vi.fn().mockReturnValue(false),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+
+      await expect(autoHandler.handleDelete('1', 'Products', 'W/"stale"')).rejects.toMatchObject({
+        status: 412,
+      })
+    })
+  })
+
+  describe('handleGetByKey() with If-None-Match', () => {
+    it('Test E5: handleGetByKey with matching If-None-Match returns { __notModified: true, etag }', async () => {
+      const entity = { id: 1, name: 'Widget', updatedAt: new Date('2024-01-01T00:00:00Z') }
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"abc"'),
+        validateIfMatch: vi.fn().mockReturnValue(true),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+      const result = (await autoHandler.handleGetByKey('1', 'Products', 'W/"abc"')) as Record<
+        string,
+        unknown
+      >
+
+      expect(result['__notModified']).toBe(true)
+      expect(result['etag']).toBe('W/"abc"')
+    })
+
+    it('Test E6: handleGetByKey without ETag column returns entity normally', async () => {
+      const entity = { id: 1, name: 'Widget' }
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue(undefined),
+        computeETag: vi.fn(),
+        validateIfMatch: vi.fn(),
+      }
+
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+      const result = await autoHandler.handleGetByKey('1', 'Products', 'W/"anything"')
+
+      // Should return entity normally (no __notModified)
+      expect(result).toEqual(entity)
+    })
+  })
 })

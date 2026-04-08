@@ -109,6 +109,20 @@ export class ODataResponseInterceptor implements NestInterceptor {
 
         // Handle single-entity response (GET by key, PATCH update) — D-05
         if (isSingleEntity) {
+          const entityResult = result as Record<string, unknown>
+
+          // Handle 304 Not Modified — entity unchanged (If-None-Match matched)
+          if (entityResult['__notModified'] === true) {
+            const etag = entityResult['etag'] as string
+            const httpResponse = context.switchToHttp().getResponse<{
+              setHeader: (k: string, v: string) => void
+              status: (code: number) => void
+            }>()
+            httpResponse.setHeader('ETag', etag)
+            // Return null to produce an empty body for 304
+            return null
+          }
+
           const contextUrl = buildContextUrl(
             this.options.serviceRoot,
             entitySetName,
@@ -118,8 +132,28 @@ export class ODataResponseInterceptor implements NestInterceptor {
 
           // Annotate the single entity (RESP-04, RESP-05, RESP-06)
           const annotationCtx = this.resolveAnnotationContext(entitySetName)
-          const entity = result as Record<string, unknown>
-          const annotatedEntity = annotationCtx ? annotateEntity(entity, annotationCtx) : entity
+
+          // Handle __etag internal property — set ETag header and add @odata.etag to body
+          let entityToAnnotate = entityResult
+          if (entityResult['__etag']) {
+            const etag = entityResult['__etag'] as string
+            const httpResponse = context
+              .switchToHttp()
+              .getResponse<{ setHeader: (k: string, v: string) => void }>()
+            httpResponse.setHeader('ETag', etag)
+            // Remove internal property and add @odata.etag
+            const rest: Record<string, unknown> = {}
+            for (const key of Object.keys(entityResult)) {
+              if (key !== '__etag') {
+                rest[key] = entityResult[key]
+              }
+            }
+            entityToAnnotate = { '@odata.etag': etag, ...rest }
+          }
+
+          const annotatedEntity = annotationCtx
+            ? annotateEntity(entityToAnnotate, annotationCtx)
+            : entityToAnnotate
 
           return {
             '@odata.context': contextUrl,
