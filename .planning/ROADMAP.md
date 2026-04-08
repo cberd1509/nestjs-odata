@@ -173,14 +173,23 @@ Plans:
 
 **Goal:** VitePress documentation site deployed to GitHub Pages, covering everything built so far (Phases 1-7): installation/setup guide, getting started tutorial, decorator API reference (auto-generated from TypeScript source), query options guide ($filter, $select, $orderby, $top, $skip, $count, $expand), CRUD operations guide, $batch usage, configuration reference, security/limits guide, and migration/upgrade notes. Plus llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server. Also: create a project-level documentation sub-agent (or skill) that evaluates whether code changes require doc updates and applies them automatically — ensuring docs never drift from implementation in future phases.
 **Depends on**: Phase 7
-**Requirements**: TBD
-**Research needed:**
+**Requirements**: DOC-INFRA, DOC-TYPEDOC, DOC-LLMS, DOC-DEPLOY, DOC-AUDIT, DOC-FILTER, DOC-SKILL
+**Success Criteria** (what must be TRUE):
 
-- `vitepress-plugin-llms` (https://github.com/okineadev/vitepress-plugin-llms) for auto-generating llms.txt from VitePress content
-- Libraries/tools for auto-generating MCP servers from TypeScript APIs or OpenAPI specs
-- typedoc + vitepress integration options for API reference generation
+1. `pnpm build` in docs/ runs TypeDoc then VitePress and completes without errors
+2. `llms.txt` and `llms-full.txt` are present in the VitePress build output
+3. All 11 existing doc files have been audited against the real codebase and corrected
+4. A new filter-functions guide documents lambda any/all, arithmetic operators, date/time functions, and string functions
+5. TypeDoc auto-generates API reference markdown from `packages/core/src/index.ts`
+6. GitHub Pages deployment workflow exists and is syntactically valid
+7. Doc-guardian skill in `.claude/skills/doc-guardian/` maps source files to affected docs
 
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+
+- [ ] 08-01-PLAN.md — Documentation infrastructure: TypeDoc, vitepress-plugin-llms, VitePress theme, GitHub Pages workflow
+- [ ] 08-02-PLAN.md — Audit and rewrite all 11 doc files, create filter-functions guide
+- [ ] 08-03-PLAN.md — Doc-guardian skill creation and full build verification
 
 ### Phase 9: Response Annotations and ETags
 
@@ -237,7 +246,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 5. $batch, Security, and v1 Hardening        | 5/5            | Complete          | 2026-04-07 |
 | 6. v1 Polish and Config Wiring               | 0/2            | Planning complete | -          |
 | 7. Filter Functions                          | 2/2            | Complete          | 2026-04-08 |
-| 8. Documentation, GitHub Pages, and llms.txt | 0/TBD          | Not started       | -          |
+| 8. Documentation, GitHub Pages, and llms.txt | 0/3            | Planning complete | -          |
 | 9. Response Annotations and ETags            | 0/TBD          | Not started       | -          |
 | 10. Advanced Write Operations                | 0/TBD          | Not started       | -          |
 | 11. $search and $apply                       | 0/TBD          | Not started       | -          |
