@@ -137,7 +137,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 3. `ODataModule.forFeature([entity])` triggers EDM registration via `EDM_ENTITY_CONFIGS` token consumer — verified by integration test
 4. OData sub-agent answers 3 representative OData v4 spec questions correctly
 
-**Plans:** 0 plans (awaiting planning)
+**Plans:** 2 plans
+Plans:
+
+- [ ] 06-01-PLAN.md — Wire maxFilterDepth to TypeOrmFilterVisitor (SEC-04) and add EdmFeatureInitializer to forFeature() (MOD-02)
+- [ ] 06-02-PLAN.md — Fix peer dep version mismatch and validate odata-expert sub-agent (SCAF-08)
 
 ## Progress
 
@@ -151,4 +155,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 3. Query Engine and Response Format   | 0/4            | Planning complete | -          |
 | 4. CRUD, $expand, and Module System   | 5/5            | Complete          | 2026-04-07 |
 | 5. $batch, Security, and v1 Hardening | 5/5            | Complete          | 2026-04-07 |
-| 6. v1 Polish and Config Wiring        | 0/0            | Not started       | -          |
+| 6. v1 Polish and Config Wiring        | 0/2            | Planning complete | -          |
