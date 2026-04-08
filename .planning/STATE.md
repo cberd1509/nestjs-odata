@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Phase 5 context gathered
+milestone: v1.1
+milestone_name: OData v4 Spec Compliance
+status: defining-requirements
+stopped_at: Milestone v1.1 started
 last_updated: '2026-04-08T01:31:42.301Z'
 last_activity: 2026-04-08
 progress:
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** OData query power with zero double-declaration — define entities once in TypeORM, get spec-compliant OData v4 automatically, mixing cleanly with regular NestJS routes.
-**Current focus:** Phase 06 — v1-polish-and-config-wiring
+**Current focus:** Defining requirements for v1.1
 
 ## Current Position
 
-Phase: 06
-Plan: Not started
-Status: Executing Phase 06
-Last activity: 2026-04-08
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-07 — Milestone v1.1 started
 
 Progress: [░░░░░░░░░░] 0%
 

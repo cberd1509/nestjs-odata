@@ -31,7 +31,22 @@ OData query power with zero double-declaration: define your entities once in Typ
 
 ### Active
 
-(v1.0 shipped — next milestone requirements TBD via `/gsd-new-milestone`)
+## Current Milestone: v1.1 OData v4 Spec Compliance
+
+**Goal:** Close the OData v4 specification gaps — bring the library from ~65% to ~90% spec coverage.
+
+**Target features:**
+
+- Lambda expressions (`any`/`all`) translated to SQL JOINs
+- Date/time filter functions (`year()`, `month()`, `day()`, etc.)
+- Arithmetic operators in `$filter` (`add`, `sub`, `mul`, `div`, `mod`)
+- `$search` full-text query support
+- PUT (full replace) alongside existing PATCH
+- Deep inserts (POST with nested related entities)
+- Content-ID reference resolution in `$batch`
+- Response annotations (`@odata.id`, `@odata.type`, `@odata.navigationLink`)
+- ETag / concurrency control (`If-Match`, `If-None-Match`)
+- `$apply` data aggregation (groupby, aggregate)
 
 ### Out of Scope
 
@@ -111,4 +126,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-04-07 after v1.0 milestone_
+_Last updated: 2026-04-07 — v1.1 milestone started_
