@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 9: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
 - [x] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references (completed 2026-04-08)
 - [x] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems (completed 2026-04-08)
-- [ ] **Phase 12: Developer Experience Audit and API Simplification** - Eliminate API friction, simplify module wiring, full DX audit
+- [x] **Phase 12: Developer Experience Audit and API Simplification** - Eliminate API friction, simplify module wiring, full DX audit (completed 2026-04-08)
 
 ## Phase Details
 
@@ -264,16 +264,16 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
 | 10. Advanced Write Operations                         | 2/2            | Complete          | 2026-04-08 |
 | 11. $search and $apply                                | 3/3            | Complete          | 2026-04-08 |
-| 12. Developer Experience Audit and API Simplification | 1/2            | In Progress       |            |
+| 12. Developer Experience Audit and API Simplification | 2/2            | Complete          | 2026-04-08 |
 
 ### Phase 12: Developer Experience Audit and API Simplification
 
 **Goal:** Full audit of the library's developer experience from first install to production deployment. Eliminate API friction identified during docs review: remove dual controller registration (forRoot controllers + @Module controllers), auto-apply ODataQueryPipe inside @ODataQueryParam (remove @UsePipes coupling), make forFeature inherit serviceRoot from forRoot. Plus a broader DX audit covering error messages, type inference, IDE autocompletion, and any other paper cuts discovered during a fresh-eyes walkthrough.
 **Requirements**: DX-01, DX-02, DX-03, DX-04, DX-05, DX-06, DX-07, DX-08, DX-09, DX-10, DX-11
 **Depends on:** Phase 11
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 12-01-PLAN.md — Controller registration simplification, auto-pipe, serviceRoot inheritance
-- [ ] 12-02-PLAN.md — Error message enrichment and public API export audit
+- [x] 12-02-PLAN.md — Error message enrichment and public API export audit
