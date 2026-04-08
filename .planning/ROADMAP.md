@@ -162,7 +162,11 @@ Plans:
 4. `GET /Products?$filter=Price add Tax gt 50` returns products whose sum of Price and Tax exceeds 50 — arithmetic evaluated in SQL
 5. `GET /Products?$filter=indexof(Name,'Pro') ge 0` and `contains`, `substring`, `concat` string function variants return correct results — translated to SQL LIKE or equivalent database functions
 
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+
+- [x] 07-01-PLAN.md — Arithmetic operators (FILT-04), date/time functions (FILT-03), string functions indexof/substring/concat (FILT-05)
+- [x] 07-02-PLAN.md — Lambda any/all EXISTS/NOT EXISTS subqueries (FILT-01, FILT-02)
 
 ### Phase 8: Response Annotations and ETags
 
