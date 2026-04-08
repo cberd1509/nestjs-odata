@@ -8,18 +8,21 @@ import type {
   EdmEntitySet,
   EdmEntityType,
   EntityClass,
+  ISearchProvider,
   ODataModuleResolvedOptions,
 } from '@nestjs-odata/core'
 import {
   EdmRegistry,
   ETAG_PROVIDER,
   ODATA_MODULE_OPTIONS,
+  SEARCH_PROVIDER,
   type ODataModuleOptions,
 } from '@nestjs-odata/core'
 import { TypeOrmEdmDeriver } from './deriver/typeorm-edm-deriver.js'
 import { TypeOrmQueryTranslator } from './translator/typeorm-query-translator.js'
 import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
 import { TypeOrmETagProvider } from './etag/typeorm-etag.provider.js'
+import { TypeOrmSearchProvider } from './translator/search-provider.js'
 import { BatchController } from './batch/batch-controller.js'
 
 /**
@@ -120,11 +123,23 @@ export class ODataTypeOrmModule {
         },
         TypeOrmEdmInitializer,
         {
+          provide: TypeOrmSearchProvider,
+          useFactory: (dataSource: DataSource, edmRegistry: EdmRegistry): TypeOrmSearchProvider => {
+            return new TypeOrmSearchProvider(dataSource, edmRegistry)
+          },
+          inject: [DataSource, EdmRegistry],
+        },
+        {
+          provide: SEARCH_PROVIDER,
+          useExisting: TypeOrmSearchProvider,
+        },
+        {
           provide: TypeOrmQueryTranslator,
           useFactory: (
             dataSource: DataSource,
             edmRegistry: EdmRegistry,
             options: ODataModuleResolvedOptions,
+            searchProvider: ISearchProvider,
           ): TypeOrmQueryTranslator => {
             // Use a shared repository for query builder creation.
             // TypeOrmQueryTranslator uses repo.createQueryBuilder() which accepts any entity target.
@@ -134,9 +149,14 @@ export class ODataTypeOrmModule {
               throw new Error('ODataTypeOrmModule.forFeature() requires at least one entity class')
             }
             const repo = dataSource.getRepository(firstEntity as new () => ObjectLiteral)
-            return new TypeOrmQueryTranslator(repo, edmRegistry, options)
+            return new TypeOrmQueryTranslator(repo, edmRegistry, options, searchProvider)
           },
-          inject: [DataSource, EdmRegistry, ODATA_MODULE_OPTIONS],
+          inject: [
+            DataSource,
+            EdmRegistry,
+            ODATA_MODULE_OPTIONS,
+            { token: SEARCH_PROVIDER, optional: true },
+          ],
         },
         {
           provide: TypeOrmETagProvider,
@@ -187,6 +207,8 @@ export class ODataTypeOrmModule {
         TypeOrmAutoHandler,
         TypeOrmETagProvider,
         ETAG_PROVIDER,
+        TypeOrmSearchProvider,
+        SEARCH_PROVIDER,
       ],
     }
   }
