@@ -31,7 +31,7 @@
     "lint": "eslint ."
   },
   "peerDependencies": {
-    "@nestjs-odata/core": ">=0.1.0",
+    "@nestjs-odata/core": ">=0.0.1",
     "@nestjs/common": "^10.0.0 || ^11.0.0",
     "@nestjs/typeorm": "^10.0.0 || ^11.0.0",
     "reflect-metadata": "^0.1.13 || ^0.2.0",
