@@ -7,7 +7,7 @@ import {
   parseODataKey,
   type ODataModuleResolvedOptions,
 } from '@nestjs-odata/core'
-import type { Repository, ObjectLiteral } from 'typeorm'
+import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 
 /**
@@ -33,6 +33,7 @@ export class TypeOrmAutoHandler {
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
     private readonly repo: Repository<ObjectLiteral>,
     @Optional() @Inject(ETAG_PROVIDER) private readonly etagProvider?: IETagProvider,
+    private readonly dataSource?: DataSource,
   ) {}
 
   /**
@@ -246,6 +247,179 @@ export class TypeOrmAutoHandler {
     const locationUrl = `${this.options.serviceRoot}/${entitySetName}(${keyStr})`
 
     return { entity: saved, locationUrl }
+  }
+
+  /**
+   * Handle OData POST with deep insert — create parent and nested children atomically.
+   *
+   * Per D-02 (deep insert): navigation property keys in the body identify child collections.
+   * All saves occur within the provided EntityManager (transaction scope).
+   *
+   * Per T-10-05: depth is checked before recursion — throws 400 if depth >= maxDeepInsertDepth.
+   * Per T-10-06: TypeORM repo.create() only maps declared columns — mass assignment safe.
+   *
+   * @param body - Request body (scalar fields + optional navigation property arrays)
+   * @param entitySetName - OData entity set name (e.g. 'Orders')
+   * @param manager - Transaction-scoped EntityManager
+   * @param depth - Current recursion depth (default 0)
+   */
+  async handleDeepCreate(
+    body: Record<string, unknown>,
+    entitySetName: string,
+    manager: EntityManager,
+    depth = 0,
+  ): Promise<{ entity: unknown; locationUrl: string }> {
+    const maxDepth = this.options.maxDeepInsertDepth ?? 5
+    if (depth >= maxDepth) {
+      throw new HttpException(
+        {
+          error: {
+            code: '400',
+            message: `Deep insert exceeds maxDeepInsertDepth (${maxDepth})`,
+          },
+        },
+        400,
+      )
+    }
+
+    const entityType = this.resolveEntityType(entitySetName)
+
+    // Separate scalar props from navigation props
+    const navPropNames = new Set(entityType.navigationProperties.map((p) => p.name))
+    const scalarBody: Record<string, unknown> = {}
+    const navData: Record<string, unknown[]> = {}
+
+    for (const [key, value] of Object.entries(body)) {
+      if (navPropNames.has(key) && Array.isArray(value)) {
+        navData[key] = value as unknown[]
+      } else if (!navPropNames.has(key)) {
+        scalarBody[key] = value
+      }
+    }
+
+    // Save parent entity using this handler's repo (entity class for this entity set)
+    const parentRepo = manager.getRepository(this.repo.target as new () => ObjectLiteral)
+    const parentCreated = parentRepo.create(scalarBody as ObjectLiteral)
+    const savedParent = (await parentRepo.save(parentCreated)) as Record<string, unknown>
+
+    // Get parent PK value
+    const parentKeyProp = entityType.keyProperties[0] ?? 'id'
+    const parentKeyValue = savedParent[parentKeyProp]
+
+    // Process navigation properties (child collections)
+    for (const [navPropName, childItems] of Object.entries(navData)) {
+      const navProp = entityType.navigationProperties.find((p) => p.name === navPropName)
+      if (!navProp) continue
+
+      // Resolve child entity type name.
+      // Collection nav props use format: "Collection(Default.OrderItem)" -> "OrderItem"
+      // Singular nav props use format: "Default.OrderItem" -> "OrderItem"
+      let rawType = navProp.type
+      if (rawType.startsWith('Collection(') && rawType.endsWith(')')) {
+        rawType = rawType.slice('Collection('.length, -1)
+      }
+      const childTypeName = rawType.split('.').pop() ?? rawType
+
+      // Find child entity set by entity type name
+      const childEntitySet = [...this.edmRegistry.getEntitySets().values()].find(
+        (es) => es.entityTypeName === childTypeName,
+      )
+      if (!childEntitySet) {
+        throw new HttpException(
+          {
+            error: {
+              code: '400',
+              message: `Deep insert: cannot resolve entity set for navigation property '${navPropName}' (type '${childTypeName}')`,
+            },
+          },
+          400,
+        )
+      }
+
+      // Resolve FK column name from TypeORM relation metadata
+      // Look at the child entity class's ManyToOne relation to find the join column
+      let fkColumnName: string | undefined
+      if (this.dataSource) {
+        try {
+          const parentMeta = this.dataSource.getMetadata(this.repo.target)
+          const relation = parentMeta.relations.find((r) => r.propertyName === navPropName)
+          if (relation?.inverseRelation?.joinColumns?.[0]?.propertyName) {
+            fkColumnName = relation.inverseRelation.joinColumns[0].propertyName
+          }
+        } catch {
+          // fallback below
+        }
+      }
+
+      // Fallback: derive FK column name from parent entity set name (e.g. 'Orders' -> 'orderId')
+      if (!fkColumnName) {
+        const singularParent = entitySetName.endsWith('s')
+          ? entitySetName.slice(0, -1)
+          : entitySetName
+        fkColumnName = `${singularParent.charAt(0).toLowerCase()}${singularParent.slice(1)}Id`
+      }
+
+      // Resolve the child entity class via DataSource metadata
+      const childEntityClass = this.dataSource
+        ? this.resolveEntityClassFromDataSource(childTypeName)
+        : undefined
+
+      for (let index = 0; index < childItems.length; index++) {
+        const childItem = childItems[index] as Record<string, unknown>
+        // Inject FK from parent's PK — overrides any user-supplied value (T-10-09)
+        const childBody = { ...childItem, [fkColumnName]: parentKeyValue }
+
+        try {
+          if (childEntityClass) {
+            // Use a fresh repo for the child entity class
+            const childRepo = manager.getRepository(childEntityClass as new () => ObjectLiteral)
+            const childCreated = childRepo.create(childBody as ObjectLiteral)
+            await childRepo.save(childCreated)
+          } else {
+            // Fallback: use the child entity set name to resolve via handleDeepCreate recursion
+            // This won't work well without a child repo, but we handle the error gracefully
+            throw new Error(
+              `Cannot resolve entity class for '${childTypeName}' — DataSource not available`,
+            )
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          throw new HttpException(
+            {
+              error: {
+                code: '400',
+                message: `Deep insert failed at '${navPropName}[${index}]': ${message}`,
+              },
+            },
+            400,
+          )
+        }
+      }
+    }
+
+    // Build location URL from saved parent's key
+    const keyParts = entityType.keyProperties.map((kp) => {
+      const val = savedParent[kp]
+      return entityType.keyProperties.length === 1 ? String(val) : `${kp}=${String(val)}`
+    })
+    const keyStr = keyParts.join(',')
+    const locationUrl = `${this.options.serviceRoot}/${entitySetName}(${keyStr})`
+
+    return { entity: savedParent, locationUrl }
+  }
+
+  /**
+   * Resolve a TypeORM entity class from an EDM entity type name.
+   * Requires DataSource to be provided.
+   */
+  private resolveEntityClassFromDataSource(entityTypeName: string): (new () => object) | undefined {
+    if (!this.dataSource) return undefined
+    for (const meta of this.dataSource.entityMetadatas) {
+      if (meta.name === entityTypeName) {
+        return meta.target as new () => object
+      }
+    }
+    return undefined
   }
 
   /**

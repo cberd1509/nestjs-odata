@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { MockInstance } from 'vitest'
-import type { SelectQueryBuilder, ObjectLiteral, Repository, DeleteResult } from 'typeorm'
+import type {
+  SelectQueryBuilder,
+  ObjectLiteral,
+  Repository,
+  DeleteResult,
+  EntityManager,
+  DataSource,
+} from 'typeorm'
 import type { ODataQuery, EdmEntityType, EdmEntitySet } from '@nestjs-odata/core'
 import { EdmRegistry } from '@nestjs-odata/core'
 import { NotFoundException } from '@nestjs/common'
@@ -666,6 +673,207 @@ describe('TypeOrmAutoHandler', () => {
       // (it should receive id from the explicit where assignment)
       const callArg = (create.mock.calls[0] as [ObjectLiteral])[0]
       expect(callArg['id']).toBe(1)
+    })
+  })
+
+  describe('handleDeepCreate()', () => {
+    // Entity type with a navigation property 'items' -> 'OrderItem'
+    const orderEntityType: EdmEntityType = {
+      name: 'Order',
+      namespace: 'Default',
+      properties: [
+        { name: 'id', type: 'Edm.Int32', nullable: false },
+        { name: 'totalAmount', type: 'Edm.Decimal', nullable: false },
+        { name: 'status', type: 'Edm.String', nullable: false },
+      ],
+      navigationProperties: [
+        { name: 'items', type: 'Default.OrderItem', nullable: false, isCollection: true },
+      ],
+      keyProperties: ['id'],
+      isReadOnly: false,
+    }
+    const orderItemEntityType: EdmEntityType = {
+      name: 'OrderItem',
+      namespace: 'Default',
+      properties: [
+        { name: 'id', type: 'Edm.Int32', nullable: false },
+        { name: 'quantity', type: 'Edm.Int32', nullable: false },
+        { name: 'orderId', type: 'Edm.Int32', nullable: false },
+      ],
+      navigationProperties: [],
+      keyProperties: ['id'],
+      isReadOnly: false,
+    }
+    const orderEntitySet: EdmEntitySet = {
+      name: 'Orders',
+      entityTypeName: 'Order',
+      namespace: 'Default',
+      isReadOnly: false,
+    }
+    const orderItemEntitySet: EdmEntitySet = {
+      name: 'OrderItems',
+      entityTypeName: 'OrderItem',
+      namespace: 'Default',
+      isReadOnly: false,
+    }
+
+    function makeDeepRegistry(): EdmRegistry {
+      const reg = new EdmRegistry()
+      reg.register(orderEntityType, orderEntitySet)
+      reg.register(orderItemEntityType, orderItemEntitySet)
+      return reg
+    }
+
+    it('Test D1: saves parent and returns entity with locationUrl when no nav props in body', async () => {
+      const saved = { id: 42, totalAmount: 100, status: 'new' }
+      const { repo, create, save } = makeMockRepo()
+      create.mockReturnValue(saved)
+      save.mockResolvedValue(saved)
+
+      const deepReg = makeDeepRegistry()
+      autoHandler = new TypeOrmAutoHandler(translator, deepReg, makeOptions(), repo)
+
+      // Use a manager that delegates to the same repo
+      const managerRepo = { create: create, save: save }
+      const manager = {
+        getRepository: vi.fn().mockReturnValue(managerRepo),
+      } as unknown as EntityManager
+
+      const result = await autoHandler.handleDeepCreate(
+        { totalAmount: 100, status: 'new' },
+        'Orders',
+        manager,
+      )
+
+      expect(create).toHaveBeenCalledWith({ totalAmount: 100, status: 'new' })
+      expect(save).toHaveBeenCalled()
+      expect((result.entity as { id: number }).id).toBe(42)
+      expect(result.locationUrl).toBe('/odata/Orders(42)')
+    })
+
+    it('Test D2: saves parent then child with injected FK when nav prop present', async () => {
+      const savedParent = { id: 10, totalAmount: 200, status: 'new' }
+      const childItem = { quantity: 2, unitPrice: 50, productId: 1 }
+
+      const parentCreate = vi.fn().mockReturnValue(savedParent)
+      const parentSave = vi.fn().mockResolvedValue(savedParent)
+      const childCreate = vi.fn().mockReturnValue({ ...childItem, orderId: 10 })
+      const childSave = vi.fn().mockResolvedValue({ id: 1, ...childItem, orderId: 10 })
+
+      const parentRepo = { create: parentCreate, save: parentSave }
+      const childRepo = { create: childCreate, save: childSave }
+
+      let callCount = 0
+      const getRepository = vi.fn().mockImplementation(() => {
+        callCount++
+        return callCount === 1 ? parentRepo : childRepo
+      })
+
+      const manager = { getRepository } as unknown as EntityManager
+
+      // Mock DataSource that resolves OrderItem class
+      const mockOrderItemMeta = { name: 'OrderItem', target: class OrderItem {} }
+      const mockDataSource = {
+        getMetadata: vi.fn().mockReturnValue({
+          relations: [
+            {
+              propertyName: 'items',
+              inverseRelation: { joinColumns: [{ propertyName: 'orderId' }] },
+            },
+          ],
+        }),
+        entityMetadatas: [mockOrderItemMeta],
+      } as unknown as DataSource
+
+      const deepReg = makeDeepRegistry()
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        deepReg,
+        makeOptions(),
+        repo,
+        undefined,
+        mockDataSource,
+      )
+
+      const result = await autoHandler.handleDeepCreate(
+        { totalAmount: 200, status: 'new', items: [childItem] },
+        'Orders',
+        manager,
+      )
+
+      expect(parentSave).toHaveBeenCalled()
+      // Child should have been saved with orderId=10 injected
+      expect(childCreate).toHaveBeenCalledWith(expect.objectContaining({ orderId: 10 }))
+      expect(result.locationUrl).toBe('/odata/Orders(10)')
+    })
+
+    it('Test D3: throws 400 when depth >= maxDeepInsertDepth', async () => {
+      const deepReg = makeDeepRegistry()
+      const { repo } = makeMockRepo()
+      const options = { ...makeOptions(), maxDeepInsertDepth: 2 }
+      autoHandler = new TypeOrmAutoHandler(translator, deepReg, options, repo)
+
+      const manager = { getRepository: vi.fn() } as unknown as EntityManager
+
+      await expect(
+        autoHandler.handleDeepCreate({ totalAmount: 100 }, 'Orders', manager, 2),
+      ).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('Test D4: wraps child errors with navigation path context', async () => {
+      const savedParent = { id: 5, totalAmount: 100, status: 'new' }
+      const parentCreate = vi.fn().mockReturnValue(savedParent)
+      const parentSave = vi.fn().mockResolvedValue(savedParent)
+      const childCreate = vi.fn().mockReturnValue({})
+      const childSave = vi.fn().mockRejectedValue(new Error('FK constraint violation'))
+
+      const parentRepo = { create: parentCreate, save: parentSave }
+      const childRepo = { create: childCreate, save: childSave }
+
+      let callCount = 0
+      const getRepository = vi.fn().mockImplementation(() => {
+        callCount++
+        return callCount === 1 ? parentRepo : childRepo
+      })
+      const manager = { getRepository } as unknown as EntityManager
+
+      const mockOrderItemMeta = { name: 'OrderItem', target: class OrderItem {} }
+      const mockDataSource = {
+        getMetadata: vi.fn().mockReturnValue({
+          relations: [
+            {
+              propertyName: 'items',
+              inverseRelation: { joinColumns: [{ propertyName: 'orderId' }] },
+            },
+          ],
+        }),
+        entityMetadatas: [mockOrderItemMeta],
+      } as unknown as DataSource
+
+      const deepReg = makeDeepRegistry()
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        deepReg,
+        makeOptions(),
+        repo,
+        undefined,
+        mockDataSource,
+      )
+
+      const error = await autoHandler
+        .handleDeepCreate(
+          { totalAmount: 100, status: 'new', items: [{ quantity: 2 }] },
+          'Orders',
+          manager,
+        )
+        .catch((e: unknown) => e)
+
+      expect((error as { status: number }).status).toBe(400)
+      const body = (error as { response: { error: { message: string } } }).response.error.message
+      expect(body).toContain('items[0]')
+      expect(body).toContain('FK constraint violation')
     })
   })
 

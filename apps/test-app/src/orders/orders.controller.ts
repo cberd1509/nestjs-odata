@@ -12,6 +12,7 @@ import {
   type ODataQuery,
 } from '@nestjs-odata/core'
 import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
+import { DataSource } from 'typeorm'
 
 /**
  * OrdersController — demonstrates @ODataController + CRUD + PUT decorator pattern.
@@ -24,7 +25,10 @@ import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
  */
 @ODataController('Orders')
 export class OrdersController {
-  constructor(private readonly handler: TypeOrmAutoHandler) {}
+  constructor(
+    private readonly handler: TypeOrmAutoHandler,
+    private readonly dataSource: DataSource,
+  ) {}
 
   /**
    * GET /odata/Orders
@@ -58,10 +62,36 @@ export class OrdersController {
 
   /**
    * POST /odata/Orders
+   *
+   * Supports deep insert: if the body contains navigation property arrays (e.g. "items"),
+   * creates the parent and all children atomically in a single transaction.
+   * Falls back to handleCreate() when no navigation properties are present.
    */
   @ODataPost('Orders')
   async createOrder(@Body() body: Record<string, unknown>) {
-    return this.handler.handleCreate(body, 'Orders')
+    // Detect nested navigation property arrays
+    const hasNavProps = Object.values(body).some(
+      (v) => Array.isArray(v) && (v as unknown[]).length > 0,
+    )
+
+    if (!hasNavProps) {
+      return this.handler.handleCreate(body, 'Orders')
+    }
+
+    // Deep insert: wrap in an explicit transaction
+    const queryRunner = this.dataSource.createQueryRunner()
+    await queryRunner.connect()
+    await queryRunner.startTransaction()
+    try {
+      const result = await this.handler.handleDeepCreate(body, 'Orders', queryRunner.manager)
+      await queryRunner.commitTransaction()
+      return result
+    } catch (err) {
+      await queryRunner.rollbackTransaction()
+      throw err
+    } finally {
+      await queryRunner.release()
+    }
   }
 
   /**

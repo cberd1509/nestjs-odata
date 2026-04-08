@@ -39,6 +39,11 @@ export interface ODataModuleOptions {
   /** Strategy when a TypeScript type cannot be mapped to an EDM primitive. Default: 'skip' (per D-10) */
   unmappedTypeStrategy?: UnmappedTypeStrategy
   /**
+   * Maximum nesting depth for deep insert POST bodies. Default: 5.
+   * Per T-10-05: prevents denial-of-service via unbounded recursion.
+   */
+  maxDeepInsertDepth?: number
+  /**
    * OData controller classes decorated with @ODataController().
    * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
    * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
@@ -55,6 +60,8 @@ export interface ODataModuleResolvedOptions {
   /** Maximum nesting depth of $filter expressions (SEC-04). Default: 10 */
   maxFilterDepth: number
   unmappedTypeStrategy: UnmappedTypeStrategy
+  /** Maximum nesting depth for deep insert POST bodies. Default: 5. */
+  maxDeepInsertDepth: number
 }
 
 const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
@@ -63,6 +70,7 @@ const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
   maxExpandDepth: 2,
   maxFilterDepth: 10,
   unmappedTypeStrategy: 'skip',
+  maxDeepInsertDepth: 5,
 }
 
 const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } =

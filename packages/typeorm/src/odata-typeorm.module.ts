@@ -163,7 +163,14 @@ export class ODataTypeOrmModule {
               throw new Error('ODataTypeOrmModule.forFeature() requires at least one entity class')
             }
             const repo = dataSource.getRepository(firstEntity as new () => ObjectLiteral)
-            return new TypeOrmAutoHandler(translator, edmRegistry, options, repo, etagProvider)
+            return new TypeOrmAutoHandler(
+              translator,
+              edmRegistry,
+              options,
+              repo,
+              etagProvider,
+              dataSource,
+            )
           },
           inject: [
             TypeOrmQueryTranslator,
