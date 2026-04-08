@@ -14,6 +14,7 @@ import type {
 import {
   EdmRegistry,
   ETAG_PROVIDER,
+  ODataModule,
   ODATA_MODULE_OPTIONS,
   SEARCH_PROVIDER,
   type ODataModuleOptions,
@@ -103,12 +104,9 @@ export class ODataTypeOrmModule {
   ): DynamicModule {
     // Patch BatchController's PATH_METADATA to include the serviceRoot so
     // POST {serviceRoot}/$batch is registered correctly.
-    // This mirrors how ODataModule.forRoot() patches @ODataController paths.
-    // Patch BatchController's PATH_METADATA to the serviceRoot prefix.
-    // The method decorator @Post('$batch') adds the '$batch' suffix, so the
-    // controller prefix must be just the serviceRoot (e.g. 'odata'),
-    // resulting in the full route: /odata/$batch.
-    const serviceRoot = options?.serviceRoot ?? 'odata'
+    // Per D-07, D-08: inherit serviceRoot from ODataModule.registeredServiceRoot
+    // when not explicitly provided. Single source of truth from forRoot().
+    const serviceRoot: string = options?.serviceRoot ?? ODataModule.registeredServiceRoot ?? 'odata'
     const root = serviceRoot.startsWith('/') ? serviceRoot.slice(1) : serviceRoot
     Reflect.defineMetadata(PATH_METADATA, root, BatchController)
 

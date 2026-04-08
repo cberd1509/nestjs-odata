@@ -126,8 +126,24 @@ function createMetadataControllerWithPath(serviceRoot: string): typeof MetadataC
   exports: [EdmRegistry],
 })
 export class ODataModule extends ConfigurableModuleClass {
+  /** Static storage for serviceRoot, set by forRoot() and read by forFeature() adapters. */
+  private static _serviceRoot: string = ''
+
+  /** Returns the serviceRoot registered via forRoot(). Used by adapter modules (e.g. ODataTypeOrmModule). */
+  static get registeredServiceRoot(): string {
+    return ODataModule._serviceRoot
+  }
+
   /** Override forRoot to inject the resolved-options provider into the dynamic module. */
   static override forRoot(options: ODataModuleOptions): DynamicModule {
+    // Per T-12-01: validate serviceRoot is a non-empty string
+    if (!options.serviceRoot || options.serviceRoot.trim() === '') {
+      throw new Error('ODataModule.forRoot(): serviceRoot must be a non-empty string')
+    }
+
+    // Store serviceRoot for adapter modules to read synchronously
+    ODataModule._serviceRoot = options.serviceRoot
+
     const parent = super.forRoot(options)
     const metadataController = createMetadataControllerWithPath(options.serviceRoot)
 
