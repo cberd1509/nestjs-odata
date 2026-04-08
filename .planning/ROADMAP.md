@@ -187,9 +187,9 @@ Plans:
 **Plans:** 3 plans
 Plans:
 
-- [ ] 08-01-PLAN.md — Documentation infrastructure: TypeDoc, vitepress-plugin-llms, VitePress theme, GitHub Pages workflow
-- [ ] 08-02-PLAN.md — Audit and rewrite all 11 doc files, create filter-functions guide
-- [ ] 08-03-PLAN.md — Doc-guardian skill creation and full build verification
+- [x] 08-01-PLAN.md — Documentation infrastructure: TypeDoc, vitepress-plugin-llms, VitePress theme, GitHub Pages workflow
+- [x] 08-02-PLAN.md — Audit and rewrite all 11 doc files, create filter-functions guide
+- [x] 08-03-PLAN.md — Doc-guardian skill creation and full build verification
 
 ### Phase 9: Response Annotations and ETags
 
