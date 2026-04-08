@@ -1,0 +1,17 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["../packages/core/src/index.ts"],
+  "tsconfig": "../packages/core/tsconfig.json",
+  "plugin": ["typedoc-plugin-markdown", "typedoc-vitepress-theme"],
+  "out": "./api/generated",
+  "readme": "none",
+  "hideBreadcrumbs": true,
+  "hidePageHeader": true,
+  "entryFileName": "index.md",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "skipErrorChecking": true,
+  "useHTMLEncodedBrackets": true,
+  "sanitizeComments": true
+}

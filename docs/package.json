@@ -5,10 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vitepress dev",
-    "build": "vitepress build",
-    "preview": "vitepress preview"
+    "build": "typedoc && vitepress build",
+    "preview": "vitepress preview",
+    "typedoc": "typedoc"
   },
   "devDependencies": {
-    "vitepress": "^1.6.0"
+    "typedoc": "^0.28.18",
+    "typedoc-plugin-markdown": "^4.11.0",
+    "typedoc-vitepress-theme": "^1.1.2",
+    "vitepress": "^1.6.0",
+    "vitepress-plugin-llms": "^1.12.0"
   }
 }
