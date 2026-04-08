@@ -5,16 +5,23 @@
 ### @ODataController()
 
 ```typescript
-@ODataController(entitySetName: string)
+@ODataController(entitySetName: string, options?: ODataControllerOptions)
 ```
 
 Marks a class as an OData controller for the given entity set. Sets the initial route prefix to `{entitySetName}`, which is then patched to `{serviceRoot}/{entitySetName}` by `ODataModule.forRoot()`.
 
 **Parameters:**
 
-| Parameter       | Type     | Description                                   |
-| --------------- | -------- | --------------------------------------------- |
-| `entitySetName` | `string` | The OData entity set name (e.g. `'Products'`) |
+| Parameter       | Type                      | Description                                                        |
+| --------------- | ------------------------- | ------------------------------------------------------------------ |
+| `entitySetName` | `string`                  | The OData entity set name (e.g. `'Products'`)                      |
+| `options`       | `ODataControllerOptions?` | Optional configuration                                             |
+
+**ODataControllerOptions:**
+
+| Option | Type     | Default           | Description                                      |
+| ------ | -------- | ----------------- | ------------------------------------------------ |
+| `path` | `string` | `entitySetName`   | Override the NestJS controller route path prefix |
 
 **Requirements:**
 
@@ -53,9 +60,10 @@ Registers a `GET` handler for an entity set collection.
 
 **ODataGetOptions:**
 
-| Option | Type     | Default | Description                          |
-| ------ | -------- | ------- | ------------------------------------ |
-| `path` | `string` | `''`    | Sub-path within the entity set route |
+| Option        | Type      | Default | Description                                     |
+| ------------- | --------- | ------- | ----------------------------------------------- |
+| `path`        | `string`  | `''`    | Sub-path within the entity set route             |
+| `autoHandler` | `boolean` | `false` | Reserved for future auto-handler wiring support |
 
 **Example:**
 
