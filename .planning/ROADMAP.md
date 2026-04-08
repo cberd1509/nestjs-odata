@@ -204,7 +204,11 @@ Plans:
 3. `PATCH /Products(1)` with a stale `If-Match` header value returns HTTP 412 Precondition Failed with an OData error body — the update is not applied
 4. `GET /Products(1)` with `If-None-Match` matching the current ETag returns HTTP 304 Not Modified with no body
 
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+
+- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ### Phase 10: Advanced Write Operations
 
@@ -217,7 +221,11 @@ Plans:
 2. `POST /Orders` with a nested `Items` array in the body creates the order and all items in a single database transaction — if any item fails validation, neither the order nor any item is persisted
 3. A `$batch` changeset that POSTs an entity in request `r1` and then references `$1` in a subsequent request URL resolves `$1` to the created entity's key — the second operation succeeds without the client knowing the server-assigned key in advance
 
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+
+- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ### Phase 11: $search and $apply
 
@@ -231,7 +239,11 @@ Plans:
 3. `GET /Orders?$apply=aggregate(Total with sum as GrandTotal)` returns a single aggregated row with the sum — not a collection of raw entities
 4. `GET /Orders?$apply=filter(Status eq 'open')/groupby((CustomerId),aggregate($count as OpenOrders))` executes the filter transformation before grouping — pipeline steps compose correctly
 
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+
+- [ ] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
+- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
 
 ## Progress
 
@@ -248,7 +260,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 6. v1 Polish and Config Wiring                        | 0/2            | Planning complete | -          |
 | 7. Filter Functions                                   | 2/2            | Complete          | 2026-04-08 |
 | 8. Documentation, GitHub Pages, and llms.txt          | 3/3            | Complete          | 2026-04-08 |
-| 9. Response Annotations and ETags                     | 0/TBD          | Not started       | -          |
+| 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
 | 10. Advanced Write Operations                         | 0/TBD          | Not started       | -          |
 | 11. $search and $apply                                | 0/TBD          | Not started       | -          |
 | 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
