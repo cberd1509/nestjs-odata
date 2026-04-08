@@ -2,7 +2,7 @@
 
 Advanced filter operations available in `$filter` expressions: lambda expressions (`any`/`all`), arithmetic operators, date/time extraction functions, and string manipulation functions.
 
-These features were introduced in Phase 7 of nestjs-odata's v1.1 milestone. All functions are implemented in `TypeOrmFilterVisitor` and translate directly to parameterized SQL — no string interpolation.
+All functions are implemented in `TypeOrmFilterVisitor` and translate directly to parameterized SQL — no string interpolation.
 
 ## Lambda Expressions
 
@@ -102,14 +102,14 @@ GET /odata/Orders?$filter=not Items/any(i: i/Status ne 'fulfilled')
 
 Use arithmetic expressions directly within `$filter` comparisons. The full set of OData v4 arithmetic operators is supported.
 
-| Operator | SQL | Example |
-|----------|-----|---------|
-| `add` | `+` | `$filter=Price add Tax gt 50` |
-| `sub` | `-` | `$filter=Price sub Discount gt 10` |
-| `mul` | `*` | `$filter=Price mul Quantity gt 1000` |
-| `div` | `/` | `$filter=Total div Count gt 25` |
-| `divby` | `/` | `$filter=Total divby Count gt 25` (decimal division alias) |
-| `mod` | `%` | `$filter=Quantity mod 3 eq 0` |
+| Operator | SQL | Example                                                    |
+| -------- | --- | ---------------------------------------------------------- |
+| `add`    | `+` | `$filter=Price add Tax gt 50`                              |
+| `sub`    | `-` | `$filter=Price sub Discount gt 10`                         |
+| `mul`    | `*` | `$filter=Price mul Quantity gt 1000`                       |
+| `div`    | `/` | `$filter=Total div Count gt 25`                            |
+| `divby`  | `/` | `$filter=Total divby Count gt 25` (decimal division alias) |
+| `mod`    | `%` | `$filter=Quantity mod 3 eq 0`                              |
 
 **Examples:**
 
@@ -145,14 +145,14 @@ All operands are parameterized — no SQL injection risk.
 
 Extract date and time components from datetime columns and compare them numerically. These functions translate to dialect-specific SQL: `strftime()` for SQLite and `EXTRACT()` for PostgreSQL and other ANSI-compliant databases.
 
-| Function | Extracts | SQLite SQL | PostgreSQL SQL |
-|----------|----------|-----------|----------------|
-| `year(field)` | Year (4-digit) | `CAST(strftime('%Y', field) AS INTEGER)` | `EXTRACT(YEAR FROM field)` |
-| `month(field)` | Month (1–12) | `CAST(strftime('%m', field) AS INTEGER)` | `EXTRACT(MONTH FROM field)` |
-| `day(field)` | Day of month (1–31) | `CAST(strftime('%d', field) AS INTEGER)` | `EXTRACT(DAY FROM field)` |
-| `hour(field)` | Hour (0–23) | `CAST(strftime('%H', field) AS INTEGER)` | `EXTRACT(HOUR FROM field)` |
-| `minute(field)` | Minute (0–59) | `CAST(strftime('%M', field) AS INTEGER)` | `EXTRACT(MINUTE FROM field)` |
-| `second(field)` | Second (0–59) | `CAST(strftime('%S', field) AS INTEGER)` | `EXTRACT(SECOND FROM field)` |
+| Function        | Extracts            | SQLite SQL                               | PostgreSQL SQL               |
+| --------------- | ------------------- | ---------------------------------------- | ---------------------------- |
+| `year(field)`   | Year (4-digit)      | `CAST(strftime('%Y', field) AS INTEGER)` | `EXTRACT(YEAR FROM field)`   |
+| `month(field)`  | Month (1–12)        | `CAST(strftime('%m', field) AS INTEGER)` | `EXTRACT(MONTH FROM field)`  |
+| `day(field)`    | Day of month (1–31) | `CAST(strftime('%d', field) AS INTEGER)` | `EXTRACT(DAY FROM field)`    |
+| `hour(field)`   | Hour (0–23)         | `CAST(strftime('%H', field) AS INTEGER)` | `EXTRACT(HOUR FROM field)`   |
+| `minute(field)` | Minute (0–59)       | `CAST(strftime('%M', field) AS INTEGER)` | `EXTRACT(MINUTE FROM field)` |
+| `second(field)` | Second (0–59)       | `CAST(strftime('%S', field) AS INTEGER)` | `EXTRACT(SECOND FROM field)` |
 
 **Examples:**
 
@@ -191,27 +191,27 @@ The `TypeOrmFilterVisitor` accepts a `dialect` option (`'sqlite'`, `'postgres'`,
 
 ## String Functions
 
-### Basic string functions (Phase 3+)
+### Basic string functions
 
-These functions were available from the initial release:
+These functions have been available since the initial release:
 
-| Function | Behavior | SQL Translation |
-|----------|----------|-----------------|
-| `contains(field, 'value')` | Substring match | `field LIKE '%value%'` |
-| `startswith(field, 'value')` | Prefix match | `field LIKE 'value%'` |
-| `endswith(field, 'value')` | Suffix match | `field LIKE '%value'` |
-| `tolower(field)` | Lowercase | `LOWER(field)` |
-| `toupper(field)` | Uppercase | `UPPER(field)` |
-| `trim(field)` | Strip whitespace | `TRIM(field)` |
-| `length(field)` | Character count | `LENGTH(field)` |
+| Function                     | Behavior         | SQL Translation        |
+| ---------------------------- | ---------------- | ---------------------- |
+| `contains(field, 'value')`   | Substring match  | `field LIKE '%value%'` |
+| `startswith(field, 'value')` | Prefix match     | `field LIKE 'value%'`  |
+| `endswith(field, 'value')`   | Suffix match     | `field LIKE '%value'`  |
+| `tolower(field)`             | Lowercase        | `LOWER(field)`         |
+| `toupper(field)`             | Uppercase        | `UPPER(field)`         |
+| `trim(field)`                | Strip whitespace | `TRIM(field)`          |
+| `length(field)`              | Character count  | `LENGTH(field)`        |
 
 ::: tip LIKE injection prevention
 `%` and `_` characters in the search value are automatically escaped before SQL translation. The pattern `contains(name, '100%')` translates to `LIKE '%100\%%'`, not `LIKE '%100%%'`.
 :::
 
-### Phase 7 string functions
+### Additional string functions
 
-Three additional string functions were added in Phase 7:
+Three additional string functions are available:
 
 #### indexof()
 
@@ -325,15 +325,15 @@ curl 'http://localhost:3000/odata/Orders?$filter=year(OrderDate) eq 2024 and Ite
 
 ## SQL Translation Reference
 
-| OData Filter | SQL (PostgreSQL) |
-|---|---|
-| `Items/any(i: i/Price gt 100)` | `EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND i.Price > 100)` |
-| `Items/all(i: i/Shipped eq true)` | `NOT EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND NOT (i.Shipped = true))` |
-| `Price add Tax gt 50` | `(Price + Tax) > 50` |
-| `year(CreatedAt) eq 2024` | `EXTRACT(YEAR FROM CreatedAt) = 2024` |
-| `indexof(Name, 'Pro') ge 0` | `STRPOS(Name, 'Pro') - 1 >= 0` |
-| `substring(Name, 0, 3) eq 'Pro'` | `SUBSTR(Name, 1, 3) = 'Pro'` |
-| `concat(First, Last) eq 'JohnDoe'` | `First \|\| Last = 'JohnDoe'` |
+| OData Filter                       | SQL (PostgreSQL)                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| `Items/any(i: i/Price gt 100)`     | `EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND i.Price > 100)`              |
+| `Items/all(i: i/Shipped eq true)`  | `NOT EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND NOT (i.Shipped = true))` |
+| `Price add Tax gt 50`              | `(Price + Tax) > 50`                                                                        |
+| `year(CreatedAt) eq 2024`          | `EXTRACT(YEAR FROM CreatedAt) = 2024`                                                       |
+| `indexof(Name, 'Pro') ge 0`        | `STRPOS(Name, 'Pro') - 1 >= 0`                                                              |
+| `substring(Name, 0, 3) eq 'Pro'`   | `SUBSTR(Name, 1, 3) = 'Pro'`                                                                |
+| `concat(First, Last) eq 'JohnDoe'` | `First \|\| Last = 'JohnDoe'`                                                               |
 
 All values are bound as named parameters — never interpolated into the SQL string.
 
@@ -343,4 +343,4 @@ All values are bound as named parameters — never interpolated into the SQL str
 
 - [Query Options](./query-options.md) — Full `$filter`, `$select`, `$orderby`, pagination reference
 - [Security](./security.md) — `maxFilterDepth` to limit nesting of lambda and compound expressions
-- [packages/typeorm/src/translator/filter-visitor.ts](../../packages/typeorm/src/translator/filter-visitor.ts) — Full implementation source
+- [`TypeOrmFilterVisitor` source](https://github.com/nestjs-odata/nestjs-odata/blob/main/packages/typeorm/src/translator/filter-visitor.ts) — Full implementation source

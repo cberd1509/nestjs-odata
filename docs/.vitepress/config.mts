@@ -23,6 +23,7 @@ export default defineConfig({
     ],
     sidebar: {
       '/guide/': [
+        { text: 'Overview', link: '/guide/' },
         { text: 'Getting Started', link: '/guide/getting-started' },
         { text: 'Configuration', link: '/guide/configuration' },
         { text: 'Query Options', link: '/guide/query-options' },
@@ -33,14 +34,17 @@ export default defineConfig({
         { text: 'Security', link: '/guide/security' },
       ],
       '/api/': [
+        { text: 'Overview', link: '/api/' },
         { text: 'Module API', link: '/api/module' },
         { text: 'Decorators', link: '/api/decorators' },
+        { text: 'TypeORM Adapter', link: '/api/typeorm' },
         {
           text: 'Auto-generated Reference',
           items: typedocSidebar,
         },
       ],
       '/examples/': [
+        { text: 'Overview', link: '/examples/' },
         { text: 'Basic CRUD', link: '/examples/basic-crud' },
         { text: 'Custom Controller', link: '/examples/custom-controller' },
       ],
