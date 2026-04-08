@@ -6,7 +6,10 @@ import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQueryResult } from '../query/odata-query.types.js'
 import { buildContextUrl } from './odata-context-url.builder.js'
+import { annotateEntity, annotateEntities } from './odata-annotation.builder.js'
+import type { AnnotationContext } from './odata-annotation.builder.js'
 import { ODATA_ROUTE_KEY } from '../decorators/metadata-keys.js'
+import { EdmRegistry } from '../edm/edm-registry.js'
 
 /** Metadata value shape set by @ODataGet() and CRUD decorators */
 interface ODataRouteMetadata {
@@ -24,6 +27,9 @@ interface ODataRouteMetadata {
  * Response format:
  *   {
  *     '@odata.context': '/odata/$metadata#EntitySet',
+ *     '@odata.id': '/odata/EntitySet(key)',     (per RESP-04)
+ *     '@odata.type': '#Namespace.EntityType',   (per RESP-05)
+ *     '{nav}@odata.navigationLink': '...',      (per RESP-06)
  *     'value': [...],
  *     '@odata.count': N,       (only when present)
  *     '@odata.nextLink': '...' (only when present)
@@ -38,7 +44,25 @@ export class ODataResponseInterceptor implements NestInterceptor {
   constructor(
     private readonly reflector: Reflector,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
+    private readonly edmRegistry: EdmRegistry,
   ) {}
+
+  /**
+   * Resolve the AnnotationContext for an entity set name.
+   * Returns null when the entity set or its type is not registered (graceful degradation).
+   */
+  private resolveAnnotationContext(entitySetName: string): AnnotationContext | null {
+    const entitySet = this.edmRegistry.getEntitySet(entitySetName)
+    if (!entitySet) return null
+    const entityType = this.edmRegistry.getEntityType(entitySet.entityTypeName)
+    if (!entityType) return null
+    return {
+      serviceRoot: this.options.serviceRoot,
+      entitySetName,
+      entityType,
+      namespace: this.options.namespace,
+    }
+  }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     // Check if this route has OData metadata (set by @ODataGet())
@@ -65,16 +89,21 @@ export class ODataResponseInterceptor implements NestInterceptor {
               .getResponse<{ setHeader: (k: string, v: string) => void }>()
             httpResponse.setHeader('Location', createResult.locationUrl)
           }
-          const entity = createResult.entity ?? result
+          const entity = (createResult.entity ?? result) as Record<string, unknown>
           const contextUrl = buildContextUrl(
             this.options.serviceRoot,
             entitySetName,
             undefined,
             true,
           )
+
+          // Annotate the created entity (RESP-04, RESP-05, RESP-06)
+          const annotationCtx = this.resolveAnnotationContext(entitySetName)
+          const annotatedEntity = annotationCtx ? annotateEntity(entity, annotationCtx) : entity
+
           return {
             '@odata.context': contextUrl,
-            ...(entity as Record<string, unknown>),
+            ...annotatedEntity,
           }
         }
 
@@ -86,9 +115,15 @@ export class ODataResponseInterceptor implements NestInterceptor {
             undefined,
             true,
           )
+
+          // Annotate the single entity (RESP-04, RESP-05, RESP-06)
+          const annotationCtx = this.resolveAnnotationContext(entitySetName)
+          const entity = result as Record<string, unknown>
+          const annotatedEntity = annotationCtx ? annotateEntity(entity, annotationCtx) : entity
+
           return {
             '@odata.context': contextUrl,
-            ...(result as Record<string, unknown>),
+            ...annotatedEntity,
           }
         }
 
@@ -100,10 +135,16 @@ export class ODataResponseInterceptor implements NestInterceptor {
           queryResult.select,
         )
 
+        // Annotate each item in the collection (RESP-04, RESP-05, RESP-06)
+        const annotationCtx = this.resolveAnnotationContext(entitySetName)
+        const items = annotationCtx
+          ? annotateEntities(queryResult.items as Record<string, unknown>[], annotationCtx)
+          : queryResult.items
+
         // Build response: only include optional keys when they have values (D-06, D-08)
         const response: Record<string, unknown> = {
           '@odata.context': contextUrl,
-          value: queryResult.items,
+          value: items,
         }
 
         if (queryResult.count !== undefined) {
