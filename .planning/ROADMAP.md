@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Filter Functions** - Lambda expressions and date/time, arithmetic, string functions translate to SQL
 - [ ] **Phase 8: Documentation, GitHub Pages, and llms.txt** - VitePress docs site, API reference, GitHub Pages deployment, llms.txt for LLM discoverability
 - [ ] **Phase 9: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
-- [ ] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
+- [x] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references (completed 2026-04-08)
 - [ ] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems
 - [ ] **Phase 12: Developer Experience Audit and API Simplification** - Eliminate API friction, simplify module wiring, full DX audit
 
@@ -221,11 +221,11 @@ Plans:
 2. `POST /Orders` with a nested `Items` array in the body creates the order and all items in a single database transaction — if any item fails validation, neither the order nor any item is persisted
 3. A `$batch` changeset that POSTs an entity in request `r1` and then references `$1` in a subsequent request URL resolves `$1` to the created entity's key — the second operation succeeds without the client knowing the server-assigned key in advance
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 
 - [x] 10-01-PLAN.md — @ODataPut decorator, handleReplace() with metadata-driven default construction, PUT e2e tests
-- [ ] 10-02-PLAN.md — Deep insert (handleDeepCreate with maxDeepInsertDepth), Content-ID batch reference resolution
+- [x] 10-02-PLAN.md — Deep insert (handleDeepCreate with maxDeepInsertDepth), Content-ID batch reference resolution
 
 ### Phase 11: $search and $apply
 
@@ -260,7 +260,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Filter Functions                                   | 2/2            | Complete          | 2026-04-08 |
 | 8. Documentation, GitHub Pages, and llms.txt          | 3/3            | Complete          | 2026-04-08 |
 | 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
-| 10. Advanced Write Operations                         | 1/2            | In Progress       |            |
+| 10. Advanced Write Operations                         | 2/2            | Complete          | 2026-04-08 |
 | 11. $search and $apply                                | 0/TBD          | Not started       | -          |
 | 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
 
