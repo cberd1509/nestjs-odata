@@ -18,4 +18,10 @@ features:
     details: Built from the OASIS OData v4 ABNF grammar. Responses pass OData validation.
   - title: NestJS Native
     details: Works with NestJS decorators, guards, pipes, and interceptors. Mix OData and REST routes freely.
+  - title: Rich Filter Support
+    details: Lambda any/all, arithmetic operators, date/time functions, string functions — all translated to parameterized SQL.
+  - title: $batch Support
+    details: Multi-operation batch requests with atomic changesets. Zero additional setup when using ODataTypeOrmModule.
+  - title: Security Built-In
+    details: maxTop, maxExpandDepth, maxFilterDepth limits enforced server-side. Parameterized queries prevent SQL injection.
 ---
