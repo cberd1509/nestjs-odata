@@ -116,82 +116,84 @@
 
 ## Out of Scope
 
-| Feature | Reason |
-|---------|--------|
-| OData v2/v3 support | v4 only — folder structure allows future version packages |
-| Client-side OData SDK | Server-side library only |
-| GraphQL bridge | Different paradigm, not a goal |
-| Built-in authentication/authorization | NestJS Guards handle this — not the library's job |
-| Sequelize adapter | Low demand, TypeORM covers the primary use case |
-| Custom media entities (streaming) | High complexity, niche use case, defer to v2+ |
+| Feature                               | Reason                                                    |
+| ------------------------------------- | --------------------------------------------------------- |
+| OData v2/v3 support                   | v4 only — folder structure allows future version packages |
+| Client-side OData SDK                 | Server-side library only                                  |
+| GraphQL bridge                        | Different paradigm, not a goal                            |
+| Built-in authentication/authorization | NestJS Guards handle this — not the library's job         |
+| Sequelize adapter                     | Low demand, TypeORM covers the primary use case           |
+| Custom media entities (streaming)     | High complexity, niche use case, defer to v2+             |
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| SCAF-01 | Phase 1 | Pending |
-| SCAF-02 | Phase 1 | Pending |
-| SCAF-03 | Phase 1 | Pending |
-| SCAF-04 | Phase 1 | Pending |
-| SCAF-05 | Phase 1 | Pending |
-| SCAF-06 | Phase 1 | Pending |
-| SCAF-07 | Phase 1 | Pending |
-| SCAF-08 | Phase 1 | Pending |
-| SCAF-09 | Phase 1 | Pending |
-| SCAF-10 | Phase 1 | Pending |
-| SCAF-11 | Phase 1 | Pending |
-| EDM-01 | Phase 2 | Pending |
-| EDM-02 | Phase 2 | Pending |
-| EDM-03 | Phase 2 | Pending |
-| EDM-04 | Phase 2 | Pending |
-| EDM-05 | Phase 2 | Pending |
-| EDM-06 | Phase 2 | Pending |
-| QUERY-01 | Phase 3 | Pending |
-| QUERY-02 | Phase 3 | Pending |
-| QUERY-03 | Phase 3 | Pending |
-| QUERY-04 | Phase 3 | Pending |
-| QUERY-05 | Phase 3 | Pending |
-| QUERY-06 | Phase 3 | Pending |
-| QUERY-07 | Phase 4 | Pending |
-| QUERY-08 | Phase 4 | Pending |
-| QUERY-09 | Phase 3 | Pending |
-| RESP-01 | Phase 3 | Pending |
-| RESP-02 | Phase 3 | Pending |
-| RESP-03 | Phase 4 | Pending |
-| CRUD-01 | Phase 4 | Pending |
-| CRUD-02 | Phase 4 | Pending |
-| CRUD-03 | Phase 4 | Pending |
-| CRUD-04 | Phase 4 | Pending |
-| BATCH-01 | Phase 5 | Pending |
-| BATCH-02 | Phase 5 | Pending |
-| BATCH-03 | Phase 5 | Pending |
-| MOD-01 | Phase 4 | Pending |
-| MOD-02 | Phase 4 | Pending |
-| MOD-03 | Phase 4 | Pending |
-| MOD-04 | Phase 4 | Pending |
-| MOD-05 | Phase 4 | Pending |
-| MOD-06 | Phase 4 | Pending |
-| SEC-01 | Phase 5 | Pending |
-| SEC-02 | Phase 5 | Pending |
-| SEC-03 | Phase 5 | Pending |
-| SEC-04 | Phase 5 | Pending |
-| TEST-01 | Phase 3 | Pending |
-| TEST-02 | Phase 3 | Pending |
-| TEST-03 | Phase 2 | Pending |
-| TEST-04 | Phase 4 | Pending |
-| TEST-05 | Phase 2 | Pending |
-| TEST-06 | Phase 4 | Pending |
-| PKG-01 | Phase 2 | Pending |
-| PKG-02 | Phase 2 | Pending |
-| PKG-03 | Phase 2 | Pending |
-| PKG-04 | Phase 2 | Pending |
-| PKG-05 | Phase 2 | Pending |
+| Requirement | Phase                 | Status  |
+| ----------- | --------------------- | ------- |
+| SCAF-01     | Phase 1               | Pending |
+| SCAF-02     | Phase 1               | Pending |
+| SCAF-03     | Phase 1               | Pending |
+| SCAF-04     | Phase 1               | Pending |
+| SCAF-05     | Phase 1               | Pending |
+| SCAF-06     | Phase 1               | Pending |
+| SCAF-07     | Phase 1               | Pending |
+| SCAF-08     | Phase 6 (gap closure) | Pending |
+| SCAF-09     | Phase 1               | Pending |
+| SCAF-10     | Phase 1               | Pending |
+| SCAF-11     | Phase 1               | Pending |
+| EDM-01      | Phase 2               | Pending |
+| EDM-02      | Phase 2               | Pending |
+| EDM-03      | Phase 2               | Pending |
+| EDM-04      | Phase 2               | Pending |
+| EDM-05      | Phase 2               | Pending |
+| EDM-06      | Phase 2               | Pending |
+| QUERY-01    | Phase 3               | Pending |
+| QUERY-02    | Phase 3               | Pending |
+| QUERY-03    | Phase 3               | Pending |
+| QUERY-04    | Phase 3               | Pending |
+| QUERY-05    | Phase 3               | Pending |
+| QUERY-06    | Phase 3               | Pending |
+| QUERY-07    | Phase 4               | Pending |
+| QUERY-08    | Phase 4               | Pending |
+| QUERY-09    | Phase 3               | Pending |
+| RESP-01     | Phase 3               | Pending |
+| RESP-02     | Phase 3               | Pending |
+| RESP-03     | Phase 4               | Pending |
+| CRUD-01     | Phase 4               | Pending |
+| CRUD-02     | Phase 4               | Pending |
+| CRUD-03     | Phase 4               | Pending |
+| CRUD-04     | Phase 4               | Pending |
+| BATCH-01    | Phase 5               | Pending |
+| BATCH-02    | Phase 5               | Pending |
+| BATCH-03    | Phase 5               | Pending |
+| MOD-01      | Phase 4               | Pending |
+| MOD-02      | Phase 6 (gap closure) | Pending |
+| MOD-03      | Phase 4               | Pending |
+| MOD-04      | Phase 4               | Pending |
+| MOD-05      | Phase 4               | Pending |
+| MOD-06      | Phase 4               | Pending |
+| SEC-01      | Phase 5               | Pending |
+| SEC-02      | Phase 5               | Pending |
+| SEC-03      | Phase 5               | Pending |
+| SEC-04      | Phase 6 (gap closure) | Pending |
+| TEST-01     | Phase 3               | Pending |
+| TEST-02     | Phase 3               | Pending |
+| TEST-03     | Phase 2               | Pending |
+| TEST-04     | Phase 4               | Pending |
+| TEST-05     | Phase 2               | Pending |
+| TEST-06     | Phase 4               | Pending |
+| PKG-01      | Phase 2               | Pending |
+| PKG-02      | Phase 2               | Pending |
+| PKG-03      | Phase 2               | Pending |
+| PKG-04      | Phase 2               | Pending |
+| PKG-05      | Phase 2               | Pending |
 
 **Coverage:**
+
 - v1 requirements: 50 total
 - Mapped to phases: 50/50
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-04-07*
-*Last updated: 2026-04-07 after roadmap creation*
+
+_Requirements defined: 2026-04-07_
+_Last updated: 2026-04-07 after roadmap creation_

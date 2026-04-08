@@ -18,6 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Query Engine and Response Format** - Full OData query surface and JSON envelope
 - [x] **Phase 4: CRUD, $expand, and Module System** - Write operations, relation expansion, and NestJS consumer API (completed 2026-04-07)
 - [x] **Phase 5: $batch, Security, and v1 Hardening** - Batch atomicity, security guards, full release pipeline, and CI compliance checks (completed 2026-04-07)
+- [ ] **Phase 6: v1 Polish and Config Wiring** - Close all audit gaps: config wiring, peer dep fix, changeset fix, adapter seam, sub-agent validation
 
 ## Phase Details
 
@@ -123,10 +124,25 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-03-PLAN.md — Coverage enforcement (@vitest/coverage-v8 thresholds) and CI/CD release pipeline with npm OIDC provenance
 - [x] 05-04-PLAN.md — VitePress documentation site (getting-started, API reference, examples for all v1 features)
 
+### Phase 6: v1 Polish and Config Wiring
+
+**Goal**: Close all gaps from the v1.0 milestone audit — wire disconnected config, fix packaging issues, and complete the adapter seam
+**Depends on**: Phase 5
+**Requirements**: SEC-04, MOD-02, SCAF-08
+**Gap Closure**: Closes all gaps from v1.0-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+
+1. `ODataModule.forRoot({ maxFilterDepth: 5 })` causes `TypeOrmFilterVisitor` to reject filters with depth > 5 — verified by unit test
+2. `pnpm changeset version` succeeds without validation errors (changeset config + peer dep version fixed)
+3. `ODataModule.forFeature([entity])` triggers EDM registration via `EDM_ENTITY_CONFIGS` token consumer — verified by integration test
+4. OData sub-agent answers 3 representative OData v4 spec questions correctly
+
+**Plans:** 0 plans (awaiting planning)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase                                 | Plans Complete | Status            | Completed  |
 | ------------------------------------- | -------------- | ----------------- | ---------- |
@@ -134,4 +150,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. EDM and $metadata                  | 5/5            | Complete          | 2026-04-07 |
 | 3. Query Engine and Response Format   | 0/4            | Planning complete | -          |
 | 4. CRUD, $expand, and Module System   | 5/5            | Complete          | 2026-04-07 |
-| 5. $batch, Security, and v1 Hardening | 4/4            | Complete          | 2026-04-07 |
+| 5. $batch, Security, and v1 Hardening | 5/5            | Complete          | 2026-04-07 |
+| 6. v1 Polish and Config Wiring        | 0/0            | Not started       | -          |
