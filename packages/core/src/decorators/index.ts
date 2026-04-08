@@ -7,7 +7,11 @@ export {
   ODATA_VIEW_KEY,
   ODATA_ROUTE_KEY,
   ODATA_CONTROLLER_KEY,
+  ODATA_ETAG_KEY,
 } from './metadata-keys.js'
+
+// @ODataETag decorator
+export { ODataETag, getETagProperty } from './odata-etag.decorator.js'
 
 // @EdmType decorator
 export type { EdmTypeOptions } from './edm-type.decorator.js'
