@@ -27,3 +27,10 @@ features:
   - title: Security Built-In
     details: maxTop, maxExpandDepth, maxFilterDepth limits enforced server-side. Parameterized queries prevent SQL injection.
 ---
+
+<div style="text-align: center; margin-top: -2rem; margin-bottom: 2rem;">
+  <a href="https://www.npmjs.com/package/@nestjs-odata/core"><img src="https://img.shields.io/npm/v/@nestjs-odata/core" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/@nestjs-odata/core"><img src="https://img.shields.io/npm/dm/@nestjs-odata/core" alt="npm downloads"></a>
+  <a href="https://github.com/nestjs-odata/nestjs-odata/actions"><img src="https://img.shields.io/github/actions/workflow/status/nestjs-odata/nestjs-odata/ci.yml" alt="CI"></a>
+  <a href="https://github.com/nestjs-odata/nestjs-odata/blob/main/LICENSE"><img src="https://img.shields.io/github/license/nestjs-odata/nestjs-odata" alt="license"></a>
+</div>
