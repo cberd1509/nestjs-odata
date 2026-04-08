@@ -230,10 +230,15 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 ### Phase 11: Documentation, GitHub Pages, and llms.txt
 
-**Goal:** VitePress documentation site with auto-generated API reference from TypeScript source, manual usage guides, GitHub Pages deployment via GitHub Actions, and llms.txt/llms-full.txt for LLM discoverability
+**Goal:** VitePress documentation site with auto-generated API reference from TypeScript source, manual usage guides, GitHub Pages deployment via GitHub Actions, llms.txt/llms-full.txt for LLM discoverability, and optionally an auto-generated MCP server for the library
 **Requirements**: TBD
 **Depends on:** Phase 8
-**Plans:** 0 plans
+**Research needed:**
+
+- `vitepress-plugin-llms` (https://github.com/okineadev/vitepress-plugin-llms) for auto-generating llms.txt from VitePress content
+- Libraries/tools for auto-generating MCP servers from TypeScript APIs or OpenAPI specs
+- typedoc + vitepress integration options for API reference generation
+  **Plans:** 0 plans
 
 Plans:
 
