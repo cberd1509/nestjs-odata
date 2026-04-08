@@ -262,6 +262,31 @@ class InnerFilterExprBuilder {
         return `${left} ${sqlOp} ${right}`
       }
     }
+    if (node.kind === 'FunctionCall') {
+      const name = node.name.toLowerCase()
+      if (name === 'contains' || name === 'startswith' || name === 'endswith') {
+        const prop = this.buildExpr(node.args[0])
+        const rawValue = String(node.args[1]?.kind === 'Literal' ? node.args[1].value : '')
+        const escaped = rawValue.replace(/%/g, '\\%').replace(/_/g, '\\_')
+        let pattern: string
+        if (name === 'contains') {
+          pattern = `%${escaped}%`
+        } else if (name === 'startswith') {
+          pattern = `${escaped}%`
+        } else {
+          pattern = `%${escaped}`
+        }
+        this.paramCount++
+        const paramName = `p${this.paramCount}`
+        this.params[paramName] = pattern
+        return `${prop} LIKE :${paramName}`
+      }
+      const sqlFn = SCALAR_FUNCTIONS[name]
+      if (sqlFn && node.args.length >= 1) {
+        const inner = this.buildExpr(node.args[0])
+        return `${sqlFn}(${inner})`
+      }
+    }
     if (node.kind === 'PropertyAccess') {
       return `${this.alias}.${node.path[0]}`
     }
