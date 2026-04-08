@@ -7,12 +7,16 @@ import { ODataValidationError } from '@nestjs-odata/core'
 type MockQb = SelectQueryBuilder<never> & {
   andWhere: MockInstance
   select: MockInstance
+  addSelect: MockInstance
+  groupBy: MockInstance
+  addGroupBy: MockInstance
   orderBy: MockInstance
   addOrderBy: MockInstance
   take: MockInstance
   skip: MockInstance
   getMany: MockInstance
   getManyAndCount: MockInstance
+  getRawMany: MockInstance
 }
 
 type MockRepo = Repository<never> & {
@@ -23,6 +27,9 @@ function makeQb(): MockQb {
   return {
     andWhere: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
+    addSelect: vi.fn().mockReturnThis(),
+    groupBy: vi.fn().mockReturnThis(),
+    addGroupBy: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     addOrderBy: vi.fn().mockReturnThis(),
     take: vi.fn().mockReturnThis(),
@@ -30,6 +37,7 @@ function makeQb(): MockQb {
     setParameter: vi.fn().mockReturnThis(),
     getMany: vi.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]),
     getManyAndCount: vi.fn().mockResolvedValue([[{ id: 1 }, { id: 2 }], 2]),
+    getRawMany: vi.fn().mockResolvedValue([]),
   } as unknown as MockQb
 }
 
@@ -278,6 +286,125 @@ describe('TypeOrmQueryTranslator', () => {
       expect(() =>
         looseTranslator.translate({ entitySetName: 'Products', filter: shallowFilter }, entityType),
       ).not.toThrow()
+    })
+  })
+
+  describe('$search integration', () => {
+    it('calls searchProvider.buildSearchCondition when query.search is set', () => {
+      const mockSearchProvider = {
+        buildSearchCondition: vi.fn().mockReturnValue({
+          condition: 'entity.name LIKE :s0',
+          params: { s0: '%laptop%' },
+        }),
+      }
+      const searchTranslator = new TypeOrmQueryTranslator(
+        repo,
+        mockEdmRegistry,
+        mockOptions,
+        mockSearchProvider as never,
+      )
+      const query: ODataQuery = {
+        entitySetName: 'Products',
+        search: { kind: 'SearchTerm', value: 'laptop' },
+      }
+      searchTranslator.translate(query, entityType)
+      expect(mockSearchProvider.buildSearchCondition).toHaveBeenCalledWith(
+        query.search,
+        'Products',
+        'entity',
+      )
+      expect(qb.andWhere).toHaveBeenCalledWith('entity.name LIKE :s0', { s0: '%laptop%' })
+    })
+
+    it('skips search when no searchProvider is injected', () => {
+      const query: ODataQuery = {
+        entitySetName: 'Products',
+        search: { kind: 'SearchTerm', value: 'laptop' },
+      }
+      // Default translator has no searchProvider
+      translator.translate(query, entityType)
+      // Should not throw — just skips
+      expect(qb.andWhere).not.toHaveBeenCalled()
+    })
+
+    it('skips search condition when buildSearchCondition returns null', () => {
+      const mockSearchProvider = {
+        buildSearchCondition: vi.fn().mockReturnValue(null),
+      }
+      const searchTranslator = new TypeOrmQueryTranslator(
+        repo,
+        mockEdmRegistry,
+        mockOptions,
+        mockSearchProvider as never,
+      )
+      const query: ODataQuery = {
+        entitySetName: 'Products',
+        search: { kind: 'SearchTerm', value: 'laptop' },
+      }
+      searchTranslator.translate(query, entityType)
+      expect(qb.andWhere).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('$apply integration', () => {
+    it('skips select/orderby/expand when query.apply is present', () => {
+      const query: ODataQuery = {
+        entitySetName: 'Products',
+        select: { items: [{ path: ['Name'] }] },
+        orderBy: [{ expression: { kind: 'PropertyAccess', path: ['Name'] }, direction: 'asc' }],
+        apply: {
+          steps: [
+            {
+              kind: 'ApplyAggregate',
+              expressions: [{ property: 'Price', method: 'sum', alias: 'Total' }],
+            },
+          ],
+        },
+      }
+      const result = translator.translate(query, entityType)
+      // orderby should be skipped when $apply is present
+      expect(qb.orderBy).not.toHaveBeenCalled()
+      // apply visitor uses addSelect for aggregate columns
+      expect(qb.addSelect).toHaveBeenCalled()
+      // result should contain applyProperties
+      expect(result.applyProperties).toBeDefined()
+    })
+  })
+
+  describe('execute() aggregated path', () => {
+    it('uses getRawMany for aggregated results without count', async () => {
+      const getRawManySpy = vi.fn().mockResolvedValue([{ Total: 100 }])
+      qb.getRawMany = getRawManySpy as never
+      const translateResult = {
+        qb,
+        expandPaginationMap: new Map(),
+        applyProperties: ['Total'],
+      }
+      const result = await translator.execute(translateResult, false)
+      expect(getRawManySpy).toHaveBeenCalled()
+      expect(result.isAggregated).toBe(true)
+      expect(result.applyProperties).toEqual(['Total'])
+      expect(result.items).toEqual([{ Total: 100 }])
+    })
+
+    it('uses getRawMany for aggregated results with count', async () => {
+      const getRawManySpy = vi.fn().mockResolvedValue([{ Total: 100 }, { Total: 200 }])
+      qb.getRawMany = getRawManySpy as never
+      const translateResult = {
+        qb,
+        expandPaginationMap: new Map(),
+        applyProperties: ['Total'],
+      }
+      const result = await translator.execute(translateResult, true)
+      expect(getRawManySpy).toHaveBeenCalled()
+      expect(result.isAggregated).toBe(true)
+      expect(result.count).toBe(2)
+    })
+
+    it('supports legacy raw SelectQueryBuilder input', async () => {
+      const result = await translator.execute(qb as never, false)
+      expect(qb.getMany).toHaveBeenCalled()
+      expect(result.items).toEqual([{ id: 1 }, { id: 2 }])
     })
   })
 })

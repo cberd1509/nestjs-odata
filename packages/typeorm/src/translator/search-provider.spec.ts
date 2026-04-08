@@ -151,6 +151,43 @@ describe('TypeOrmSearchProvider', () => {
       )
     })
 
+    it('throws when entity set not found in registry', () => {
+      const dataSource = makeDataSource(ProductWithSearchable)
+      const edmRegistry = {
+        getEntitySet: vi.fn().mockReturnValue(undefined),
+      } as unknown as EdmRegistry
+      const providerNoSet = new TypeOrmSearchProvider(dataSource, edmRegistry)
+
+      const searchNode: SearchTermNode = { kind: 'SearchTerm', value: 'laptop' }
+      expect(() => providerNoSet.buildSearchCondition(searchNode, 'Unknown', 'entity')).toThrow(
+        ODataValidationError,
+      )
+    })
+
+    it('throws when entity metadata not found in DataSource', () => {
+      const dataSource = { entityMetadatas: [] } as unknown as DataSource
+      const edmRegistry = makeEdmRegistry('Products', 'NonExistent')
+      const providerNoMeta = new TypeOrmSearchProvider(dataSource, edmRegistry)
+
+      const searchNode: SearchTermNode = { kind: 'SearchTerm', value: 'laptop' }
+      expect(() => providerNoMeta.buildSearchCondition(searchNode, 'Products', 'entity')).toThrow(
+        ODataValidationError,
+      )
+    })
+
+    it('throws when entity target is not a function', () => {
+      const dataSource = {
+        entityMetadatas: [{ name: 'ProductWithSearchable', target: 'not-a-function' }],
+      } as unknown as DataSource
+      const edmRegistry = makeEdmRegistry('Products', 'ProductWithSearchable')
+      const providerBadTarget = new TypeOrmSearchProvider(dataSource, edmRegistry)
+
+      const searchNode: SearchTermNode = { kind: 'SearchTerm', value: 'laptop' }
+      expect(() =>
+        providerBadTarget.buildSearchCondition(searchNode, 'Products', 'entity'),
+      ).toThrow(ODataValidationError)
+    })
+
     it('handles nested binary nodes (OR of two AND nodes)', () => {
       const searchNode: SearchNode = {
         kind: 'SearchBinary',
