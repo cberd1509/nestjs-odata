@@ -224,8 +224,8 @@ Plans:
 **Plans:** 2 plans
 Plans:
 
-- [x] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
-- [x] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
+- [ ] 10-01-PLAN.md — @ODataPut decorator, handleReplace() with metadata-driven default construction, PUT e2e tests
+- [ ] 10-02-PLAN.md — Deep insert (handleDeepCreate with maxDeepInsertDepth), Content-ID batch reference resolution
 
 ### Phase 11: $search and $apply
 
@@ -239,11 +239,10 @@ Plans:
 3. `GET /Orders?$apply=aggregate(Total with sum as GrandTotal)` returns a single aggregated row with the sum — not a collection of raw entities
 4. `GET /Orders?$apply=filter(Status eq 'open')/groupby((CustomerId),aggregate($count as OpenOrders))` executes the filter transformation before grouping — pipeline steps compose correctly
 
-**Plans:** 2 plans
+**Plans:** 0 plans
 Plans:
 
-- [x] 09-01-PLAN.md — Response annotations (@odata.id, @odata.type, @odata.navigationLink) in ODataResponseInterceptor
-- [ ] 09-02-PLAN.md — ETag concurrency control (@ODataETag decorator, If-Match/If-None-Match enforcement, @odata.etag annotation)
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
 
 ## Progress
 
@@ -261,7 +260,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Filter Functions                                   | 2/2            | Complete          | 2026-04-08 |
 | 8. Documentation, GitHub Pages, and llms.txt          | 3/3            | Complete          | 2026-04-08 |
 | 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
-| 10. Advanced Write Operations                         | 0/TBD          | Not started       | -          |
+| 10. Advanced Write Operations                         | 0/2            | Planning complete | -          |
 | 11. $search and $apply                                | 0/TBD          | Not started       | -          |
 | 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
 
