@@ -101,6 +101,8 @@ export class TypeOrmAutoHandler {
       count: rawResult.count,
       nextLink,
       select: query.select,
+      isAggregated: rawResult.isAggregated,
+      applyProperties: rawResult.applyProperties,
     }
   }
 

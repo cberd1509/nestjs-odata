@@ -8,6 +8,7 @@ import {
   JoinTable,
   UpdateDateColumn,
 } from 'typeorm'
+import { ODataSearchable } from '@nestjs-odata/core'
 import { Category } from './category.entity'
 import { OrderItem } from './order-item.entity'
 import { Tag } from './tag.entity'
@@ -17,9 +18,11 @@ export class Product {
   @PrimaryGeneratedColumn()
   id: number
 
+  @ODataSearchable()
   @Column({ type: 'varchar', length: 255 })
   name: string
 
+  @ODataSearchable()
   @Column({ type: 'text', nullable: true })
   description: string | null
 

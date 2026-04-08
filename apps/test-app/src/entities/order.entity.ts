@@ -1,4 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany } from 'typeorm'
+import { ODataSearchable } from '@nestjs-odata/core'
 import { Customer } from './customer.entity'
 import { OrderItem } from './order-item.entity'
 
@@ -13,6 +14,7 @@ export class Order {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   totalAmount: number
 
+  @ODataSearchable()
   @Column({ type: 'varchar', length: 50, default: 'pending' })
   status: string
 

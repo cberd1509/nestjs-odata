@@ -82,7 +82,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     if (query.search && this.searchProvider) {
       const searchResult = this.searchProvider.buildSearchCondition(
         query.search,
-        entityType.name,
+        query.entitySetName,
         alias,
       )
       if (searchResult) {

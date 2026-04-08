@@ -1,12 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common'
 import type { ArgumentMetadata, PipeTransform } from '@nestjs/common'
 import { parseQuery } from '../parser/parser.js'
+import { parseSearch } from '../parser/search-parser.js'
+import { parseApply } from '../parser/apply-parser.js'
 import { EdmRegistry } from '../edm/edm-registry.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQuery } from './odata-query.types.js'
 import type { EdmEntityType } from '../edm/edm-entity-type.js'
-import type { FilterNode, SelectItem, ExpandNode } from '../parser/ast.js'
+import type { FilterNode, SelectItem, ExpandNode, SearchNode, ApplyNode } from '../parser/ast.js'
 import { ODataValidationError } from './odata-validation.error.js'
 
 /**
@@ -31,14 +33,20 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
     // metadata.data carries the entitySetName passed by @ODataQuery(entitySetName)
     const entitySetName = metadata.data ?? ''
 
-    // Reconstruct query string from the Record entries (handling $count separately)
+    // Reconstruct query string from the Record entries (handling $count, $search, $apply separately)
     const parts: string[] = []
     let count = false
+    let search: SearchNode | undefined
+    let apply: ApplyNode | undefined
 
     for (const [key, val] of Object.entries(value)) {
       const lkey = key.toLowerCase()
       if (lkey === '$count') {
         count = val === 'true'
+      } else if (lkey === '$search') {
+        search = parseSearch(decodeURIComponent(val))
+      } else if (lkey === '$apply') {
+        apply = parseApply(decodeURIComponent(val))
       } else {
         parts.push(`${key}=${val}`)
       }
@@ -104,6 +112,8 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
       count: count || undefined,
       entitySetName,
       expand: parsed.expand,
+      search,
+      apply,
     }
   }
 

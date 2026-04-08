@@ -5,6 +5,7 @@ import { map } from 'rxjs/operators'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQueryResult } from '../query/odata-query.types.js'
+import type { SelectNode } from '../parser/ast.js'
 import { buildContextUrl } from './odata-context-url.builder.js'
 import { annotateEntity, annotateEntities } from './odata-annotation.builder.js'
 import type { AnnotationContext } from './odata-annotation.builder.js'
@@ -162,8 +163,30 @@ export class ODataResponseInterceptor implements NestInterceptor {
           }
         }
 
-        // Collection response (default) — wrap in OData envelope
+        // Cast once — shared by aggregated and collection branches
         const queryResult = result as ODataQueryResult
+
+        // Aggregated response ($apply) — no entity annotations, projection context URL
+        if (queryResult.isAggregated) {
+          const projectedSelect: SelectNode | undefined = queryResult.applyProperties?.length
+            ? { items: queryResult.applyProperties.map((p) => ({ path: [p] })) }
+            : undefined
+          const aggContextUrl = buildContextUrl(
+            this.options.serviceRoot,
+            entitySetName,
+            projectedSelect,
+          )
+          const aggResponse: Record<string, unknown> = {
+            '@odata.context': aggContextUrl,
+            value: queryResult.items,
+          }
+          if (queryResult.count !== undefined) {
+            aggResponse['@odata.count'] = queryResult.count
+          }
+          return aggResponse
+        }
+
+        // Collection response (default) — wrap in OData envelope
         const contextUrl = buildContextUrl(
           this.options.serviceRoot,
           entitySetName,
