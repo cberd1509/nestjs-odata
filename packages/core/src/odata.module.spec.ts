@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { Test } from '@nestjs/testing'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import type { ODataModuleResolvedOptions } from './odata.module.js'
+import { EdmRegistry } from './edm/edm-registry.js'
 
 describe('ODataModule', () => {
   it('Test 1: ODataModule.forRoot({ serviceRoot: "/odata" }) creates a dynamic module with EdmRegistry as a provider', async () => {
@@ -66,6 +67,32 @@ describe('ODataModule', () => {
     expect(opts.serviceRoot).toBe('/api/odata')
     expect(opts.namespace).toBe('MyService')
     expect(opts.maxTop).toBe(500)
+  })
+
+  it('MOD-02: forFeature() registers entity configs in EdmRegistry when combined with forRoot', async () => {
+    const { ODataModule } = await import('./odata.module.js')
+
+    const config: EdmEntityConfig = {
+      entityTypeName: 'Product',
+      entitySetName: 'Products',
+      properties: [
+        { name: 'Id', edmType: 'Edm.Int32', isNullable: false, isCollection: false },
+        { name: 'Name', edmType: 'Edm.String', isNullable: true, isCollection: false },
+      ],
+      navigationProperties: [],
+      keyProperties: ['Id'],
+      isReadOnly: false,
+    }
+
+    const module = await Test.createTestingModule({
+      imports: [ODataModule.forRoot({ serviceRoot: '/odata' }), ODataModule.forFeature([config])],
+    }).compile()
+    await module.init()
+
+    const registry = module.get(EdmRegistry)
+    expect(registry.getEntityType('Product')).toBeDefined()
+    expect(registry.getEntitySet('Products')).toBeDefined()
+    await module.close()
   })
 
   it('Test 5: ODataModule.forRootAsync({ useFactory: () => opts }) works', async () => {

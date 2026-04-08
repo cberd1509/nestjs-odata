@@ -9,6 +9,7 @@ import { PATH_METADATA } from '@nestjs/common/constants.js'
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import { EdmRegistry } from './edm/edm-registry.js'
+import { EdmFeatureInitializer } from './edm/edm-feature-initializer.js'
 import { EDM_ENTITY_CONFIGS, ODATA_MODULE_OPTIONS } from './tokens.js'
 import { CsdlBuilder } from './metadata/csdl-builder.js'
 import { ServiceDocumentBuilder } from './metadata/service-document-builder.js'
@@ -184,6 +185,7 @@ export class ODataModule extends ConfigurableModuleClass {
           provide: EDM_ENTITY_CONFIGS,
           useValue: entityConfigs,
         },
+        EdmFeatureInitializer,
       ],
       exports: [EDM_ENTITY_CONFIGS],
     }
