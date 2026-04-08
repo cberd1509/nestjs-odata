@@ -26,6 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 9: Response Annotations and ETags** - @odata.\* metadata annotations on every response plus ETag concurrency control
 - [ ] **Phase 10: Advanced Write Operations** - PUT full replace, deep inserts, and Content-ID batch references
 - [ ] **Phase 11: $search and $apply** - Full-text search and data aggregation query subsystems
+- [ ] **Phase 12: Developer Experience Audit and API Simplification** - Eliminate API friction, simplify module wiring, full DX audit
 
 ## Phase Details
 
@@ -235,18 +236,30 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12
 
-| Phase                                        | Plans Complete | Status            | Completed  |
-| -------------------------------------------- | -------------- | ----------------- | ---------- |
-| 1. Foundation and Parser Spike               | 0/4            | Planning complete | -          |
-| 2. EDM and $metadata                         | 5/5            | Complete          | 2026-04-07 |
-| 3. Query Engine and Response Format          | 0/4            | Planning complete | -          |
-| 4. CRUD, $expand, and Module System          | 5/5            | Complete          | 2026-04-07 |
-| 5. $batch, Security, and v1 Hardening        | 5/5            | Complete          | 2026-04-07 |
-| 6. v1 Polish and Config Wiring               | 0/2            | Planning complete | -          |
-| 7. Filter Functions                          | 2/2            | Complete          | 2026-04-08 |
-| 8. Documentation, GitHub Pages, and llms.txt | 0/3            | Planning complete | -          |
-| 9. Response Annotations and ETags            | 0/TBD          | Not started       | -          |
-| 10. Advanced Write Operations                | 0/TBD          | Not started       | -          |
-| 11. $search and $apply                       | 0/TBD          | Not started       | -          |
+| Phase                                                 | Plans Complete | Status            | Completed  |
+| ----------------------------------------------------- | -------------- | ----------------- | ---------- |
+| 1. Foundation and Parser Spike                        | 0/4            | Planning complete | -          |
+| 2. EDM and $metadata                                  | 5/5            | Complete          | 2026-04-07 |
+| 3. Query Engine and Response Format                   | 0/4            | Planning complete | -          |
+| 4. CRUD, $expand, and Module System                   | 5/5            | Complete          | 2026-04-07 |
+| 5. $batch, Security, and v1 Hardening                 | 5/5            | Complete          | 2026-04-07 |
+| 6. v1 Polish and Config Wiring                        | 0/2            | Planning complete | -          |
+| 7. Filter Functions                                   | 2/2            | Complete          | 2026-04-08 |
+| 8. Documentation, GitHub Pages, and llms.txt          | 3/3            | Complete          | 2026-04-08 |
+| 9. Response Annotations and ETags                     | 0/TBD          | Not started       | -          |
+| 10. Advanced Write Operations                         | 0/TBD          | Not started       | -          |
+| 11. $search and $apply                                | 0/TBD          | Not started       | -          |
+| 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
+
+### Phase 12: Developer Experience Audit and API Simplification
+
+**Goal:** Full audit of the library's developer experience from first install to production deployment. Eliminate API friction identified during docs review: remove dual controller registration (forRoot controllers + @Module controllers), auto-apply ODataQueryPipe inside @ODataQueryParam (remove @UsePipes coupling), make forFeature inherit serviceRoot from forRoot. Plus a broader DX audit covering error messages, type inference, IDE autocompletion, and any other paper cuts discovered during a fresh-eyes walkthrough.
+**Requirements**: TBD
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 12 to break down)
