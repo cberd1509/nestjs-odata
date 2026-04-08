@@ -264,15 +264,16 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 9. Response Annotations and ETags                     | 0/2            | Planning complete | -          |
 | 10. Advanced Write Operations                         | 2/2            | Complete          | 2026-04-08 |
 | 11. $search and $apply                                | 3/3            | Complete          | 2026-04-08 |
-| 12. Developer Experience Audit and API Simplification | 0/TBD          | Not started       | -          |
+| 12. Developer Experience Audit and API Simplification | 0/2            | Planning complete | -          |
 
 ### Phase 12: Developer Experience Audit and API Simplification
 
 **Goal:** Full audit of the library's developer experience from first install to production deployment. Eliminate API friction identified during docs review: remove dual controller registration (forRoot controllers + @Module controllers), auto-apply ODataQueryPipe inside @ODataQueryParam (remove @UsePipes coupling), make forFeature inherit serviceRoot from forRoot. Plus a broader DX audit covering error messages, type inference, IDE autocompletion, and any other paper cuts discovered during a fresh-eyes walkthrough.
-**Requirements**: TBD
+**Requirements**: DX-01, DX-02, DX-03, DX-04, DX-05, DX-06, DX-07, DX-08, DX-09, DX-10, DX-11
 **Depends on:** Phase 11
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 12 to break down)
+- [ ] 12-01-PLAN.md — Controller registration simplification, auto-pipe, serviceRoot inheritance
+- [ ] 12-02-PLAN.md — Error message enrichment and public API export audit
