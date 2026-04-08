@@ -57,7 +57,9 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<SelectQueryBuild
 
     // 1. Filter
     if (query.filter) {
-      new TypeOrmFilterVisitor(qb, alias, entityType).visit(query.filter)
+      new TypeOrmFilterVisitor(qb, alias, entityType, this.options.maxFilterDepth).visit(
+        query.filter,
+      )
     }
 
     // 2. Select

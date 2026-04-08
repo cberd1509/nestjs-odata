@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import type { Repository, SelectQueryBuilder } from 'typeorm'
-import type { ODataQuery, EdmEntityType, EdmRegistry } from '@nestjs-odata/core'
+import type { ODataQuery, EdmEntityType, EdmRegistry, BinaryExprNode } from '@nestjs-odata/core'
+import { ODataValidationError } from '@nestjs-odata/core'
 
 type MockQb = SelectQueryBuilder<never> & {
   andWhere: MockInstance
@@ -68,6 +69,7 @@ describe('TypeOrmQueryTranslator', () => {
     namespace: 'Default',
     maxTop: 1000,
     maxExpandDepth: 2,
+    maxFilterDepth: 10,
     unmappedTypeStrategy: 'skip' as const,
   }
 
@@ -205,6 +207,71 @@ describe('TypeOrmQueryTranslator', () => {
       }
       translator.translate(query, entityType)
       expect(callOrder).toEqual(['filter', 'select', 'orderby', 'pagination'])
+    })
+  })
+
+  describe('SEC-04: maxFilterDepth forwarding', () => {
+    it('passes options.maxFilterDepth to TypeOrmFilterVisitor — custom depth enforced', () => {
+      // Build a translator with maxFilterDepth: 2
+      const strictOptions = { ...mockOptions, maxFilterDepth: 2 }
+      const strictQb = makeQb()
+      const strictRepo = makeRepo(strictQb)
+      const strictTranslator = new TypeOrmQueryTranslator(
+        strictRepo,
+        mockEdmRegistry,
+        strictOptions,
+      )
+
+      // A filter AST with depth 3: (A eq 1) and ((B eq 2) and (C eq 3))
+      // Depth=1 at root 'and', depth=2 at inner 'and', depth=3 at inner 'eq' leaves
+      const deepFilter: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'and',
+        left: {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: { kind: 'PropertyAccess', path: ['Id'] },
+          right: { kind: 'Literal', literalKind: 'number', value: 1 },
+        },
+        right: {
+          kind: 'BinaryExpr',
+          operator: 'and',
+          left: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['Id'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 2 },
+          },
+          right: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['Id'] },
+            right: { kind: 'Literal', literalKind: 'number', value: 3 },
+          },
+        },
+      }
+
+      const result = () =>
+        strictTranslator.translate({ entitySetName: 'Products', filter: deepFilter }, entityType)
+      expect(result).toThrow(ODataValidationError)
+    })
+
+    it('does NOT throw for filter within configured depth', () => {
+      const looseOptions = { ...mockOptions, maxFilterDepth: 10 }
+      const looseTranslator = new TypeOrmQueryTranslator(
+        makeRepo(makeQb()),
+        mockEdmRegistry,
+        looseOptions,
+      )
+      const shallowFilter: BinaryExprNode = {
+        kind: 'BinaryExpr',
+        operator: 'eq',
+        left: { kind: 'PropertyAccess', path: ['Name'] },
+        right: { kind: 'Literal', literalKind: 'string', value: 'Alice' },
+      }
+      expect(() =>
+        looseTranslator.translate({ entitySetName: 'Products', filter: shallowFilter }, entityType),
+      ).not.toThrow()
     })
   })
 })
