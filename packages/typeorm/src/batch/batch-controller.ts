@@ -253,23 +253,35 @@ export class BatchController {
    * If any operation fails, all are rolled back (BATCH-02).
    *
    * Per D-02: full changeset rollback on any failure.
+   * Per WRITE-03 / T-10-08: contentIdMap is local to each changeset call — never leaks across changesets.
    */
   private async executeChangeset(parts: readonly BatchRequestPart[]): Promise<BatchResponsePart[]> {
     const queryRunner = this.dataSource.createQueryRunner()
     await queryRunner.connect()
     await queryRunner.startTransaction()
 
+    // Per T-10-08: declared inside executeChangeset() so each changeset gets a fresh Map.
+    const contentIdMap = new Map<string, string>()
+
     try {
       const results: BatchResponsePart[] = []
 
       for (const part of parts) {
-        const result = await this.dispatchWithManager(part, queryRunner.manager)
+        // Resolve any $N references in URL and body before dispatching (WRITE-03)
+        const resolvedPart = this.resolveContentIdReferences(part, contentIdMap)
+        const result = await this.dispatchWithManager(resolvedPart, queryRunner.manager)
         results.push(result)
 
         // Per D-02: if any changeset operation fails (status >= 400), roll back
         // the entire changeset — do not commit partial changes.
         if (result.statusCode >= 400) {
           throw new ChangesetOperationError(result.statusCode, result.body ?? 'Operation failed')
+        }
+
+        // Store location URL in contentIdMap after a successful 201 with Content-ID (WRITE-03)
+        const location = result.headers['location']
+        if (result.statusCode === 201 && location && part.contentId !== undefined) {
+          contentIdMap.set(part.contentId, location)
         }
       }
 
@@ -291,6 +303,46 @@ export class BatchController {
     } finally {
       await queryRunner.release()
     }
+  }
+
+  /**
+   * Resolve Content-ID references ($N) in a BatchRequestPart's URL and body.
+   *
+   * Per WRITE-03: $N in a URL or body is substituted with the location URL recorded
+   * for content ID N from a prior 201 response in the same changeset.
+   *
+   * Fast path: returns the original part unchanged when contentIdMap is empty or
+   * no $N patterns match (avoids unnecessary object allocation).
+   *
+   * Per immutability rules: never mutates the readonly BatchRequestPart — returns a new object.
+   * Per T-10-07: substitution uses only URLs already in contentIdMap (populated by our own
+   * 201 responses) — no code evaluation, no cross-changeset leak.
+   */
+  private resolveContentIdReferences(
+    part: BatchRequestPart,
+    contentIdMap: ReadonlyMap<string, string>,
+  ): BatchRequestPart {
+    if (contentIdMap.size === 0) return part // fast path: nothing to resolve
+
+    let url = part.url
+    let body = part.body
+
+    for (const [id, resolvedUrl] of contentIdMap) {
+      // URL pattern: $N followed by /, ?, #, or end of string (standard URL segments)
+      const urlPattern = new RegExp(`\\$${id}(?=[/?#]|$)`, 'g')
+      url = url.replace(urlPattern, resolvedUrl)
+      if (body) {
+        // Body pattern: $N followed by a non-digit or end of string.
+        // Handles JSON bodies where $1 appears inside quoted strings (e.g., "$1" -> resolved URL).
+        const bodyPattern = new RegExp(`\\$${id}(?=\\D|$)`, 'g')
+        body = body.replace(bodyPattern, resolvedUrl)
+      }
+    }
+
+    // Return original if nothing changed (reference equality fast path)
+    if (url === part.url && body === part.body) return part
+
+    return { ...part, url, ...(body !== part.body ? { body } : {}) }
   }
 
   /**

@@ -589,6 +589,81 @@ describe('BatchController dispatch', () => {
     expect(sentBody).toContain('HTTP/1.1 500')
   })
 
+  // ── Content-ID reference resolution unit tests ───────────────────────────────
+
+  // Typed accessor for the private resolveContentIdReferences method
+  type ResolveFn = (
+    part: Record<string, unknown>,
+    map: ReadonlyMap<string, string>,
+  ) => Record<string, unknown>
+  const resolveRef = (c: BatchController): ResolveFn =>
+    // Access private method via index signature to avoid unsafe-any lint errors
+    (c as unknown as Record<string, (...args: unknown[]) => unknown>)[
+      'resolveContentIdReferences'
+    ].bind(c) as unknown as ResolveFn
+
+  it('ContentID-1: resolveContentIdReferences with empty map returns same part object (reference equality)', () => {
+    const part = {
+      kind: 'request' as const,
+      contentId: '1',
+      method: 'PATCH',
+      url: '$1',
+      headers: {},
+      body: undefined,
+    }
+    const result = resolveRef(controller)(part as Record<string, unknown>, new Map())
+    expect(result).toBe(part) // reference equality — no new object
+  })
+
+  it('ContentID-2: resolveContentIdReferences substitutes $1 in URL', () => {
+    const part = {
+      kind: 'request' as const,
+      method: 'PATCH',
+      url: '$1',
+      headers: {},
+    }
+    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
+    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    expect(result['url']).toBe('/odata/Orders(42)')
+  })
+
+  it('ContentID-3: resolveContentIdReferences substitutes $1/SubPath in URL', () => {
+    const part = {
+      kind: 'request' as const,
+      method: 'POST',
+      url: '$1/Items',
+      headers: {},
+    }
+    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
+    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    expect(result['url']).toBe('/odata/Orders(42)/Items')
+  })
+
+  it('ContentID-4: resolveContentIdReferences substitutes $1 in body', () => {
+    const part = {
+      kind: 'request' as const,
+      method: 'PATCH',
+      url: '$1',
+      headers: {},
+      body: '{"ref":"$1","status":"confirmed"}',
+    }
+    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
+    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    expect(result['body']).toContain('/odata/Orders(42)')
+  })
+
+  it('ContentID-5: resolveContentIdReferences with no matching pattern returns same part object', () => {
+    const part = {
+      kind: 'request' as const,
+      method: 'GET',
+      url: '/odata/Orders',
+      headers: {},
+    }
+    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
+    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    expect(result).toBe(part) // no substitution — same reference
+  })
+
   it('Test 18: PATCH with not-found entity returns 404', async () => {
     const boundary = 'batch_test'
     const body = buildBatchBody(boundary, [
