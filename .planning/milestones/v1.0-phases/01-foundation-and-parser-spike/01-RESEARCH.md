@@ -7,6 +7,7 @@
 ---
 
 <user_constraints>
+
 ## User Constraints (from CONTEXT.md)
 
 ### Locked Decisions
@@ -49,21 +50,23 @@ None — discussion stayed within phase scope.
 ---
 
 <phase_requirements>
+
 ## Phase Requirements
 
-| ID | Description | Research Support |
-|----|-------------|------------------|
-| SCAF-01 | Turborepo + pnpm monorepo with `packages/core`, `packages/typeorm`, and `apps/test-app` | Turborepo CLI + NestJS CLI scaffold section; turbo.json pipeline config |
-| SCAF-02 | Full OSS tooling: ESLint 9 flat config, Prettier, Husky + lint-staged, Commitlint (conventional commits) | OSS Tooling section; exact configs and install commands |
-| SCAF-03 | GitHub templates: issue templates, PR template, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md | GitHub Templates section; YAML issue template patterns |
-| SCAF-04 | CI/CD: GitHub Actions for lint, test, build on PR; Changesets-based release workflow | GitHub Actions section; Changesets release workflow |
-| SCAF-05 | npm package publishing with OIDC trusted publishing (no long-lived tokens) | npm OIDC section; id-token: write permission requirement |
-| SCAF-06 | `@arethetypeswrong/cli` + `publint` in CI to validate package exports | Export Validation section; CLI usage patterns |
-| SCAF-07 | VitePress documentation site with typedoc-generated API docs | VitePress + TypeDoc section |
-| SCAF-08 | OData v4 expert sub-agent built from the OASIS spec | Sub-Agent Authoring section; agent file format |
-| SCAF-09 | tsdown build pipeline for both packages (ESM + CJS dual build) | tsdown Configuration section; package.json exports pattern |
-| SCAF-10 | Vitest + unplugin-swc test setup (required for NestJS/TypeORM decorator metadata) | Vitest + SWC section; .swcrc required config |
-| SCAF-11 | Dependabot + CodeQL security scanning configured from day one | Security Scanning section; workflow and config files |
+| ID      | Description                                                                                              | Research Support                                                        |
+| ------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| SCAF-01 | Turborepo + pnpm monorepo with `packages/core`, `packages/typeorm`, and `apps/test-app`                  | Turborepo CLI + NestJS CLI scaffold section; turbo.json pipeline config |
+| SCAF-02 | Full OSS tooling: ESLint 9 flat config, Prettier, Husky + lint-staged, Commitlint (conventional commits) | OSS Tooling section; exact configs and install commands                 |
+| SCAF-03 | GitHub templates: issue templates, PR template, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md         | GitHub Templates section; YAML issue template patterns                  |
+| SCAF-04 | CI/CD: GitHub Actions for lint, test, build on PR; Changesets-based release workflow                     | GitHub Actions section; Changesets release workflow                     |
+| SCAF-05 | npm package publishing with OIDC trusted publishing (no long-lived tokens)                               | npm OIDC section; id-token: write permission requirement                |
+| SCAF-06 | `@arethetypeswrong/cli` + `publint` in CI to validate package exports                                    | Export Validation section; CLI usage patterns                           |
+| SCAF-07 | VitePress documentation site with typedoc-generated API docs                                             | VitePress + TypeDoc section                                             |
+| SCAF-08 | OData v4 expert sub-agent built from the OASIS spec                                                      | Sub-Agent Authoring section; agent file format                          |
+| SCAF-09 | tsdown build pipeline for both packages (ESM + CJS dual build)                                           | tsdown Configuration section; package.json exports pattern              |
+| SCAF-10 | Vitest + unplugin-swc test setup (required for NestJS/TypeORM decorator metadata)                        | Vitest + SWC section; .swcrc required config                            |
+| SCAF-11 | Dependabot + CodeQL security scanning configured from day one                                            | Security Scanning section; workflow and config files                    |
+
 </phase_requirements>
 
 ---
@@ -82,50 +85,51 @@ The parser spike is the highest-risk item. The OASIS ABNF grammar is well-specif
 
 ### Core
 
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| Turborepo | 2.9.4 | Monorepo task orchestration | Official Vercel tool; first-class pnpm support; used by 6/7 major OSS TS monorepos surveyed |
-| pnpm | 10.2.1 | Package manager | Pinned in environment; best workspace isolation; Turborepo recommends |
-| TypeScript | 6.0.2 | Language | Current stable; `emitDecoratorMetadata` required for NestJS + TypeORM |
-| tsdown | 0.21.7 | Library bundler (ESM + CJS) | tsup successor from Rolldown/Vite team; 2x faster `.d.ts` gen; confirmed by LangChain JS + tRPC |
-| Vitest | 4.1.3 | Test runner | Current stable verified; 5/7 OSS projects surveyed use it |
-| unplugin-swc | 1.5.9 | Vitest SWC transformer | Required for `emitDecoratorMetadata` — esbuild default silently breaks NestJS/TypeORM |
-| @swc/core | 1.15.24 | SWC runtime | Peer of unplugin-swc; `.swcrc` with `legacyDecorator: true` and `decoratorMetadata: true` required |
+| Library      | Version | Purpose                     | Why Standard                                                                                       |
+| ------------ | ------- | --------------------------- | -------------------------------------------------------------------------------------------------- |
+| Turborepo    | 2.9.4   | Monorepo task orchestration | Official Vercel tool; first-class pnpm support; used by 6/7 major OSS TS monorepos surveyed        |
+| pnpm         | 10.2.1  | Package manager             | Pinned in environment; best workspace isolation; Turborepo recommends                              |
+| TypeScript   | 6.0.2   | Language                    | Current stable; `emitDecoratorMetadata` required for NestJS + TypeORM                              |
+| tsdown       | 0.21.7  | Library bundler (ESM + CJS) | tsup successor from Rolldown/Vite team; 2x faster `.d.ts` gen; confirmed by LangChain JS + tRPC    |
+| Vitest       | 4.1.3   | Test runner                 | Current stable verified; 5/7 OSS projects surveyed use it                                          |
+| unplugin-swc | 1.5.9   | Vitest SWC transformer      | Required for `emitDecoratorMetadata` — esbuild default silently breaks NestJS/TypeORM              |
+| @swc/core    | 1.15.24 | SWC runtime                 | Peer of unplugin-swc; `.swcrc` with `legacyDecorator: true` and `decoratorMetadata: true` required |
 
 [VERIFIED: npm registry — versions confirmed 2026-04-07]
 
 ### OSS Tooling
 
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| ESLint | 10.2.0 | Linting | Flat config only since ESLint 9; verified against official NestJS repos |
-| typescript-eslint | 8.58.0 | TS-aware lint rules | v8 project service; zero extra monorepo config |
-| Prettier | 3.8.1 | Formatting | Standard; minimal config |
-| Husky | 9.1.7 | Git hooks | 2 kB, zero deps; NestJS ecosystem standard |
-| lint-staged | 16.4.0 | Staged file processing | Pairs with Husky |
-| @commitlint/cli | 20.5.0 | Commit message enforcement | Conventional commits v1 spec |
-| @changesets/cli | 2.30.0 | Multi-package versioning | Purpose-built for monorepos; Turborepo official recommendation |
-| @changesets/changelog-github | 0.6.0 | GitHub-linked changelogs | PR links + contributor names in changelog |
-| VitePress | 1.6.4 | Docs site | Lighter than Docusaurus; Vite-native |
-| typedoc | 0.28.18 | API doc generation | TypeScript-native |
-| typedoc-plugin-markdown | 4.11.0 | TypeDoc → Markdown for VitePress | VitePress integration; sidebar generation |
-| @arethetypeswrong/cli | 0.18.2 | Package exports validation | Catches exports map mismatches before publish |
-| publint | 0.3.18 | package.json publish field validation | Pairs with ATTW |
+| Library                      | Version | Purpose                               | Why Standard                                                            |
+| ---------------------------- | ------- | ------------------------------------- | ----------------------------------------------------------------------- |
+| ESLint                       | 10.2.0  | Linting                               | Flat config only since ESLint 9; verified against official NestJS repos |
+| typescript-eslint            | 8.58.0  | TS-aware lint rules                   | v8 project service; zero extra monorepo config                          |
+| Prettier                     | 3.8.1   | Formatting                            | Standard; minimal config                                                |
+| Husky                        | 9.1.7   | Git hooks                             | 2 kB, zero deps; NestJS ecosystem standard                              |
+| lint-staged                  | 16.4.0  | Staged file processing                | Pairs with Husky                                                        |
+| @commitlint/cli              | 20.5.0  | Commit message enforcement            | Conventional commits v1 spec                                            |
+| @changesets/cli              | 2.30.0  | Multi-package versioning              | Purpose-built for monorepos; Turborepo official recommendation          |
+| @changesets/changelog-github | 0.6.0   | GitHub-linked changelogs              | PR links + contributor names in changelog                               |
+| VitePress                    | 1.6.4   | Docs site                             | Lighter than Docusaurus; Vite-native                                    |
+| typedoc                      | 0.28.18 | API doc generation                    | TypeScript-native                                                       |
+| typedoc-plugin-markdown      | 4.11.0  | TypeDoc → Markdown for VitePress      | VitePress integration; sidebar generation                               |
+| @arethetypeswrong/cli        | 0.18.2  | Package exports validation            | Catches exports map mismatches before publish                           |
+| publint                      | 0.3.18  | package.json publish field validation | Pairs with ATTW                                                         |
 
 [VERIFIED: npm registry — versions confirmed 2026-04-07]
 
 ### Alternatives Considered
 
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
-| tsdown | tsup | tsup is no longer actively maintained — tsdown is the recommended successor from the same author |
-| Changesets | release-it | release-it has no native multi-package monorepo support; Changesets is monorepo-first |
-| Changesets | semantic-release | semantic-release's monorepo plugin is unmaintained since 2022; requires linear commit history |
-| Prettier | dprint / Biome | Biome/dprint are faster but add config complexity; Prettier is simpler for a greenfield project |
-| Dependabot | Renovate | Both valid; Dependabot is built into GitHub, simpler to configure for a new project |
-| ESLint flat config | Oxlint | Oxlint is faster (Rust) but plugin ecosystem is immature; ESLint 9 flat config has full TS support |
+| Instead of         | Could Use        | Tradeoff                                                                                           |
+| ------------------ | ---------------- | -------------------------------------------------------------------------------------------------- |
+| tsdown             | tsup             | tsup is no longer actively maintained — tsdown is the recommended successor from the same author   |
+| Changesets         | release-it       | release-it has no native multi-package monorepo support; Changesets is monorepo-first              |
+| Changesets         | semantic-release | semantic-release's monorepo plugin is unmaintained since 2022; requires linear commit history      |
+| Prettier           | dprint / Biome   | Biome/dprint are faster but add config complexity; Prettier is simpler for a greenfield project    |
+| Dependabot         | Renovate         | Both valid; Dependabot is built into GitHub, simpler to configure for a new project                |
+| ESLint flat config | Oxlint           | Oxlint is faster (Rust) but plugin ecosystem is immature; ESLint 9 flat config has full TS support |
 
 **Installation (root workspace):**
+
 ```bash
 pnpm dlx create-turbo@latest nestjs-odata --example with-nestjs
 cd nestjs-odata
@@ -210,6 +214,7 @@ nestjs-odata/
 **Key pitfall:** The `with-nestjs` Turborepo example uses Jest (legacy choice). After scaffolding, remove `@repo/jest-config` and all Jest dependencies before adding Vitest. The example's `packages/` structure also includes `@repo/api`, `@repo/ui`, and `@repo/typescript-config` which are not needed for this library project.
 
 **Example flow:**
+
 ```bash
 # 1. Create workspace from Turborepo template
 pnpm dlx create-turbo@latest nestjs-odata --example with-nestjs
@@ -230,6 +235,7 @@ cd ..
 **When to use:** Always for publishable packages. The `apps/test-app` does NOT use tsdown (it's a NestJS app — not published).
 
 **Example:**
+
 ```typescript
 // packages/core/tsdown.config.ts
 // Source: STACK.md verified pattern
@@ -269,6 +275,7 @@ export default defineConfig({
 **When to use:** All packages. The parser unit tests in `packages/core` do NOT use decorators, but the setup must be consistent across packages to avoid the common "works in isolation, breaks in integration" failure.
 
 **Example:**
+
 ```typescript
 // packages/core/vitest.config.ts
 // Source: STACK.md verified pattern
@@ -309,6 +316,7 @@ export default defineConfig({
 **What:** `turbo.json` defines task dependency order. `build` must complete before `typecheck` and `test` because dependent packages need compiled output. `lint` has no inter-package dependencies.
 
 **Example:**
+
 ```json
 // turbo.json
 {
@@ -343,6 +351,7 @@ export default defineConfig({
 **When to use:** This is the locked AST design from D-04. The discriminated union approach enables exhaustive `switch` matching with TypeScript's type narrowing.
 
 **Example:**
+
 ```typescript
 // packages/core/src/parser/ast.ts
 
@@ -357,7 +366,20 @@ export type FilterNode =
 
 export interface BinaryExprNode {
   kind: 'BinaryExpr'
-  operator: 'eq' | 'ne' | 'lt' | 'le' | 'gt' | 'ge' | 'and' | 'or' | 'add' | 'sub' | 'mul' | 'div' | 'mod'
+  operator:
+    | 'eq'
+    | 'ne'
+    | 'lt'
+    | 'le'
+    | 'gt'
+    | 'ge'
+    | 'and'
+    | 'or'
+    | 'add'
+    | 'sub'
+    | 'mul'
+    | 'div'
+    | 'mod'
   left: FilterNode
   right: FilterNode
 }
@@ -370,28 +392,37 @@ export interface UnaryExprNode {
 
 export interface FunctionCallNode {
   kind: 'FunctionCall'
-  name: 'startswith' | 'endswith' | 'contains' | 'indexof' | 'substring' | 'length' | 'tolower' | 'toupper' | 'concat'
+  name:
+    | 'startswith'
+    | 'endswith'
+    | 'contains'
+    | 'indexof'
+    | 'substring'
+    | 'length'
+    | 'tolower'
+    | 'toupper'
+    | 'concat'
   args: FilterNode[]
 }
 
 export interface LambdaExprNode {
   kind: 'LambdaExpr'
   operator: 'any' | 'all'
-  property: string          // e.g. "Tags"
-  variable: string | null   // lambda variable (null for `any` with no predicate)
+  property: string // e.g. "Tags"
+  variable: string | null // lambda variable (null for `any` with no predicate)
   predicate: FilterNode | null
 }
 
 export interface PropertyAccessNode {
   kind: 'PropertyAccess'
-  path: string[]            // e.g. ['Category', 'Name'] for $it/Category/Name
+  path: string[] // e.g. ['Category', 'Name'] for $it/Category/Name
 }
 
 export interface LiteralNode {
   kind: 'Literal'
   literalKind: 'string' | 'number' | 'boolean' | 'null' | 'guid' | 'dateTimeOffset'
   value: string | number | boolean | null
-  raw: string               // Original string for parameterization
+  raw: string // Original string for parameterization
 }
 
 // Visitor interface
@@ -412,6 +443,7 @@ export interface FilterVisitor<T> {
 **When to use:** Always store project-scoped agents in `.claude/agents/` so they are version-controlled and available to all contributors.
 
 **Example structure:**
+
 ```markdown
 ---
 name: odata-expert
@@ -439,17 +471,17 @@ You are an expert in the OData v4 specification...
 
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Monorepo workspace wiring | Manual pnpm-workspace.yaml + turbo.json from scratch | `pnpm dlx create-turbo@latest --example with-nestjs` | Template handles workspace protocol, package hoisting, and turbo pipeline config |
-| Git hook installation | Custom shell scripts | Husky v9 (`pnpm exec husky init`) | Handles OS differences, pnpm vs npm, hook registration |
-| Commit message parsing | Regex in pre-commit | commitlint + @commitlint/config-conventional | Full Conventional Commits spec including breaking change markers |
-| Multi-package versioning | Manual CHANGELOG.md editing | Changesets | Git-history-aware semver bumps, linked packages, PR-based changeset review gate |
-| Library bundling | Custom Rollup/esbuild scripts | tsdown | Dual ESM+CJS output with `.d.ts` declarations in a single config; handles external marking |
-| ESM/CJS exports map | Hand-written package.json exports | tsdown auto-detection + verified pattern | Incorrect exports maps are the #1 source of "works in dev, breaks in prod" bugs for TypeScript libraries |
-| Package exports validation | Manual inspection | `@arethetypeswrong/cli` + `publint` | ATTW catches dual CJS/ESM export issues, missing types declarations, and incorrect resolution modes |
-| API documentation | Manually written Markdown | TypeDoc + typedoc-plugin-markdown | Auto-generated from JSDoc comments + TypeScript types; stays in sync with code |
-| Test runner TypeScript transform | Custom Babel/esbuild pipeline | unplugin-swc | SWC is the only transformer that correctly emits `emitDecoratorMetadata` inside Vitest |
+| Problem                          | Don't Build                                          | Use Instead                                          | Why                                                                                                      |
+| -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Monorepo workspace wiring        | Manual pnpm-workspace.yaml + turbo.json from scratch | `pnpm dlx create-turbo@latest --example with-nestjs` | Template handles workspace protocol, package hoisting, and turbo pipeline config                         |
+| Git hook installation            | Custom shell scripts                                 | Husky v9 (`pnpm exec husky init`)                    | Handles OS differences, pnpm vs npm, hook registration                                                   |
+| Commit message parsing           | Regex in pre-commit                                  | commitlint + @commitlint/config-conventional         | Full Conventional Commits spec including breaking change markers                                         |
+| Multi-package versioning         | Manual CHANGELOG.md editing                          | Changesets                                           | Git-history-aware semver bumps, linked packages, PR-based changeset review gate                          |
+| Library bundling                 | Custom Rollup/esbuild scripts                        | tsdown                                               | Dual ESM+CJS output with `.d.ts` declarations in a single config; handles external marking               |
+| ESM/CJS exports map              | Hand-written package.json exports                    | tsdown auto-detection + verified pattern             | Incorrect exports maps are the #1 source of "works in dev, breaks in prod" bugs for TypeScript libraries |
+| Package exports validation       | Manual inspection                                    | `@arethetypeswrong/cli` + `publint`                  | ATTW catches dual CJS/ESM export issues, missing types declarations, and incorrect resolution modes      |
+| API documentation                | Manually written Markdown                            | TypeDoc + typedoc-plugin-markdown                    | Auto-generated from JSDoc comments + TypeScript types; stays in sync with code                           |
+| Test runner TypeScript transform | Custom Babel/esbuild pipeline                        | unplugin-swc                                         | SWC is the only transformer that correctly emits `emitDecoratorMetadata` inside Vitest                   |
 
 **Key insight:** Every item in this list has been solved by the NestJS/TypeScript ecosystem. The value of Phase 1 is installing these solutions correctly from day one, not building alternatives.
 
@@ -476,16 +508,16 @@ skip      = "$skip" EQ 1*DIGIT
 
 The `boolCommonExpr` / `commonExpr` rule in the OASIS ABNF is not written with explicit precedence levels — it is a flat grammar that expresses precedence via rule chaining. A recursive descent parser must implement precedence explicitly. The correct order (lowest to highest binding strength):
 
-| Level | Operators | Notes |
-|-------|-----------|-------|
-| 1 (lowest) | `or` | Left-associative |
-| 2 | `and` | Left-associative |
-| 3 | `not` | Right-associative (prefix) |
-| 4 | `eq ne lt le gt ge has in` | Comparison (non-associative per OData spec) |
-| 5 | `add sub` | Arithmetic additive |
-| 6 | `mul div divby mod` | Arithmetic multiplicative |
-| 7 | `neg` (unary minus) | Prefix |
-| 8 (highest) | literals, property access, function calls, `(expr)` | Primaries |
+| Level       | Operators                                           | Notes                                       |
+| ----------- | --------------------------------------------------- | ------------------------------------------- |
+| 1 (lowest)  | `or`                                                | Left-associative                            |
+| 2           | `and`                                               | Left-associative                            |
+| 3           | `not`                                               | Right-associative (prefix)                  |
+| 4           | `eq ne lt le gt ge has in`                          | Comparison (non-associative per OData spec) |
+| 5           | `add sub`                                           | Arithmetic additive                         |
+| 6           | `mul div divby mod`                                 | Arithmetic multiplicative                   |
+| 7           | `neg` (unary minus)                                 | Prefix                                      |
+| 8 (highest) | literals, property access, function calls, `(expr)` | Primaries                                   |
 
 [ASSUMED — standard OData implementation precedence; confirmed against ABNF structure analysis but not cited from a secondary TypeScript parser source]
 
@@ -502,6 +534,7 @@ From OASIS ABNF, the Phase 1 scope includes these functions:
 ### Literal Types
 
 The parser must recognise and type-tag these literal kinds:
+
 - `'string'` — single-quoted string with `''` escape for single quote
 - Integer (`-?1*DIGIT` without decimal)
 - Decimal (`-?1*DIGIT '.' 1*DIGIT`)
@@ -515,6 +548,7 @@ The parser must recognise and type-tag these literal kinds:
 Build a two-phase parser: **Lexer (tokeniser) → Parser (recursive descent)**. This is cleaner than a combined scannerless parser for a grammar this size.
 
 **Token types to produce:**
+
 ```
 STRING_LITERAL, INT_LITERAL, DECIMAL_LITERAL, BOOL_LITERAL,
 NULL_LITERAL, GUID_LITERAL, DATETIME_LITERAL,
@@ -528,6 +562,7 @@ Keywords (`and`, `or`, `not`, `eq`, etc.) are handled during lexing to distingui
 ### TDD Test Oracle Approach
 
 The OASIS ABNF grammar is the test oracle. Each test case should:
+
 1. Express the input OData query string
 2. State the expected AST structure as a TypeScript object literal
 3. Assert equality
@@ -535,7 +570,7 @@ The OASIS ABNF grammar is the test oracle. Each test case should:
 ```typescript
 // Example TDD-first test (written BEFORE implementation)
 it('parses simple equality filter', () => {
-  const result = parse("$filter=Price eq 10")
+  const result = parse('$filter=Price eq 10')
   expect(result.filter).toEqual({
     kind: 'BinaryExpr',
     operator: 'eq',
@@ -794,7 +829,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      id-token: write        # Required for npm OIDC trusted publishing
+      id-token: write # Required for npm OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -823,20 +858,21 @@ jobs:
 
 ## Environment Availability
 
-| Dependency | Required By | Available | Version | Fallback |
-|------------|------------|-----------|---------|----------|
-| pnpm | All package management | ✓ | 10.2.1 | — |
-| Node.js | Runtime | ✓ | 24.14.1 | — |
-| npm | OIDC publish (npm CLI 11.5.1+ required) | ✓ | 11.11.0 | — |
-| turbo | Monorepo orchestration | ✓ | 2.9.4 | — |
-| @nestjs/cli | NestJS app scaffolding | available via pnpm dlx | 11.0.18 | — |
-| git | Repository + hooks | ✓ (implicit) | — | — |
+| Dependency  | Required By                             | Available              | Version | Fallback |
+| ----------- | --------------------------------------- | ---------------------- | ------- | -------- |
+| pnpm        | All package management                  | ✓                      | 10.2.1  | —        |
+| Node.js     | Runtime                                 | ✓                      | 24.14.1 | —        |
+| npm         | OIDC publish (npm CLI 11.5.1+ required) | ✓                      | 11.11.0 | —        |
+| turbo       | Monorepo orchestration                  | ✓                      | 2.9.4   | —        |
+| @nestjs/cli | NestJS app scaffolding                  | available via pnpm dlx | 11.0.18 | —        |
+| git         | Repository + hooks                      | ✓ (implicit)           | —       | —        |
 
 **Missing dependencies with no fallback:**
 
 None — all required tools are available on this machine.
 
 **Note:** GitHub repository must exist and be configured with:
+
 1. npm Trusted Publisher registration for `@nestjs-odata/core` and `@nestjs-odata/typeorm` (required before release.yml can publish)
 2. GitHub Pages enabled (required for VitePress deployment)
 
@@ -848,13 +884,13 @@ These are not local environment issues but one-time npm registry and GitHub repo
 
 ### Applicable ASVS Categories
 
-| ASVS Category | Applies | Standard Control |
-|---------------|---------|-----------------|
-| V2 Authentication | No | No auth in this phase (tooling/scaffolding only) |
-| V3 Session Management | No | No session handling |
-| V4 Access Control | No | No access control in scaffolding |
-| V5 Input Validation | No | Parser spike validates OData syntax but no security boundary |
-| V6 Cryptography | No | No cryptographic operations in this phase |
+| ASVS Category         | Applies | Standard Control                                             |
+| --------------------- | ------- | ------------------------------------------------------------ |
+| V2 Authentication     | No      | No auth in this phase (tooling/scaffolding only)             |
+| V3 Session Management | No      | No session handling                                          |
+| V4 Access Control     | No      | No access control in scaffolding                             |
+| V5 Input Validation   | No      | Parser spike validates OData syntax but no security boundary |
+| V6 Cryptography       | No      | No cryptographic operations in this phase                    |
 
 **Security scope for Phase 1:** The primary security deliverable is the OSS tooling setup itself:
 
@@ -864,29 +900,30 @@ These are not local environment issues but one-time npm registry and GitHub repo
 
 ### Threat Patterns (Supply Chain)
 
-| Pattern | STRIDE | Standard Mitigation |
-|---------|--------|---------------------|
-| Compromised long-lived npm token | Spoofing / Tampering | npm OIDC trusted publishing (D-12) — short-lived tokens per workflow run |
-| Malicious dependency update | Tampering | Dependabot weekly scans + pnpm audit --audit-level=high in CI |
-| Vulnerable transitive dep | Tampering | CodeQL weekly scan + Dependabot groups |
-| Secrets accidentally committed | Information Disclosure | `.gitignore` + pre-commit lint; no `.env` files in this phase |
+| Pattern                          | STRIDE                 | Standard Mitigation                                                      |
+| -------------------------------- | ---------------------- | ------------------------------------------------------------------------ |
+| Compromised long-lived npm token | Spoofing / Tampering   | npm OIDC trusted publishing (D-12) — short-lived tokens per workflow run |
+| Malicious dependency update      | Tampering              | Dependabot weekly scans + pnpm audit --audit-level=high in CI            |
+| Vulnerable transitive dep        | Tampering              | CodeQL weekly scan + Dependabot groups                                   |
+| Secrets accidentally committed   | Information Disclosure | `.gitignore` + pre-commit lint; no `.env` files in this phase            |
 
 ---
 
 ## State of the Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| tsup | tsdown | Late 2024 | tsdown is the maintained successor; tsup authors recommend migration |
-| `eslint-plugin-prettier` | `eslint-config-prettier` + separate Prettier | ESLint 9 | Cleaner separation; no double-error output |
-| NPM_TOKEN secret in CI | npm OIDC trusted publishing | July 2025 (GA) | Classic tokens deprecated December 2025 |
-| Changesets `NPM_TOKEN` publish | Changesets + OIDC (no token needed) | 2025 | Requires npm CLI 11.5.1+ |
-| Jest | Vitest | 2024-2025 | ESM native; 3-4x faster in monorepos; standard in Turborepo ecosystem |
-| `.eslintrc.*` format | `eslint.config.mjs` flat config | ESLint 9 | Legacy format removed; flat config is the only supported format |
-| CodeQL Action v3 | CodeQL Action v4 | Oct 2025 | v3 deprecated Dec 2026; v4 required for new workflows |
-| `typedoc-plugin-markdown` + separate VitePress wiring | `typedoc-vitepress-theme` | 2024 | Dedicated VitePress integration with auto-generated sidebar |
+| Old Approach                                          | Current Approach                             | When Changed   | Impact                                                                |
+| ----------------------------------------------------- | -------------------------------------------- | -------------- | --------------------------------------------------------------------- |
+| tsup                                                  | tsdown                                       | Late 2024      | tsdown is the maintained successor; tsup authors recommend migration  |
+| `eslint-plugin-prettier`                              | `eslint-config-prettier` + separate Prettier | ESLint 9       | Cleaner separation; no double-error output                            |
+| NPM_TOKEN secret in CI                                | npm OIDC trusted publishing                  | July 2025 (GA) | Classic tokens deprecated December 2025                               |
+| Changesets `NPM_TOKEN` publish                        | Changesets + OIDC (no token needed)          | 2025           | Requires npm CLI 11.5.1+                                              |
+| Jest                                                  | Vitest                                       | 2024-2025      | ESM native; 3-4x faster in monorepos; standard in Turborepo ecosystem |
+| `.eslintrc.*` format                                  | `eslint.config.mjs` flat config              | ESLint 9       | Legacy format removed; flat config is the only supported format       |
+| CodeQL Action v3                                      | CodeQL Action v4                             | Oct 2025       | v3 deprecated Dec 2026; v4 required for new workflows                 |
+| `typedoc-plugin-markdown` + separate VitePress wiring | `typedoc-vitepress-theme`                    | 2024           | Dedicated VitePress integration with auto-generated sidebar           |
 
 **Deprecated/outdated:**
+
 - `@repo/jest-config`: Appears in the Turborepo with-nestjs example template but should be replaced with Vitest from day one
 - `@commitlint/config-angular`: NestJS official repos still use it for historical reasons; use `@commitlint/config-conventional` for new projects
 - CircleCI alongside GitHub Actions: NestJS official repos use both; new projects should use GitHub Actions only
@@ -895,11 +932,11 @@ These are not local environment issues but one-time npm registry and GitHub repo
 
 ## Assumptions Log
 
-| # | Claim | Section | Risk if Wrong |
-|---|-------|---------|---------------|
-| A1 | Operator precedence table for OData (or/and/not/comparison/arithmetic) | Parser Deep Dive | Parser produces incorrect AST for mixed-operator expressions; caught by TDD test suite |
-| A2 | GitHub repository must be pre-configured as npm Trusted Publisher before OIDC publish works | Environment Availability | First release fails with auth error; fallback is adding a Granular npm token temporarily |
-| A3 | The `with-nestjs` Turborepo example requires cleanup of Jest dependencies before Vitest setup | Pattern 1 | Additional setup steps needed if template has changed since research |
+| #   | Claim                                                                                         | Section                  | Risk if Wrong                                                                            |
+| --- | --------------------------------------------------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
+| A1  | Operator precedence table for OData (or/and/not/comparison/arithmetic)                        | Parser Deep Dive         | Parser produces incorrect AST for mixed-operator expressions; caught by TDD test suite   |
+| A2  | GitHub repository must be pre-configured as npm Trusted Publisher before OIDC publish works   | Environment Availability | First release fails with auth error; fallback is adding a Granular npm token temporarily |
+| A3  | The `with-nestjs` Turborepo example requires cleanup of Jest dependencies before Vitest setup | Pattern 1                | Additional setup steps needed if template has changed since research                     |
 
 ---
 
@@ -944,6 +981,7 @@ These are not local environment issues but one-time npm registry and GitHub repo
 ## Metadata
 
 **Confidence breakdown:**
+
 - Standard stack: HIGH — all versions verified against npm registry
 - OSS tooling patterns: HIGH — cross-referenced against official NestJS repos and OSS survey
 - OData parser grammar: HIGH — OASIS ABNF spec fetched directly

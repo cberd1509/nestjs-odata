@@ -11,7 +11,7 @@ requires:
 provides:
   - 'controllers? field on ODataModuleOptions for registering @ODataController classes'
   - 'forRoot() patches PATH_METADATA of each registered @ODataController with serviceRoot prefix synchronously'
-  - '@ODataController(''Products'') + forRoot({ serviceRoot: ''/odata'', controllers: [ProductsController] }) routes at /odata/Products'
+  - "@ODataController('Products') + forRoot({ serviceRoot: '/odata', controllers: [ProductsController] }) routes at /odata/Products"
 
 affects:
   - future-crud-auto (any plan that auto-wires ODataController with module system)
@@ -101,5 +101,6 @@ None — no external service configuration required.
 - All 216 tests passing; zero type errors
 
 ---
-*Phase: 04-crud-expand-and-module-system*
-*Completed: 2026-04-07*
+
+_Phase: 04-crud-expand-and-module-system_
+_Completed: 2026-04-07_

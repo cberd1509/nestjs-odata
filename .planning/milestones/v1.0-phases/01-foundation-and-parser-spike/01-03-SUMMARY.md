@@ -1,11 +1,19 @@
 ---
 phase: 01-foundation-and-parser-spike
-plan: "03"
+plan: '03'
 subsystem: ci-cd-governance
 tags: [github-actions, ci-cd, dependabot, codeql, odata-agent, oss-governance]
 dependency_graph:
-  requires: ["01-01"]
-  provides: [ci-pipeline, release-pipeline, security-scanning, dependency-monitoring, odata-expert-agent, oss-templates]
+  requires: ['01-01']
+  provides:
+    [
+      ci-pipeline,
+      release-pipeline,
+      security-scanning,
+      dependency-monitoring,
+      odata-expert-agent,
+      oss-templates,
+    ]
   affects: [all-future-phases]
 tech_stack:
   added: [github-actions, changesets, codeql, dependabot]
@@ -32,7 +40,7 @@ decisions:
   - OData expert agent deferred — sandbox restriction prevented writing to .claude/agents/ path
 metrics:
   duration_minutes: 16
-  completed_date: "2026-04-07"
+  completed_date: '2026-04-07'
   tasks_completed: 1
   tasks_total: 2
   files_created: 11
@@ -50,27 +58,32 @@ metrics:
 All GitHub CI/CD infrastructure and OSS governance files created and committed at `8cb4c01`:
 
 **CI Pipeline (`.github/workflows/ci.yml`):**
+
 - Node.js matrix: 20 and 22
 - Steps: `pnpm turbo lint` → `pnpm turbo typecheck` → `pnpm turbo test` → `pnpm turbo build`
 - Package export validation: `@arethetypeswrong/cli --pack` and `publint` for both `packages/core` and `packages/typeorm`
 - Concurrency group with cancel-in-progress for PRs
 
 **Release Pipeline (`.github/workflows/release.yml`):**
+
 - OIDC trusted publishing via `id-token: write` permission
 - No `NPM_TOKEN` secret — short-lived OIDC token per workflow run
 - Changesets action: creates a "Version Packages" PR on merge, publishes on that PR merge
 - Builds before publish: `pnpm turbo build`
 
 **Security Scanning (`.github/workflows/codeql.yml`):**
+
 - Language: `javascript-typescript`
 - Triggers: push to main, PRs, weekly Monday 06:00 UTC schedule
 - `security-events: write` permission for uploading SARIF results
 
 **Dependency Monitoring (`.github/dependabot.yml`):**
+
 - npm ecosystem: weekly Monday, max 10 open PRs, dev dependencies grouped (minor+patch)
 - github-actions ecosystem: weekly Monday
 
 **OSS Templates:**
+
 - `bug_report.yml`: structured bug report with package version, NestJS version, Node.js version
 - `feature_request.yml`: feature description + use case + alternatives
 - `config.yml`: blank issues disabled, docs link
@@ -96,6 +109,7 @@ tools: Read, WebFetch, Grep, Glob
 ```
 
 Primary references the agent should use:
+
 - Protocol (Part 1): https://docs.oasis-open.org/odata/odata/v4.01/odata-v4.01-part1-protocol.html
 - URL Conventions (Part 2): https://docs.oasis-open.org/odata/odata/v4.01/odata-v4.01-part2-url-conventions.html
 - ABNF Grammar: https://docs.oasis-open.org/odata/odata/v4.01/cs01/abnf/odata-abnf-construction-rules.txt
@@ -108,6 +122,7 @@ Key knowledge the agent must cover: $filter ABNF structure, operator precedence,
 ### Deferred Issues
 
 **1. [Sandbox Restriction] Task 2 blocked — cannot write to .claude/agents/ path**
+
 - **Found during:** Task 2 execution
 - **Issue:** The execution sandbox security policy denies all Write and Bash operations targeting paths that contain `.claude/` as a subdirectory component (e.g., `/repos/nestjs-odata/.claude/worktrees/agent-ab7bf79e/.claude/agents/`). This blocks creating the OData expert sub-agent file.
 - **Attempted paths:** `/Users/carlosber/repos/nestjs-odata/.claude/worktrees/agent-ab7bf79e/.claude/agents/odata-expert.md` and `/Users/carlosber/repos/nestjs-odata/.claude/agents/odata-expert.md` — both denied.
@@ -118,12 +133,12 @@ Key knowledge the agent must cover: $filter ABNF structure, operator precedence,
 
 Per plan threat model:
 
-| Threat ID | Status | Implementation |
-|-----------|--------|----------------|
-| T-01-05 | Mitigated | `id-token: write` + no NPM_TOKEN in release.yml |
-| T-01-06 | Mitigated | All actions pinned to @v4/@v3 major tags; Dependabot monitors github-actions ecosystem |
-| T-01-07 | Mitigated | SECURITY.md uses email-based private disclosure |
-| T-01-08 | Mitigated | `open-pull-requests-limit: 10` + dev dependency grouping in dependabot.yml |
+| Threat ID | Status    | Implementation                                                                         |
+| --------- | --------- | -------------------------------------------------------------------------------------- |
+| T-01-05   | Mitigated | `id-token: write` + no NPM_TOKEN in release.yml                                        |
+| T-01-06   | Mitigated | All actions pinned to @v4/@v3 major tags; Dependabot monitors github-actions ecosystem |
+| T-01-07   | Mitigated | SECURITY.md uses email-based private disclosure                                        |
+| T-01-08   | Mitigated | `open-pull-requests-limit: 10` + dev dependency grouping in dependabot.yml             |
 
 ## Known Stubs
 
@@ -136,6 +151,7 @@ None — no new network endpoints, auth paths, or trust boundaries introduced by
 ## Self-Check: PARTIAL
 
 **Files verified present:**
+
 - `.github/workflows/ci.yml` — FOUND
 - `.github/workflows/release.yml` — FOUND
 - `.github/workflows/codeql.yml` — FOUND
@@ -150,4 +166,5 @@ None — no new network endpoints, auth paths, or trust boundaries introduced by
 - `.claude/agents/odata-expert.md` — MISSING (sandbox restriction)
 
 **Commits verified:**
+
 - `8cb4c01` — FOUND (chore(01-03): add GitHub Actions workflows, Dependabot config, and GitHub templates)
