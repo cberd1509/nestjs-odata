@@ -5,27 +5,21 @@
 ## Installation
 
 ```bash
-# Core package (ORM-agnostic)
-npm install @nestjs-odata/core reflect-metadata
-
-# TypeORM adapter
-npm install @nestjs-odata/typeorm
-
-# Required peer dependencies (if not already installed)
-npm install @nestjs/common @nestjs/core typeorm @nestjs/typeorm
-```
-
-::: tip pnpm / yarn
-
-```bash
-# pnpm
+# pnpm (recommended)
 pnpm add @nestjs-odata/core @nestjs-odata/typeorm reflect-metadata
+
+# npm
+npm install @nestjs-odata/core @nestjs-odata/typeorm reflect-metadata
 
 # yarn
 yarn add @nestjs-odata/core @nestjs-odata/typeorm reflect-metadata
 ```
 
-:::
+Required peer dependencies (if not already installed):
+
+```bash
+pnpm add @nestjs/common @nestjs/core typeorm @nestjs/typeorm
+```
 
 ## TypeScript configuration
 
@@ -192,5 +186,6 @@ curl http://localhost:3000/odata/$metadata
 
 - [Configuration](./configuration.md) — Global limits, namespace, async setup
 - [Query Options](./query-options.md) — Full `$filter`, `$select`, `$orderby`, pagination reference
+- [Filter Functions](./filter-functions.md) — Lambda `any`/`all`, arithmetic, date/time, string functions
 - [CRUD Operations](./crud.md) — Create, update, delete request/response shapes
 - [Security](./security.md) — `maxTop`, `maxExpandDepth`, `maxFilterDepth`, per-entity overrides

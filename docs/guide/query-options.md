@@ -179,6 +179,10 @@ curl 'http://localhost:3000/odata/Products/$count?$filter=inStock eq true'
 # Returns: 28
 ```
 
+## Advanced filter functions
+
+For lambda expressions (`any`/`all`), arithmetic operators, date/time extraction functions, and additional string functions (`indexof`, `substring`, `concat`) — see the [Filter Functions guide](./filter-functions.md).
+
 ## Combining query options
 
 All query options compose freely:
