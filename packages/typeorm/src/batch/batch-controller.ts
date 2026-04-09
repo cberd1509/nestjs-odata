@@ -228,9 +228,18 @@ export class BatchController {
     }
     // Fall back: read from the Node.js IncomingMessage stream.
     // multipart/mixed is not handled by standard body parsers, so the stream is unconsumed.
+    const MAX_BATCH_BODY_BYTES = 10 * 1024 * 1024 // 10 MB
     return new Promise<string>((resolve, reject) => {
       const chunks: Buffer[] = []
-      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      let total = 0
+      req.on('data', (chunk: Buffer) => {
+        total += chunk.length
+        if (total > MAX_BATCH_BODY_BYTES) {
+          req.destroy()
+          return reject(new Error('Batch request body exceeds maximum size'))
+        }
+        chunks.push(chunk)
+      })
       req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
       req.on('error', reject)
     })
@@ -328,14 +337,12 @@ export class BatchController {
     let body = part.body
 
     for (const [id, resolvedUrl] of contentIdMap) {
-      // URL pattern: $N followed by /, ?, #, or end of string (standard URL segments)
-      const urlPattern = new RegExp(`\\$${id}(?=[/?#]|$)`, 'g')
-      url = url.replace(urlPattern, resolvedUrl)
+      // Use plain string replacement to avoid RegExp injection via Content-ID values.
+      // OData spec restricts Content-ID to numeric-only strings, so "$N" is the exact token.
+      const token = `$${id}`
+      url = url.replaceAll(token, resolvedUrl)
       if (body) {
-        // Body pattern: $N followed by a non-digit or end of string.
-        // Handles JSON bodies where $1 appears inside quoted strings (e.g., "$1" -> resolved URL).
-        const bodyPattern = new RegExp(`\\$${id}(?=\\D|$)`, 'g')
-        body = body.replace(bodyPattern, resolvedUrl)
+        body = body.replaceAll(token, resolvedUrl)
       }
     }
 
@@ -526,7 +533,10 @@ export class BatchController {
     manager: EntityManager,
     contentId?: string,
   ): Promise<BatchResponsePart> {
-    const items = await manager.find(entityClass as new () => ObjectLiteral)
+    // Apply maxTop limit to prevent unbounded queries (T-05-06 / SEC-01).
+    const items = await manager.find(entityClass as new () => ObjectLiteral, {
+      take: this.options.maxTop,
+    })
     return {
       contentId,
       statusCode: 200,

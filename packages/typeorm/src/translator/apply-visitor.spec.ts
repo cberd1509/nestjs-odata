@@ -29,7 +29,15 @@ function makeEntityType(name = 'Product'): EdmEntityType {
   return {
     name,
     namespace: 'Default',
-    properties: [],
+    properties: [
+      { name: 'Id', type: 'Edm.Int32', nullable: false },
+      { name: 'Total', type: 'Edm.Decimal', nullable: true },
+      { name: 'Price', type: 'Edm.Decimal', nullable: true },
+      { name: 'CustomerId', type: 'Edm.Int32', nullable: true },
+      { name: 'Year', type: 'Edm.Int32', nullable: true },
+      { name: 'Category', type: 'Edm.String', nullable: true },
+      { name: 'Status', type: 'Edm.String', nullable: true },
+    ],
     navigationProperties: [],
     keyProperties: [],
     isReadOnly: false,

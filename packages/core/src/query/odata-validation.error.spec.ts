@@ -45,7 +45,7 @@ describe('ODataValidationError', () => {
     expect(err.availableProperties).toEqual(['id', 'name', 'price'])
   })
 
-  it('Test 5: message includes available properties list when provided', () => {
+  it('Test 5: message does NOT include available properties (kept on object for server logging)', () => {
     const err = new ODataValidationError(
       "Property 'prce' not found on entity 'Product'",
       'Product',
@@ -53,9 +53,16 @@ describe('ODataValidationError', () => {
       ['id', 'name', 'description', 'price', 'active', 'createdAt', 'updatedAt'],
     )
 
-    expect(err.message).toContain(
-      'Available properties: id, name, description, price, active, createdAt, updatedAt',
-    )
+    expect(err.message).toBe("Property 'prce' not found on entity 'Product'")
+    expect(err.availableProperties).toEqual([
+      'id',
+      'name',
+      'description',
+      'price',
+      'active',
+      'createdAt',
+      'updatedAt',
+    ])
   })
 
   it('Test 6: message without availableProperties remains unchanged', () => {

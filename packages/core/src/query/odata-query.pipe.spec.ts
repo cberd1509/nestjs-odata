@@ -275,7 +275,7 @@ describe('ODataQueryPipe', () => {
         expect(err).toBeInstanceOf(ODataValidationError)
         const validationErr = err as ODataValidationError
         expect(validationErr.availableProperties).toEqual(['Id', 'Name', 'Price'])
-        expect(validationErr.message).toContain('Available properties: Id, Name, Price')
+        expect(validationErr.message).not.toContain('Available properties')
       }
     })
 
@@ -292,7 +292,7 @@ describe('ODataQueryPipe', () => {
         expect(err).toBeInstanceOf(ODataValidationError)
         const validationErr = err as ODataValidationError
         expect(validationErr.availableProperties).toEqual(['Id', 'Name', 'Price'])
-        expect(validationErr.message).toContain('Available properties: Id, Name, Price')
+        expect(validationErr.message).not.toContain('Available properties')
       }
     })
 
@@ -309,7 +309,7 @@ describe('ODataQueryPipe', () => {
         expect(err).toBeInstanceOf(ODataValidationError)
         const validationErr = err as ODataValidationError
         expect(validationErr.availableProperties).toEqual(['Category', 'Supplier'])
-        expect(validationErr.message).toContain('Available properties: Category, Supplier')
+        expect(validationErr.message).not.toContain('Available properties')
       }
     })
 
