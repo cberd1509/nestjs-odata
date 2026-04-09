@@ -268,10 +268,24 @@ function parseRequestPart(content: string, mimeHeaders: Record<string, string>):
 
   // Extract Content-ID from MIME headers (present in changeset sub-parts)
   const contentId = getHeaderValue(mimeHeaders, 'content-id')
+  let resolvedContentId: string | undefined
+  if (contentId !== undefined) {
+    const stripped = contentId.replace(/^<|>$/g, '')
+    // OData spec requires Content-ID to be a positive integer (numeric only).
+    // Reject non-numeric values to prevent RegExp injection via Content-ID references.
+    if (!/^\d+$/.test(stripped)) {
+      throw new ODataValidationError(
+        `Invalid Content-ID '${stripped}': must be a positive integer per OData v4 spec`,
+        '$batch',
+        'content-id',
+      )
+    }
+    resolvedContentId = stripped
+  }
 
   return {
     kind: 'request',
-    contentId: contentId !== undefined ? contentId.replace(/^<|>$/g, '') : undefined,
+    contentId: resolvedContentId,
     method: method.toUpperCase(),
     url,
     headers: httpHeaders,

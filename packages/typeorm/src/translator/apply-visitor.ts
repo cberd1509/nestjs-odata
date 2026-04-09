@@ -94,6 +94,11 @@ export class TypeOrmApplyVisitor {
 
     // Add GROUP BY columns
     for (const prop of properties) {
+      if (!this.entityType.properties.some((p) => p.name === prop)) {
+        throw new Error(
+          `Property '${prop}' does not exist on entity type '${this.entityType.name}'`,
+        )
+      }
       this.qb.addSelect(`${this.alias}.${prop}`, prop)
       this.qb.addGroupBy(`${this.alias}.${prop}`)
       projectedColumns.push(prop)
@@ -144,6 +149,14 @@ export class TypeOrmApplyVisitor {
    */
   private buildAggregateSql(expr: AggregateExpression): string {
     const { property, method } = expr
+
+    // Validate property name against EDM entity type before interpolating into SQL.
+    // $count is the virtual OData count token — not a real property.
+    if (property !== '$count' && !this.entityType.properties.some((p) => p.name === property)) {
+      throw new Error(
+        `Property '${property}' does not exist on entity type '${this.entityType.name}'`,
+      )
+    }
 
     switch (method) {
       case 'count':

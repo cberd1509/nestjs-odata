@@ -21,11 +21,10 @@ export class ODataValidationError extends Error {
     public readonly propertyName: string,
     public readonly availableProperties?: readonly string[],
   ) {
-    const enrichedMessage =
-      availableProperties && availableProperties.length > 0
-        ? `${message}. Available properties: ${availableProperties.join(', ')}`
-        : message
-    super(enrichedMessage)
+    // Do NOT include availableProperties in message — it would enumerate all
+    // entity property names to unauthenticated callers (threat model T-03-02).
+    // availableProperties is retained as a structured field for server-side logging only.
+    super(message)
     this.name = 'ODataValidationError'
     // Ensure instanceof works correctly when transpiled to ES5
     Object.setPrototypeOf(this, new.target.prototype)

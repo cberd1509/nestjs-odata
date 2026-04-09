@@ -38,3 +38,12 @@ docs/api/generated/
 
 # OS
 Thumbs.db
+
+# Claude Code development artifacts
+.claude/worktrees/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Planning artifacts (local development)
+*.tmp
