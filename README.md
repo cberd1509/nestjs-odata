@@ -2,12 +2,12 @@
 
 [![npm version](https://img.shields.io/npm/v/@nestjs-odata/core)](https://www.npmjs.com/package/@nestjs-odata/core)
 [![npm downloads](https://img.shields.io/npm/dm/@nestjs-odata/core)](https://www.npmjs.com/package/@nestjs-odata/core)
-[![CI](https://img.shields.io/github/actions/workflow/status/nestjs-odata/nestjs-odata/ci.yml)](https://github.com/nestjs-odata/nestjs-odata/actions)
-[![license](https://img.shields.io/github/license/nestjs-odata/nestjs-odata)](https://github.com/nestjs-odata/nestjs-odata/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/cberd1509/nestjs-odata/ci.yml)](https://github.com/cberd1509/nestjs-odata/actions)
+[![license](https://img.shields.io/github/license/cberd1509/nestjs-odata)](https://github.com/cberd1509/nestjs-odata/blob/main/LICENSE)
 
 OData v4 for NestJS with zero double-declaration. Define your entities once in TypeORM and get spec-compliant OData endpoints automatically — `$metadata`, `$filter`, `$select`, `$orderby`, `$expand`, `$batch`, and more.
 
-[Documentation](https://nestjs-odata.github.io/nestjs-odata/)
+[Documentation](https://cberd1509.github.io/nestjs-odata/)
 
 ## Features
 
@@ -62,7 +62,7 @@ import { ProductsController } from './products.controller'
       serviceRoot: '/odata',
       controllers: [ProductsController],
     }),
-    ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' }),
+    ODataTypeOrmModule.forFeature([Product]),
   ],
 })
 export class AppModule {}
@@ -74,7 +74,7 @@ Then query your data:
 curl 'http://localhost:3000/odata/Products?$filter=price lt 100&$orderby=name&$top=10'
 ```
 
-See the [Getting Started](https://nestjs-odata.github.io/nestjs-odata/guide/getting-started) guide for the full walkthrough.
+See the [Getting Started](https://cberd1509.github.io/nestjs-odata/guide/getting-started) guide for the full walkthrough.
 
 ## Packages
 

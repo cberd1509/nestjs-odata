@@ -19,7 +19,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'API', link: '/api/module' },
       { text: 'Examples', link: '/examples/basic-crud' },
-      { text: 'GitHub', link: 'https://github.com/nestjs-odata/nestjs-odata' },
+      { text: 'GitHub', link: 'https://github.com/cberd1509/nestjs-odata' },
     ],
     sidebar: {
       '/guide/': [
@@ -53,6 +53,6 @@ export default defineConfig({
         { text: 'E-Commerce', link: '/examples/e-commerce' },
       ],
     },
-    socialLinks: [{ icon: 'github', link: 'https://github.com/nestjs-odata/nestjs-odata' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/cberd1509/nestjs-odata' }],
   },
 })

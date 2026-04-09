@@ -6,11 +6,11 @@
     <a href="https://www.npmjs.com/package/@nestjs-odata/core" target="_blank" rel="noopener">
       <img src="https://img.shields.io/npm/dm/@nestjs-odata/core" alt="npm downloads" />
     </a>
-    <a href="https://github.com/nestjs-odata/nestjs-odata/actions" target="_blank" rel="noopener">
-      <img src="https://img.shields.io/github/actions/workflow/status/nestjs-odata/nestjs-odata/ci.yml" alt="CI" />
+    <a href="https://github.com/cberd1509/nestjs-odata/actions" target="_blank" rel="noopener">
+      <img src="https://img.shields.io/github/actions/workflow/status/cberd1509/nestjs-odata/ci.yml" alt="CI" />
     </a>
-    <a href="https://github.com/nestjs-odata/nestjs-odata/blob/main/LICENSE" target="_blank" rel="noopener">
-      <img src="https://img.shields.io/github/license/nestjs-odata/nestjs-odata" alt="license" />
+    <a href="https://github.com/cberd1509/nestjs-odata/blob/main/LICENSE" target="_blank" rel="noopener">
+      <img src="https://img.shields.io/github/license/cberd1509/nestjs-odata" alt="license" />
     </a>
   </div>
 </template>

@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/your-org/nestjs-odata.git
+git clone https://github.com/cberd1509/nestjs-odata.git
 cd nestjs-odata
 pnpm install
 pnpm build

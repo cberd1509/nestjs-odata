@@ -11,7 +11,7 @@ Common questions and solutions when working with `nestjs-odata`.
 1. The entity class has the `@Entity()` decorator from TypeORM
 2. The entity is included in the `ODataTypeOrmModule.forFeature()` array:
    ```typescript
-   ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' })
+   ODataTypeOrmModule.forFeature([Product])
    ```
 3. A controller exists with `@ODataController('Products')` referencing the entity set name
 4. The controller is listed in `ODataModule.forRoot({ controllers: [...] })`
@@ -37,7 +37,7 @@ If any of these are missing, the entity will not appear in the EDM.
       serviceRoot: '/odata',
       controllers: [ProductsController],
     }),
-    ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/odata' }),
+    ODataTypeOrmModule.forFeature([Product]),
   ],
 })
 export class AppModule {}
@@ -186,6 +186,6 @@ TypeOrmModule.forRoot({
 
 ## Still stuck?
 
-- Check the [GitHub Issues](https://github.com/nestjs-odata/nestjs-odata/issues) for known problems
+- Check the [GitHub Issues](https://github.com/cberd1509/nestjs-odata/issues) for known problems
 - Open a new issue with a minimal reproduction
 - Review the [Configuration](./configuration.md) page for all available options

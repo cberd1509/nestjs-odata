@@ -343,4 +343,4 @@ All values are bound as named parameters — never interpolated into the SQL str
 
 - [Query Options](./query-options.md) — Full `$filter`, `$select`, `$orderby`, pagination reference
 - [Security](./security.md) — `maxFilterDepth` to limit nesting of lambda and compound expressions
-- [`TypeOrmFilterVisitor` source](https://github.com/nestjs-odata/nestjs-odata/blob/main/packages/typeorm/src/translator/filter-visitor.ts) — Full implementation source
+- [`TypeOrmFilterVisitor` source](https://github.com/cberd1509/nestjs-odata/blob/main/packages/typeorm/src/translator/filter-visitor.ts) — Full implementation source
