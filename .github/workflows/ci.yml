@@ -35,6 +35,7 @@ jobs:
           pnpm dlx @arethetypeswrong/cli --pack packages/typeorm
           pnpm dlx publint packages/typeorm
       - name: Verify publishability (dry-run)
+        if: github.ref == 'refs/heads/main'
         run: |
           pnpm --filter @nestjs-odata/core publish --dry-run --access public
           pnpm --filter @nestjs-odata/typeorm publish --dry-run --access public
