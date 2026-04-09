@@ -123,6 +123,6 @@ export class TypeOrmSearchProvider implements ISearchProvider {
    * % -> \%, _ -> \_
    */
   private escapeLike(value: string): string {
-    return value.replace(/%/g, '\\%').replace(/_/g, '\\_')
+    return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
   }
 }

@@ -546,16 +546,15 @@ function parseOrderBy(value: string): OrderByItem[] {
     let exprStr = trimmed
     let direction: 'asc' | 'desc' = 'asc'
 
-    // The direction keyword is at the end, separated by whitespace
-    const descMatch = /\s+(desc)$/i.exec(trimmed)
-    const ascMatch = /\s+(asc)$/i.exec(trimmed)
-
-    if (descMatch) {
+    // The direction keyword is at the end, separated by whitespace.
+    // Use atomic-style match: find last space, check suffix — avoids \s+ backtracking (ReDoS).
+    const lower = trimmed.toLowerCase()
+    if (/ desc$/i.test(lower)) {
       direction = 'desc'
-      exprStr = trimmed.slice(0, trimmed.length - descMatch[0].length).trim()
-    } else if (ascMatch) {
+      exprStr = trimmed.slice(0, -5).trimEnd()
+    } else if (/ asc$/i.test(lower)) {
       direction = 'asc'
-      exprStr = trimmed.slice(0, trimmed.length - ascMatch[0].length).trim()
+      exprStr = trimmed.slice(0, -4).trimEnd()
     }
 
     const tokens = tokenize(exprStr)

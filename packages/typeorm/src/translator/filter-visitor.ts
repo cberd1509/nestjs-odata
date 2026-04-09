@@ -430,7 +430,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
    * % -> \%, _ -> \_
    */
   private escapeLike(value: string): string {
-    return value.replace(/%/g, '\\%').replace(/_/g, '\\_')
+    return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
   }
 }
 
@@ -476,7 +476,7 @@ class InnerFilterExprBuilder {
       if (name === 'contains' || name === 'startswith' || name === 'endswith') {
         const prop = this.buildExpr(node.args[0])
         const rawValue = String(node.args[1]?.kind === 'Literal' ? node.args[1].value : '')
-        const escaped = rawValue.replace(/%/g, '\\%').replace(/_/g, '\\_')
+        const escaped = rawValue.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
         let pattern: string
         if (name === 'contains') {
           pattern = `%${escaped}%`
