@@ -55,6 +55,27 @@ export class TypeOrmAutoHandler {
   }
 
   /**
+   * Resolve the TypeORM Repository for the given OData entity set.
+   *
+   * Walks DataSource.entityMetadatas to find the entity class whose EDM name
+   * matches the entity set's entityTypeName, then returns its Repository.
+   * This is what makes multi-entity `forFeature([A, B, …])` route to the
+   * correct table per request. Falls back to the constructor-injected default
+   * repo when no DataSource is available (single-entity test fixtures).
+   */
+  private resolveRepo(entitySetName: string): Repository<ObjectLiteral> {
+    if (!this.dataSource) return this.repo
+    const entitySet = this.edmRegistry.getEntitySet(entitySetName)
+    if (!entitySet) return this.repo
+    for (const meta of this.dataSource.entityMetadatas) {
+      if (meta.name === entitySet.entityTypeName) {
+        return this.dataSource.getRepository(meta.target as new () => ObjectLiteral)
+      }
+    }
+    return this.repo
+  }
+
+  /**
    * Handle an OData GET collection request.
    *
    * Strategy:
@@ -71,6 +92,7 @@ export class TypeOrmAutoHandler {
    */
   async handleGet(query: ODataQuery, requestUrl: string): Promise<ODataQueryResult> {
     const entityType = this.resolveEntityType(query.entitySetName)
+    const repo = this.resolveRepo(query.entitySetName)
     const maxTop = this.options.maxTop ?? 1000
     const effectiveTop = Math.min(query.top ?? maxTop, maxTop)
 
@@ -80,7 +102,7 @@ export class TypeOrmAutoHandler {
       top: effectiveTop + 1,
     }
 
-    const translateResult = this.translator.translate(fetchQuery, entityType)
+    const translateResult = this.translator.translate(fetchQuery, entityType, repo)
 
     const includeCount = query.count === true
     const rawResult = await this.translator.execute(translateResult, includeCount)
@@ -93,7 +115,12 @@ export class TypeOrmAutoHandler {
     let nextLink: string | undefined
     if (hasMore) {
       const currentSkip = query.skip ?? 0
-      nextLink = this.buildNextLink(requestUrl, currentSkip + effectiveTop, effectiveTop)
+      nextLink = this.buildNextLink(
+        requestUrl,
+        currentSkip + effectiveTop,
+        effectiveTop,
+        query.entitySetName,
+      )
     }
 
     return {
@@ -116,6 +143,7 @@ export class TypeOrmAutoHandler {
    */
   async handleCount(query: ODataQuery): Promise<number> {
     const entityType = this.resolveEntityType(query.entitySetName)
+    const repo = this.resolveRepo(query.entitySetName)
 
     // Strip everything except filter and entitySetName (Pitfall 3 — T-03-12)
     const countQuery: ODataQuery = {
@@ -123,19 +151,32 @@ export class TypeOrmAutoHandler {
       filter: query.filter,
     }
 
-    const { qb } = this.translator.translate(countQuery, entityType)
+    const { qb } = this.translator.translate(countQuery, entityType, repo)
     return qb.getCount()
   }
 
   /**
    * Build an OData nextLink URL with updated $skip and $top parameters.
    *
-   * @param requestUrl - The current request URL (may contain existing query params)
+   * The base URL is rebuilt from `serviceRoot + entitySetName` (NOT the runtime
+   * request URL) so that `@odata.nextLink` is prefix-consistent with
+   * `@odata.context` and `@odata.id`. Per OData v4 §5.1.1 all three should be
+   * same-document URIs built off the service root — using `req.originalUrl`
+   * for nextLink while building context/id from `serviceRoot` produced mixed
+   * prefixes when the app was mounted under a NestJS `setGlobalPrefix`.
+   *
+   * Query options other than $skip/$top from the original request are
+   * preserved verbatim so $filter/$select/$orderby/$count carry into the next
+   * page.
+   *
+   * @param requestUrl - The current request URL (used only to extract query params)
    * @param newSkip - The new $skip value for the next page
    * @param top - The page size ($top value)
+   * @param entitySetName - The OData entity set name (used for the canonical base URL)
    */
-  buildNextLink(requestUrl: string, newSkip: number, top: number): string {
-    // Parse the URL to extract existing query params
+  buildNextLink(requestUrl: string, newSkip: number, top: number, entitySetName?: string): string {
+    // Parse the URL to extract existing query params. The path is intentionally
+    // discarded if entitySetName is provided — see the canonical base below.
     let baseUrl: string
     let searchStr: string
 
@@ -146,6 +187,15 @@ export class TypeOrmAutoHandler {
     } else {
       baseUrl = requestUrl
       searchStr = ''
+    }
+
+    // Prefer the canonical service-root URL when we know the entity set.
+    // Keeps @odata.nextLink consistent with @odata.context / @odata.id.
+    if (entitySetName) {
+      const root = this.options.serviceRoot.endsWith('/')
+        ? this.options.serviceRoot.slice(0, -1)
+        : this.options.serviceRoot
+      baseUrl = `${root}/${entitySetName}`
     }
 
     // Parse existing params and update $skip/$top
@@ -188,8 +238,9 @@ export class TypeOrmAutoHandler {
     ifNoneMatchHeader?: string,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
+    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const entity = await this.repo.findOne({ where })
+    const entity = await repo.findOne({ where })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
@@ -237,8 +288,9 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
   ): Promise<{ entity: unknown; locationUrl: string }> {
     const entityType = this.resolveEntityType(entitySetName)
-    const created = this.repo.create(body as ObjectLiteral)
-    const saved = await this.repo.save(created)
+    const repo = this.resolveRepo(entitySetName)
+    const created = repo.create(body as ObjectLiteral)
+    const saved = await repo.save(created)
 
     // Build key string for Location URL
     const keyParts = entityType.keyProperties.map((kp) => {
@@ -285,6 +337,7 @@ export class TypeOrmAutoHandler {
     }
 
     const entityType = this.resolveEntityType(entitySetName)
+    const handlerRepo = this.resolveRepo(entitySetName)
 
     // Separate scalar props from navigation props
     const navPropNames = new Set(entityType.navigationProperties.map((p) => p.name))
@@ -299,8 +352,8 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    // Save parent entity using this handler's repo (entity class for this entity set)
-    const parentRepo = manager.getRepository(this.repo.target as new () => ObjectLiteral)
+    // Save parent entity using the per-entity-set repo (resolved via DataSource).
+    const parentRepo = manager.getRepository(handlerRepo.target as new () => ObjectLiteral)
     const parentCreated = parentRepo.create(scalarBody as ObjectLiteral)
     const savedParent = (await parentRepo.save(parentCreated)) as Record<string, unknown>
 
@@ -343,7 +396,7 @@ export class TypeOrmAutoHandler {
       let fkColumnName: string | undefined
       if (this.dataSource) {
         try {
-          const parentMeta = this.dataSource.getMetadata(this.repo.target)
+          const parentMeta = this.dataSource.getMetadata(handlerRepo.target)
           const relation = parentMeta.relations.find((r) => r.propertyName === navPropName)
           if (relation?.inverseRelation?.joinColumns?.[0]?.propertyName) {
             fkColumnName = relation.inverseRelation.joinColumns[0].propertyName
@@ -439,13 +492,14 @@ export class TypeOrmAutoHandler {
     ifMatchHeader?: string,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
+    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
 
     // ETag If-Match validation before update
     if (this.etagProvider && ifMatchHeader) {
       const etagColumn = this.etagProvider.getETagColumn(entitySetName)
       if (etagColumn) {
-        const current = await this.repo.findOne({ where })
+        const current = await repo.findOne({ where })
         if (!current) {
           throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
         }
@@ -470,11 +524,11 @@ export class TypeOrmAutoHandler {
     }
 
     const merged = { ...where, ...body }
-    const preloaded = await this.repo.preload(merged as ObjectLiteral)
+    const preloaded = await repo.preload(merged as ObjectLiteral)
     if (!preloaded) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
-    return this.repo.save(preloaded)
+    return repo.save(preloaded)
   }
 
   /**
@@ -506,6 +560,7 @@ export class TypeOrmAutoHandler {
     ifMatchHeader?: string,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
+    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
 
     // Validate key in body matches URL key (D-01 spec compliance — T-10-01)
@@ -521,7 +576,7 @@ export class TypeOrmAutoHandler {
     }
 
     // Find existing entity to confirm it exists
-    const existing = await this.repo.findOne({ where })
+    const existing = await repo.findOne({ where })
     if (!existing) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
@@ -559,7 +614,7 @@ export class TypeOrmAutoHandler {
       replacement[kp] = where[kp]
     }
 
-    for (const col of this.repo.metadata.columns) {
+    for (const col of repo.metadata.columns) {
       if (col.isPrimary) continue // key already set from URL
       if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue // TypeORM-managed
 
@@ -574,8 +629,8 @@ export class TypeOrmAutoHandler {
       // else: omit — DB-managed default (e.g., CURRENT_TIMESTAMP)
     }
 
-    const entity = this.repo.create(replacement as ObjectLiteral)
-    return this.repo.save(entity)
+    const entity = repo.create(replacement as ObjectLiteral)
+    return repo.save(entity)
   }
 
   /**
@@ -587,13 +642,14 @@ export class TypeOrmAutoHandler {
    */
   async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
     const entityType = this.resolveEntityType(entitySetName)
+    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
 
     // ETag If-Match validation before delete
     if (this.etagProvider && ifMatchHeader) {
       const etagColumn = this.etagProvider.getETagColumn(entitySetName)
       if (etagColumn) {
-        const current = await this.repo.findOne({ where })
+        const current = await repo.findOne({ where })
         if (!current) {
           throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
         }
@@ -617,7 +673,7 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    const result = await this.repo.delete(where)
+    const result = await repo.delete(where)
     if (result.affected === 0) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }

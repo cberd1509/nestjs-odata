@@ -72,6 +72,70 @@ The `serviceRoot` option in `forFeature()` is **optional**. It defaults to the v
 ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/api/v2' })
 ```
 
+### Custom entity-set names
+
+Pass `{ entity, name }` configs inside the items array to override the OData
+entity-set name without touching the entity class. The override wins over
+both `@ODataEntitySet` decorator and default pluralization.
+
+```typescript
+ODataTypeOrmModule.forFeature([
+  Tag, // → /odata/Tags (auto-pluralized)
+  { entity: UserEntity, name: 'Users' }, // → /odata/Users (not /odata/UserEntities)
+  { entity: ClaudeSessionEntity, name: 'Sessions' },
+])
+```
+
+### Co-locating controllers (single declaration)
+
+Pass `controllers` in the options object and `forFeature` will patch their
+`PATH_METADATA` with the service root _and_ register them in its own dynamic
+module. You no longer need to list them in `@Module({ controllers })` (they
+still need to be listed in `ODataModule.forRoot({ controllers })` for the
+service-root path patching, but the declaration in `forFeature` covers the
+DI side).
+
+```typescript
+@Module({
+  imports: [
+    ODataModule.forRoot({
+      serviceRoot: '/odata',
+      controllers: [UsersODataController, SessionsODataController],
+    }),
+    ODataTypeOrmModule.forFeature(
+      [
+        { entity: UserEntity, name: 'Users' },
+        { entity: ClaudeSessionEntity, name: 'Sessions' },
+      ],
+      { controllers: [UsersODataController, SessionsODataController] },
+    ),
+  ],
+  // controllers: [...] — not needed; forFeature owns the registration
+})
+export class AppModule {}
+```
+
+### Mounting under `app.setGlobalPrefix()`
+
+If your app applies a Nest global prefix (typical pattern: `app.setGlobalPrefix('api')`),
+exclude the OData routes so the service root isn't double-prefixed. The
+`ODataModule.globalPrefixExclude()` helper returns the correct Express 5
+splat patterns based on the `serviceRoot` you registered:
+
+```typescript
+import { ODataModule } from '@nestjs-odata/core'
+
+const app = await NestFactory.create(AppModule)
+app.setGlobalPrefix('api', { exclude: ODataModule.globalPrefixExclude() })
+// Non-OData routes → /api/...
+// OData routes      → /odata/...  (unprefixed; serviceRoot stays canonical)
+```
+
+Pass an explicit value (`globalPrefixExclude('/v2/odata')`) when you have
+multiple OData mounts or need to exclude a specific sub-path. Without this,
+`@odata.context` / `@odata.id` / `@odata.nextLink` URLs in the response body
+would be inconsistent with the actual route paths.
+
 ## Per-entity security overrides
 
 Individual entity sets can override the global security limits:

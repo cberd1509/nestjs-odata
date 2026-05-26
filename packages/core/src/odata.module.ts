@@ -172,9 +172,42 @@ export class ODataModule extends ConfigurableModuleClass {
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
+      // NOTE: OData controllers are NOT auto-registered here. They live in the
+      // same feature module as `ODataTypeOrmModule.forFeature()` so they can
+      // resolve `TypeOrmAutoHandler` via DI. forRoot()'s job is to patch their
+      // PATH_METADATA with `serviceRoot` (done above). See README for the
+      // canonical wiring pattern.
       controllers: [...(parent.controllers ?? []), metadataController],
       exports: [...(parent.exports ?? []), ODATA_MODULE_OPTIONS, CsdlBuilder],
     }
+  }
+
+  /**
+   * Build the exclude pattern array for `app.setGlobalPrefix()` so OData routes
+   * (which already include `serviceRoot` in their PATH_METADATA) do not get
+   * double-prefixed with the Nest global prefix.
+   *
+   * Usage:
+   *   app.setGlobalPrefix('api', { exclude: ODataModule.globalPrefixExclude() });
+   *
+   * Reads the serviceRoot registered by `forRoot()`. Returns Express 5 splat-
+   * style patterns compatible with NestJS 11.
+   *
+   * @param serviceRootOverride - Optional explicit service root; defaults to the
+   *   value registered via forRoot() (or 'odata' if forRoot has not run yet).
+   */
+  static globalPrefixExclude(
+    serviceRootOverride?: string,
+  ): ReadonlyArray<{ path: string; method: number }> {
+    const raw = serviceRootOverride ?? ODataModule._serviceRoot ?? 'odata'
+    const root = raw.startsWith('/') ? raw.slice(1) : raw
+    // RequestMethod.ALL === 7 in @nestjs/common. We avoid the import to keep this
+    // helper static-callable without DI. Consumers can also build their own
+    // exclude entries; this just removes the most common foot-gun.
+    return [
+      { path: root, method: 7 },
+      { path: `${root}/{*splat}`, method: 7 },
+    ]
   }
 
   /** Override forRootAsync to inject the resolved-options provider into the dynamic module. */

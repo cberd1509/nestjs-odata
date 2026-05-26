@@ -161,6 +161,10 @@ describe('TypeOrmAutoHandler', () => {
       expect(translateMock).toHaveBeenCalledWith(
         expect.objectContaining({ entitySetName: 'Products' }),
         entityType,
+        // Third arg is the per-request Repository resolved from entitySetName.
+        // In the unit fixture there's no DataSource so it falls back to the
+        // injected default repo.
+        expect.anything(),
       )
       expect(result.items).toBeDefined()
     })

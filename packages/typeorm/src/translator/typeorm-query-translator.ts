@@ -57,12 +57,23 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
    * Translate an ODataQuery AST into a TypeORM SelectQueryBuilder.
    * Also returns the expandPaginationMap for post-JOIN slicing (D-13).
    * Does not execute the query — call execute() for DB access.
+   *
+   * The optional `entityRepo` argument lets callers (e.g. TypeOrmAutoHandler in
+   * a multi-entity feature module) supply the per-request Repository for the
+   * entity set being queried. When omitted, falls back to the constructor-
+   * injected default (first-registered entity), which is correct for
+   * single-entity forFeature() callers.
    */
-  translate(query: ODataQuery, entityType: EdmEntityType): TranslateResult {
+  translate(
+    query: ODataQuery,
+    entityType: EdmEntityType,
+    entityRepo?: Repository<ObjectLiteral>,
+  ): TranslateResult {
+    const repo = entityRepo ?? this.repo
     const alias = 'entity'
-    const qb = this.repo.createQueryBuilder(alias)
+    const qb = repo.createQueryBuilder(alias)
 
-    const dbType = this.repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
+    const dbType = repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
     const dialect: 'sqlite' | 'postgres' | 'ansi' =
       dbType === 'sqlite' || dbType === 'postgres' ? dbType : 'ansi'
 
@@ -74,7 +85,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
         entityType,
         this.options.maxFilterDepth,
         dialect,
-        this.repo,
+        repo,
       ).visit(query.filter)
     }
 
@@ -100,7 +111,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
         entityType,
         this.options.maxFilterDepth,
         dialect,
-        this.repo,
+        repo,
       )
       applyProperties = applyVisitor.apply(query.apply)
     }

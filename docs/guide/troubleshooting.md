@@ -184,6 +184,59 @@ TypeOrmModule.forRoot({
 })
 ```
 
+## Routes appear under `/api/api/odata/...` (double-prefixed)
+
+**Symptom:** You call `app.setGlobalPrefix('api')` and OData routes get the
+`api/` prefix applied twice — the metadata service-document URL ends up at
+`/api/api/odata/$metadata` and clients 404 trying to reach the canonical
+`/api/odata/$metadata`.
+
+**Fix:** exclude the OData service-root from the global prefix using
+`ODataModule.globalPrefixExclude()`:
+
+```typescript
+app.setGlobalPrefix('api', { exclude: ODataModule.globalPrefixExclude() })
+```
+
+The helper reads the `serviceRoot` you registered via `forRoot()` and returns
+the right Express 5 splat patterns (`odata` + `odata/{*splat}`). Without
+the exclude, `@odata.context` / `@odata.id` (built from `serviceRoot`) will be
+inconsistent with `@odata.nextLink` (built from `req.originalUrl`), and OData
+v4 clients (Excel, Olingo, odata2ts) will fail to navigate.
+
+## URLs come out as `/odata/UserEntities` (ugly suffix)
+
+**Symptom:** You name your TypeORM class `UserEntity` (the idiomatic Nest+TypeORM
+convention) and the OData entity set becomes `UserEntities`. You don't want the
+`Entity` suffix in your URLs.
+
+**Fix:** use the object-form in `forFeature` to override the entity-set name
+without touching the class:
+
+```typescript
+ODataTypeOrmModule.forFeature([
+  { entity: UserEntity, name: 'Users' },
+  { entity: ClaudeSessionEntity, name: 'Sessions' },
+])
+```
+
+The override wins over both the `@ODataEntitySet` decorator and default
+pluralization. Equivalent class-level option: `@ODataEntitySet('Users')` on
+the entity itself.
+
+## Multiple entities in one feature module return the wrong rows
+
+**Symptom:** You register two entities in a single `forFeature([A, B])` call.
+Requests to `/odata/A` work; requests to `/odata/B` either return rows from
+`A` or 500 with "column does not exist" when the filter references a `B`-only
+column.
+
+**Fix:** make sure you're on a recent enough version of
+`@nestjs-odata/typeorm` — `TypeOrmAutoHandler` resolves the right Repository
+per request from the entity-set name. Older releases routed everything to
+`entities[0]`. Bug #1 in the integration handoff doc; covered by
+`multi-entity-disambiguation.e2e-spec.ts`.
+
 ## Still stuck?
 
 - Check the [GitHub Issues](https://github.com/cberd1509/nestjs-odata/issues) for known problems
