@@ -19,6 +19,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'API', link: '/api/module' },
       { text: 'Examples', link: '/examples/basic-crud' },
+      { text: 'Releases', link: '/releases' },
       { text: 'GitHub', link: 'https://github.com/cberd1509/nestjs-odata' },
     ],
     sidebar: {
