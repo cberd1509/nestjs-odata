@@ -161,6 +161,10 @@ describe('TypeOrmAutoHandler', () => {
       expect(translateMock).toHaveBeenCalledWith(
         expect.objectContaining({ entitySetName: 'Products' }),
         entityType,
+        // Third arg is the per-request Repository resolved from entitySetName.
+        // In the unit fixture there's no DataSource so it falls back to the
+        // injected default repo.
+        expect.anything(),
       )
       expect(result.items).toBeDefined()
     })
@@ -448,6 +452,150 @@ describe('TypeOrmAutoHandler', () => {
 
       expect(result.nextLink).toBeDefined()
       expect(result.nextLink).toContain('$skip=2')
+    })
+
+    it('Test 20: buildNextLink rooted at serviceRoot when entitySetName is supplied', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      // Pass a runtime URL that includes a global prefix; the resulting nextLink
+      // must be rebuilt from serviceRoot + entitySetName instead.
+      const nextLink = autoHandler.buildNextLink(
+        'http://app.test/api/odata/Products?$filter=price%20gt%2010&$top=5',
+        5,
+        5,
+        'Products',
+      )
+
+      expect(nextLink.startsWith('/odata/Products?')).toBe(true)
+      expect(nextLink).not.toContain('/api/')
+      expect(nextLink).toContain('$skip=5')
+      expect(nextLink).toContain('$top=5')
+      // Other query params from the original URL must carry over.
+      expect(nextLink).toContain('$filter=')
+    })
+
+    it('Test 21: buildNextLink normalizes serviceRoot with trailing slash', () => {
+      const { repo } = makeMockRepo()
+      const opts = { ...makeOptions(), serviceRoot: '/odata/' }
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, opts, repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://app.test/odata/Products',
+        10,
+        5,
+        'Products',
+      )
+
+      expect(nextLink.startsWith('/odata/Products?')).toBe(true)
+      expect(nextLink).not.toContain('//Products')
+    })
+  })
+
+  // --- resolveRepo() — internal helper exercised through handleGet() so the
+  // private branches stay covered ---
+  describe('resolveRepo() branches', () => {
+    it('Test R1: falls back to the injected default repo when no DataSource is provided', async () => {
+      // No 4th DataSource arg → resolveRepo short-circuits to `this.repo`.
+      const rows = [{ id: 1 }]
+      const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
+      translateMock.mockReturnValue(makeTranslateResult(qb))
+      executeMock.mockResolvedValue({ items: rows })
+
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+      await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
+
+      // The translator should have been called with the injected default repo
+      // (3rd argument), proving the no-DataSource branch returned `this.repo`.
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+    })
+
+    it('Test R2: falls back to default repo when the entity set is unknown', async () => {
+      const rows: ObjectLiteral[] = []
+      const { qb } = makeMockQb(rows)
+      const { repo } = makeMockRepo()
+      translateMock.mockReturnValue(makeTranslateResult(qb))
+      executeMock.mockResolvedValue({ items: rows })
+
+      // Provide a DataSource, but with NO entityMetadatas. Then issue a query for
+      // an entity set that IS registered in the EDM — the DataSource has no
+      // matching entity class, so resolveRepo should fall through to `this.repo`.
+      const fakeDataSource = {
+        entityMetadatas: [],
+        getRepository: vi.fn(),
+      } as unknown as DataSource
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        undefined, // etag provider
+        fakeDataSource,
+      )
+      await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
+
+      // No entity class matched — the fallback branch should pass the default repo.
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+    })
+
+    it('Test R3: looks up Repository from DataSource when entity class matches', async () => {
+      const rows = [{ id: 1 }]
+      const { qb } = makeMockQb(rows)
+      const { repo: defaultRepo } = makeMockRepo()
+      const { repo: resolvedRepo } = makeMockRepo()
+      translateMock.mockReturnValue(makeTranslateResult(qb))
+      executeMock.mockResolvedValue({ items: rows })
+
+      class Product {}
+      const fakeDataSource = {
+        entityMetadatas: [{ name: 'Product', target: Product as unknown as new () => object }],
+        getRepository: vi.fn().mockReturnValue(resolvedRepo),
+      } as unknown as DataSource
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        defaultRepo,
+        undefined,
+        fakeDataSource,
+      )
+      await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
+
+      // The DataSource-resolved repo should win over the default one.
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, resolvedRepo)
+    })
+
+    it('Test R4: falls back to default repo when entity set is not in EdmRegistry but resolveEntityType would have thrown — short-circuit safety', async () => {
+      // resolveRepo is called BEFORE resolveEntityType throws, but in handleGetByKey
+      // it's called after — verify the no-entitySet branch via the count path.
+      const { qb } = makeMockQb([])
+      const { repo } = makeMockRepo()
+      translateMock.mockReturnValue(makeTranslateResult(qb))
+
+      // Register a DIFFERENT entity set so resolveEntityType succeeds, but
+      // resolveRepo has to walk past entries that don't match.
+      const otherEntityType = makeEntityType('Other')
+      const otherEntitySet = makeEntitySet('Others', 'Other')
+      edmRegistry.register(otherEntityType, otherEntitySet)
+
+      class NoMatch {}
+      const fakeDataSource = {
+        entityMetadatas: [{ name: 'Different', target: NoMatch as unknown as new () => object }],
+        getRepository: vi.fn(),
+      } as unknown as DataSource
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        undefined,
+        fakeDataSource,
+      )
+      await autoHandler.handleCount(makeQuery({ entitySetName: 'Others' }))
+
+      // Walked entityMetadatas, found no match → returned default repo.
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), otherEntityType, repo)
     })
   })
 

@@ -92,6 +92,37 @@ static get registeredServiceRoot(): string
 
 Returns the `serviceRoot` registered via `forRoot()`. Used by adapter modules (e.g. `ODataTypeOrmModule`) to inherit the service root without requiring it to be passed again.
 
+### ODataModule.globalPrefixExclude()
+
+```typescript
+static globalPrefixExclude(
+  serviceRootOverride?: string
+): ReadonlyArray<{ path: string; method: number }>
+```
+
+Build the exclude pattern array for `app.setGlobalPrefix()` so OData routes
+(which already include `serviceRoot` in their `PATH_METADATA`) don't get
+double-prefixed by NestJS.
+
+Returns Express 5 splat-style patterns covering both the bare service root
+and its children — compatible with NestJS 11.
+
+**Parameters:**
+
+| Parameter             | Type      | Description                                                                                  |
+| --------------------- | --------- | -------------------------------------------------------------------------------------------- |
+| `serviceRootOverride` | `string?` | Explicit service root to use. Defaults to the value registered via `forRoot()` (or `odata`). |
+
+**Example:**
+
+```typescript
+import { ODataModule } from '@nestjs-odata/core'
+
+const app = await NestFactory.create(AppModule)
+app.setGlobalPrefix('api', { exclude: ODataModule.globalPrefixExclude() })
+// → `/api/users` routes go through; `/odata/...` routes stay unprefixed
+```
+
 ### ODataModule.forFeature()
 
 ```typescript
@@ -110,33 +141,71 @@ The TypeORM adapter module. Derives OData EDM from TypeORM entity metadata.
 
 ```typescript
 ODataTypeOrmModule.forFeature(
-  entities: EntityClassOrSchema[],
-  options?: { serviceRoot?: string }
+  items: ODataTypeOrmFeatureItem[],
+  options?: {
+    serviceRoot?: string
+    controllers?: Type[]
+  }
 ): DynamicModule
 ```
 
 Registers TypeORM entities for OData auto-derivation.
 
+**`items` array** accepts a mixed list of:
+
+- **Bare entity class** — `Product` — the OData entity-set name is derived from
+  the class name (respecting any `@ODataEntitySet` decorator, otherwise
+  pluralized).
+- **Object config** — `{ entity: UserEntity, name: 'Users' }` — explicitly
+  override the OData entity-set name. Takes precedence over `@ODataEntitySet`
+  and over default pluralization.
+
+```typescript
+type ODataTypeOrmFeatureConfig = {
+  readonly entity: EntityClassOrSchema
+  readonly name?: string
+}
+type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
+```
+
 **Parameters:**
 
-| Parameter             | Type                    | Description                                                                                                                  |
-| --------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `entities`            | `EntityClassOrSchema[]` | TypeORM entity classes decorated with `@Entity()`                                                                            |
-| `options.serviceRoot` | `string?`               | Optional. Inherits from `ODataModule.registeredServiceRoot` by default. Only needed to override the `$batch` controller path |
+| Parameter             | Type                        | Description                                                                                                                                                                                  |
+| --------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `items`               | `ODataTypeOrmFeatureItem[]` | Entity classes and/or `{ entity, name }` configs                                                                                                                                             |
+| `options.serviceRoot` | `string?`                   | Optional. Inherits from `ODataModule.registeredServiceRoot` by default.                                                                                                                      |
+| `options.controllers` | `Type[]?`                   | OData controllers (decorated with `@ODataController`). When provided, `forFeature` patches their `PATH_METADATA` with `serviceRoot` AND registers them — no separate `@Module` entry needed. |
 
 **What it does:**
 
 1. Wraps `TypeOrmModule.forFeature(entities)` for repository injection
-2. Registers `TypeOrmEdmInitializer` which runs `onModuleInit` to derive EDM from TypeORM metadata
+2. Registers `TypeOrmEdmInitializer` which runs `onModuleInit` to derive EDM from TypeORM metadata (applying any `{ entity, name }` overrides)
 3. Registers `TypeOrmQueryTranslator` for `$filter`, `$select`, `$orderby`, `$expand`, `$search`, `$apply` translation
-4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling (including PUT replace and deep insert)
+4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling. Multi-entity safe: each request resolves the right Repository from its entity-set name (no need to split into per-feature modules)
 5. Registers `TypeOrmETagProvider` and `TypeOrmSearchProvider` for ETag concurrency and `$search` support
 6. Registers `BatchController` at `POST {serviceRoot}/$batch`
+7. (When `options.controllers` is set) Patches each controller's `PATH_METADATA` with `serviceRoot` and registers it in the dynamic module's `controllers` array
 
-**Example:**
+**Examples:**
 
 ```typescript
+// Simple — bare entity classes
 ODataTypeOrmModule.forFeature([Product, Category, Order, OrderItem])
+
+// With set-name overrides (avoids `/odata/UserEntities` URLs)
+ODataTypeOrmModule.forFeature([
+  { entity: UserEntity, name: 'Users' },
+  { entity: ClaudeSessionEntity, name: 'Sessions' },
+])
+
+// Single-declaration: controllers live in this dynamic module
+ODataTypeOrmModule.forFeature(
+  [
+    { entity: UserEntity, name: 'Users' },
+    { entity: ClaudeSessionEntity, name: 'Sessions' },
+  ],
+  { controllers: [UsersODataController, SessionsODataController] },
+)
 ```
 
 ---

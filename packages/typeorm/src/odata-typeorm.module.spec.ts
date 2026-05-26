@@ -194,6 +194,7 @@ describe('ODataTypeOrmModule', () => {
       mockEdmRegistry as never,
       mockOptions as never,
       [Product],
+      new Map(), // forFeature() name overrides — empty when caller passed plain classes
     )
 
     initializer.onModuleInit()

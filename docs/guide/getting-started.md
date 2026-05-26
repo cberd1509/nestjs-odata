@@ -152,6 +152,63 @@ export class AppModule {}
 
 > **Switching databases:** The SQLite in-memory setup requires no external services — perfect for getting started and running tests. For production, swap in PostgreSQL, MySQL, or any [TypeORM-supported driver](https://typeorm.io/data-source-options) by changing the `TypeOrmModule.forRoot()` options (e.g. `type: 'postgres'`, `host`, `port`, `username`, `password`, `database`).
 
+### Registering multiple entities and custom set names
+
+`ODataTypeOrmModule.forFeature()` accepts a mixed array of plain entity classes
+and `{ entity, name }` config objects. Use the object form to override the
+OData entity-set name without touching the entity class — handy when the
+TypeORM convention adds an `Entity` suffix that you don't want in your URLs.
+
+You can also pass `controllers` in the second argument so you only declare them
+once (instead of in both `ODataModule.forRoot({controllers})` _and_
+`@Module({controllers})`).
+
+```typescript
+@Module({
+  imports: [
+    ODataModule.forRoot({
+      serviceRoot: '/odata',
+      controllers: [UsersODataController, SessionsODataController],
+    }),
+    ODataTypeOrmModule.forFeature(
+      [
+        // Bare class → set name auto-derived (pluralized class name)
+        TagEntity,
+        // Object form → explicit set name override
+        { entity: UserEntity, name: 'Users' },
+        { entity: ClaudeSessionEntity, name: 'Sessions' },
+      ],
+      // Single declaration: controllers go here (no separate @Module entry needed)
+      { controllers: [UsersODataController, SessionsODataController] },
+    ),
+  ],
+})
+export class AppModule {}
+```
+
+Requests now reach `/odata/Users`, `/odata/Sessions`, `/odata/Tags` —
+multi-entity registration in a single `forFeature` call is safe; each entity
+set is routed to its own table per request.
+
+### Using `setGlobalPrefix()`
+
+If your app uses `app.setGlobalPrefix('api')`, exclude the OData service-root
+routes so they aren't double-prefixed. `ODataModule.globalPrefixExclude()`
+returns the correct Express 5 splat patterns:
+
+```typescript
+import { ODataModule } from '@nestjs-odata/core'
+import { RequestMethod } from '@nestjs/common'
+
+const app = await NestFactory.create(AppModule)
+app.setGlobalPrefix('api', { exclude: ODataModule.globalPrefixExclude() })
+await app.listen(3000)
+```
+
+The helper reads the `serviceRoot` registered via `forRoot()` and returns
+both the bare-root and child-splat patterns. Pass an explicit value
+(`globalPrefixExclude('/v2/odata')`) when overriding for a sub-version mount.
+
 ## Step 3b — Bootstrap the application
 
 ```typescript

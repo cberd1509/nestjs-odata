@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version-file: '.node-version'
@@ -28,12 +28,12 @@ jobs:
         run: pnpm turbo test -- --coverage
       - name: Validate package exports (core)
         run: |
-          pnpm dlx @arethetypeswrong/cli --pack packages/core
-          pnpm dlx publint packages/core
+          pnpm exec attw --pack packages/core
+          pnpm exec publint packages/core
       - name: Validate package exports (typeorm)
         run: |
-          pnpm dlx @arethetypeswrong/cli --pack packages/typeorm
-          pnpm dlx publint packages/typeorm
+          pnpm exec attw --pack packages/typeorm
+          pnpm exec publint packages/typeorm
       - name: Verify publishability (dry-run)
         if: github.ref == 'refs/heads/main'
         run: |
