@@ -67,7 +67,7 @@
     "tsdown": "^0.22.0",
     "typescript": "^5.9.3",
     "unplugin-swc": "^1.5.9",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "pluralize": "^8.0.0"
