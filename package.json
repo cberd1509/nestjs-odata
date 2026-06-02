@@ -18,7 +18,7 @@
     "release": "changeset publish"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "0.18.2",
+    "@arethetypeswrong/cli": "0.18.3",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "@commitlint/cli": "^20.5.0",
@@ -30,7 +30,7 @@
     "lint-staged": "^16.4.0",
     "prettier": "^3.8.3",
     "publint": "^0.3.21",
-    "turbo": "^2.9.14",
+    "turbo": "^2.9.16",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.60.0"
   },
