@@ -21,7 +21,7 @@
     "@arethetypeswrong/cli": "0.18.2",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
-    "@commitlint/cli": "^20.5.0",
+    "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^20.5.0",
     "@repo/eslint-config": "workspace:*",
     "eslint": "^9.39.4",
