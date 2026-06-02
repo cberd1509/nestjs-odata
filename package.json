@@ -22,7 +22,7 @@
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@commitlint/config-conventional": "^21.0.2",
     "@repo/eslint-config": "workspace:*",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.0.0",
