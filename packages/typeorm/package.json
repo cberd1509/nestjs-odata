@@ -71,7 +71,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.0.0",
     "tsdown": "^0.22.0",
-    "typeorm": "^0.3.29",
+    "typeorm": "^0.3.31",
     "typescript": "^5.9.3",
     "unplugin-swc": "^1.5.9",
     "vitest": "^3.2.4"
