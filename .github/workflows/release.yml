@@ -27,7 +27,7 @@ jobs:
       - run: pnpm turbo build
       - name: Create version PR or publish (changesets)
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           title: 'chore: version packages'
           commit: 'chore: version packages'
