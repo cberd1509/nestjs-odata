@@ -373,7 +373,7 @@ describe('TypeOrmScopeService', () => {
     }
     qb.getOne = () => Promise.resolve(null)
     const manager = {
-      connection: { options: { type: 'postgres' } },
+      dataSource: { options: { type: 'postgres' } },
       createQueryBuilder: () => qb,
       queryRunner: { isTransactionActive: true },
     }

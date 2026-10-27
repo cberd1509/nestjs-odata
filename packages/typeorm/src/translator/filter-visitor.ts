@@ -238,7 +238,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     const pkCol = this.repo.metadata.primaryColumns[0]?.databaseName ?? 'id'
 
     // Row-level scope of the target entity set: only rows inside it count for any/all.
-    const escapeColumn = (name: string): string => this.repo!.manager.connection.driver.escape(name)
+    const escapeColumn = (name: string): string => this.repo!.manager.dataSource.driver.escape(name)
     const scoped = this.lambdaScope?.(relation.propertyName)
     const scope = scoped
       ? {
