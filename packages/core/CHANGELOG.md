@@ -1,5 +1,76 @@
 # @nestjs-odata/core
 
+## 2.3.0
+
+### Minor Changes
+
+- [#87](https://github.com/cberd1509/nestjs-odata/pull/87) [`46fb9e4`](https://github.com/cberd1509/nestjs-odata/commit/46fb9e42841f1d0624dad9f182f3c473083da68d) Thanks [@cberd1509](https://github.com/cberd1509)! - OData 4.01 `$batch` conformance: operations run through their routes, changeset responses, query options and one endpoint for every feature module ([#64](https://github.com/cberd1509/nestjs-odata/issues/64), [#65](https://github.com/cberd1509/nestjs-odata/issues/65), [#67](https://github.com/cberd1509/nestjs-odata/issues/67), [#73](https://github.com/cberd1509/nestjs-odata/issues/73)).
+
+  **Security fix ([#67](https://github.com/cberd1509/nestjs-odata/issues/67)): `$batch` operations no longer bypass route guards.** Each operation is now dispatched, in process, through the application's HTTP stack (the Express application, or Fastify's `inject()`), so it reaches its route with the same middleware, guards (route and global), interceptors, pipes, exception filters and error mapping as the same request sent on its own (Part 1 §11.7). Before, operations were executed directly against TypeORM and the guards, interceptors and pipes of `@ODataController` routes never ran for them: a `DELETE` protected by a role guard answered 403 over HTTP and 204 inside `$batch`. A guard that denies an operation now answers 403 for it, and fails its whole changeset. Operations inherit the `$batch` request's headers (credentials, `Cookie`, `Accept-Language`, custom headers; not `Content-*`, `Prefer`, `If-Match`/`If-None-Match`, `Accept` or connection headers), with their own headers taking precedence. Changesets stay atomic: the changeset's transaction is propagated to its operations through `AsyncLocalStorage`, and `TypeOrmAutoHandler`, row-level scopes and write handlers (`ctx.manager`) use it; `$<Content-ID>` references keep working.
+
+  **Behaviour changes:**
+
+  - **Operations need a route** ([#67](https://github.com/cberd1509/nestjs-odata/issues/67)): an operation reaches only what a standalone request reaches. An entity set without a controller, or a method without a route (no `@ODataDelete`, …), answers 404 inside `$batch` too; before, `$batch` could read and write any entity set registered with `forFeature()`. Route guards, interceptors and pipes now apply to batch operations (see above).
+  - **Operations are confined to the service root**: a URL that resolves outside it (`/auth/login`, `../admin`, an absolute URL to another path) answers 400 without reaching any route.
+  - **A failed changeset is answered with a single `application/http` error response** ([#64](https://github.com/cberd1509/nestjs-odata/issues/64), §11.7.7.5): the failing operation's response as its route sent it (status, headers, OData error), with its `Content-ID`, in place of the whole changeset. Before, every request of the changeset got a copy of the error. Operations after the failing one are not executed. Clients that index batch responses by part position must account for it.
+  - **A successful changeset is a nested `multipart/mixed` part** (§11.7.7.5: the response matches the request one-to-one) with one response per request, each with its `Content-ID`. Before, its responses were flattened into the top-level multipart body.
+  - **GET operations honour their query options** ([#65](https://github.com/cberd1509/nestjs-odata/issues/65)): `$filter`, `$select`, `$expand` (with nested options), `$orderby`, `$top`, `$skip`, `$count`, `$search`, `$apply`, with the same validation, row-level scopes and response envelope (`@odata.context`, `@odata.count`, `@odata.nextLink`, `@odata.etag`, annotations) as the standalone request. Before, a collection GET returned every row up to `maxTop` as a bare `{ value }`. GET by key gets `@odata.context` too, and `$count`, `$metadata` or any other route can be batched.
+  - **Operation responses are the route's own, unchanged**: status, headers (`Content-Type`, `ETag`, `Location`, `Preference-Applied`, `WWW-Authenticate`, `Retry-After`, `OData-Version`, your own; `Set-Cookie` one line per value) and body (binary bodies byte for byte), errors included; only an operation that matched no route gets a library-made OData 404. Operations are asked for `Accept-Encoding: identity` (the batch request's `Accept-Encoding` is not inherited) and `Content-Encoding` is dropped; HTTP/2 pseudo-headers are never inherited; `Content-Length` is always recomputed. `buildBatchResponse()` now returns the body as a `Buffer`, and `BatchResponsePart.headers` / `body` accept `string[]` values and `Buffer` bodies.
+  - **Operation timeout**: an operation that does not answer within `batch.operationTimeout` (default 30 000 ms) answers 504; inside a changeset that fails and rolls back the changeset.
+  - **`$<Content-ID>` references are whole tokens with exact IDs**: the operation URL when it is `$N` or starts with `$N/`, and JSON string values of the body that are `$N` or start with `$N/` (`@odata.bind`). `$1` no longer matches inside `$10` or in text such as `"costs $1"`.
+  - **Nested `$batch` is refused however it is spelled** (`$BATCH`, `%24batch`), and a `$batch` reached from inside a batch operation answers 400.
+  - **Error mapper context for batch operations** ([#62](https://github.com/cberd1509/nestjs-odata/issues/62) hook): the mapper now runs in the operation's route filter, so `ctx.request` and `ctx.host` are the operation's own request and host (the `$batch` request is `getODataBatchPart()?.batchRequest`); `ctx.batch` still describes the operation. Changeset-level failures keep `ctx.batch.changeset` and the `$batch` request.
+  - **Write handler, scope and changeset-runner context**: `ctx.executionContext` / `ctx.request` of write handlers and scopes are the operation's own (they used to be the `$batch` route's). `ctx.batch` and, inside a changeset, `ctx.manager` are still set.
+  - **One `BatchController` per application** ([#73](https://github.com/cberd1509/nestjs-odata/issues/73)): `forFeature()` now imports a static `ODataBatchModule` instead of declaring `BatchController` itself, so a single `POST {serviceRoot}/$batch` serves the entity sets of every feature module. Before, each `forFeature()` registered its own controller, the first one won, and parts for another feature's entity sets failed with 500.
+  - Code of your own that writes from an OData route (a custom controller transaction, an injected repository) is not part of a changeset unless it uses `getODataChangesetManager()`.
+
+  **Additions:**
+
+  - `ODataTypeOrmModule.forRoot({ batch: { enabled?, entitySets?, operationTimeout? } })`: `enabled: false` turns the endpoint off (404); `entitySets` allow-lists the entity sets operations may reach — the resource path's, navigation targets (`Products(1)/Supplier`) and `$expand` targets, nested ones included and whatever the case of the option name (`$EXPAND`) (403 otherwise, without reaching the route; the service root is taken from the `$batch` URL, so a global prefix equal to the service root works); `operationTimeout` limits each operation. Token `ODATA_BATCH_OPTIONS`, type `ODataBatchOptions`, `DEFAULT_BATCH_OPERATION_TIMEOUT`.
+  - The batch operation, with the changeset's entity manager as its `changeset`, is attached to the operation's request (`ODATA_BATCH_PART`) as well as kept in `AsyncLocalStorage`, and read from the request first, so middleware that resumes `next()` from a foreign async context (a session store, callback-based auth) cannot make changeset writes commit outside the transaction (Express adapter; Fastify's `inject()` relies on `AsyncLocalStorage`).
+  - typeorm: `getODataChangesetManager(request?)`, `ODataBatchModule`.
+  - core: `getODataBatchPart(request?)` / `runWithODataBatchPart()` (the batch operation being handled, for batch-specific policies in guards), `ODATA_BATCH_PART`, `dispatchBatchOperation()` (with `timeoutMs` and the operation's batch part), `BatchOperationTimeoutError`, `inheritedBatchHeaders()`, `batchOperationHeaders()`, `parseBatchUrl()`, `resolveBatchOperationUrl()`, `batchErrorContext()`, `headerValue()`, `resolveNavigationTarget()`, `splitKeyPredicate()`, and the `BatchChangesetResponse` / `BatchResponseItem` types. `buildBatchResponse()` accepts nested changeset responses and keeps each operation's `Content-Type`.
+  - Operation URLs may be relative to the service root (`Products(1)`), absolute paths or absolute URIs (§11.7.7.1); a nested `$batch` operation answers 400.
+  - core: the default error mapping gives 406, 413, 415 and 504 their OData codes (`NotAcceptable`, `PayloadTooLarge`, `UnsupportedMediaType`, `GatewayTimeout`) instead of `Error`.
+
+- [#84](https://github.com/cberd1509/nestjs-odata/pull/84) [`ee0b8fe`](https://github.com/cberd1509/nestjs-odata/commit/ee0b8feebbfc7a99076d9194be897932738c5566) Thanks [@cberd1509](https://github.com/cberd1509)! - OData 4.01 query-language conformance ([#66](https://github.com/cberd1509/nestjs-odata/issues/66), [#68](https://github.com/cberd1509/nestjs-odata/issues/68), [#69](https://github.com/cberd1509/nestjs-odata/issues/69)):
+
+  - `$filter` accepts paths through single-valued navigation properties (`category/name eq 'Tools'`, also after a lambda range variable and in nested `$expand` filters). Collection-valued navigation properties still require `any`/`all`; using one in a path is a 400 that says so.
+  - Lambda operators are case-insensitive (`items/ANY(...)`), and `$it/<path>` refers to the entity being filtered, also inside lambda predicates (`items/any(d: d/quantity gt $it/totalAmount)`).
+  - Nested `$expand` options `$count=true`, `$search` and `$levels` (a number or `max`, for recursive navigation properties) are parsed, and `$expand=nav/$count` (optionally with `$filter`/`$search`) is accepted. `ODataQueryPipe` replaces `$levels` by the equivalent nested `$expand`s.
+  - New `ODataNotImplementedError`, answered with `501 Not Implemented` (code `NotImplemented`, the message is kept) per OData 4.01 Part 1 §9.3.1.
+  - Nested `$expand` options containing `;` inside parentheses (a nested `$expand` with several options, or a `;` in a string literal) are no longer split apart.
+
+  Behaviour changes (the spec mandates them):
+
+  - Nested `$expand` options that were silently ignored now fail: `$compute`/`$apply` inside `$expand`, `nav/$ref`, `$it` inside `$expand` options, `$root`, and `$it`/`$count`/`$this` path segments answer 501; unknown nested options (`items($foo=1)`) answer 400.
+  - `$count` and `/$count` on a single-valued navigation property answer 400.
+  - A lambda over something that is not a collection-valued navigation property (`category/any(...)`, an unknown name) answers 400 instead of being ignored.
+  - Navigation paths in `$orderby` answer 501 (they were a 400).
+
+- [#85](https://github.com/cberd1509/nestjs-odata/pull/85) [`d073558`](https://github.com/cberd1509/nestjs-odata/commit/d073558c51bde7445250bcb0fd703d6d3955f9f6) Thanks [@cberd1509](https://github.com/cberd1509)! - OData 4.01 protocol conformance of writes, ETags, routing and errors ([#63](https://github.com/cberd1509/nestjs-odata/issues/63), [#70](https://github.com/cberd1509/nestjs-odata/issues/70), [#71](https://github.com/cberd1509/nestjs-odata/issues/71), [#75](https://github.com/cberd1509/nestjs-odata/issues/75), [#76](https://github.com/cberd1509/nestjs-odata/issues/76), [#77](https://github.com/cberd1509/nestjs-odata/issues/77), [#78](https://github.com/cberd1509/nestjs-odata/issues/78), [#79](https://github.com/cberd1509/nestjs-odata/issues/79), [#80](https://github.com/cberd1509/nestjs-odata/issues/80), [#81](https://github.com/cberd1509/nestjs-odata/issues/81)).
+
+  **Behaviour changes** (spec-mandated, on by default):
+
+  - **Unknown properties in write bodies answer 400** (Part 1 §11.4.2: the service MUST fail when it cannot persist a value). POST, PATCH and PUT (HTTP and `$batch`, repository path) refuse a property that is not in the entity type, including columns hidden with `@ODataExclude` or `select: false`, with one `UnknownProperty` entry per property in `details`. They were silently ignored before (and hidden columns could be written). Escape hatch: `ignoreUnknownProperties: true` in `ODataModule.forRoot()` drops them instead (still never persisted). Bodies handed to write handlers are unchanged.
+  - **PUT ignores a body key that differs from the URL key** (§11.4.3) and replaces the entity at the URL, over HTTP and in `$batch`, instead of answering 400 "Key in body does not match URL key".
+  - **Computed properties are ignored on POST/PATCH** (§11.4.2): `@CreateDateColumn`, `@UpdateDateColumn`, `@VersionColumn` and generated non-key columns. `$metadata` annotates them with `Core.Computed` and now references the Core vocabulary (`edmx:Reference`) whenever an annotation is used.
+  - **`If-None-Match` on PATCH, PUT and DELETE** answers 412 with no change when it matches the current ETag; `*` matches any existing entity (§8.2.5). HTTP and `$batch`.
+  - **`If-Match` / `If-None-Match` are read from the request** by `TypeOrmAutoHandler` when the controller doesn't pass them, so controllers that never bound `@Headers('if-match')` now get 412 on a stale `If-Match`. An explicit `ifMatch` argument still wins.
+  - **`ETag` on rows without an ETag value**: an entity whose ETag column is absent from the row (e.g. not selected) gets no ETag instead of the ETag of `undefined`.
+
+  **Additions:**
+
+  - **Canonical entity URLs are routed** (URL Conventions §4.3.1): `GET/PATCH/PUT/DELETE /odata/Products(1)` and composite `/odata/OrderItems(orderId=1,productId=2)` reach the key routes, so `Location` and `@odata.id` (unchanged, canonical) are resolvable. `ODataModule` rewrites the URL to `/Set/key` before routing on the Express adapter, only for registered entity sets; `/Set/key` keeps working.
+  - **`Content-Language`** on every error response and `$batch` error part (§9.4): an `errorMapper` result's new `language`, else the new `errorLanguage` module option, else `en`. `buildODataErrorResponse()` returns `language` and takes an optional default language. Mappings with an invalid language tag fall back to the default mapping; an invalid `errorLanguage` fails at startup.
+  - **`Prefer: return=minimal`** (§8.2.8.7) on POST, PATCH and PUT answers 204 with `Preference-Applied` (POST: `Location` and `OData-EntityId`); `return=representation` is confirmed with `Preference-Applied`; `$select`/`$expand` imply representation. Also per `$batch` part (`$N` references to a 204 create keep working).
+  - **`requireIfMatch`** per `forFeature()` item: PATCH, PUT and DELETE without `If-Match` answer 428 with no change (HTTP, `$batch`, write handlers), and `$metadata` annotates the entity set with `Core.OptimisticConcurrency`. Write handlers get `ctx.requireIfMatch` and `ctx.ifNoneMatch`.
+  - **`@odata.etag` on each entity of a collection** for entity sets with an ETag (JSON §4.5.10).
+  - **304 Not Modified no longer logs "Cannot set headers after they are sent"**: the interceptor signals an empty response that `ODataExceptionFilter` sends (also used for 204).
+  - **Express `etag` warning**: a startup warning while Express's `etag` setting is on (its hash ETags on errors, collections and `$metadata` are not OData ETags). The library doesn't change the setting; docs recommend `app.set('etag', false)`.
+  - The default error mapping keeps valid `details` of 4xx `HttpException`s with an OData-shaped body, and maps 428 to `PreconditionRequired`.
+  - New exports: core `resolveReturnPreference`, `rewriteCanonicalKeyUrl`, `isLanguageTag`, `DEFAULT_ERROR_LANGUAGE`, `EdmProperty.computed`, `EdmEntitySet.optimisticConcurrency`; typeorm `prepareWriteBody`.
+
 ## 2.2.0
 
 ### Minor Changes
@@ -97,9 +168,9 @@
     in `forFeature` is now sufficient for DI resolution.
   - **`@nestjs-odata/typeorm`**: `@odata.nextLink` is now built from `serviceRoot
     - entitySetName`(not`req.originalUrl`), so it's prefix-consistent with
-    `@odata.context`and`@odata.id`. OData v4 clients (Excel, Olingo,
-    odata2ts) can now navigate paginated responses when the app is mounted
-    under a Nest `setGlobalPrefix`.
+`@odata.context`and`@odata.id`. OData v4 clients (Excel, Olingo,
+odata2ts) can now navigate paginated responses when the app is mounted
+under a Nest `setGlobalPrefix`.
   - **`@nestjs-odata/core`**: New `ODataModule.globalPrefixExclude(serviceRoot?)`
     static helper returning the Express 5 splat-style exclude patterns for
     `app.setGlobalPrefix()`. Replaces hand-crafted `'api/odata{/*splat}'`
@@ -110,9 +181,9 @@
   - New e2e regression suite `apps/test-app/test/multi-entity-disambiguation
 .e2e-spec.ts` (16 tests) covering: multi-entity routing for list /
     get-by-key / $count / POST / PATCH / DELETE / multi-word `$filter`literal /
-entity registration-order swap, the`{ entity, name }`override, the
-single-declaration`forFeature({ controllers })`pattern, the prefix-
-consistent`@odata.nextLink`, and the `globalPrefixExclude` helper.
+    entity registration-order swap, the`{ entity, name }`override, the
+    single-declaration`forFeature({ controllers })`pattern, the prefix-
+    consistent`@odata.nextLink`, and the `globalPrefixExclude` helper.
 
   ### Docs
   - `docs/guide/getting-started.md`: new sections on multi-entity registration
