@@ -6,7 +6,7 @@
   "license": "MIT",
   "packageManager": "pnpm@10.2.1",
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=22.22.1",
     "pnpm": ">=10.0.0"
   },
   "scripts": {
@@ -18,32 +18,33 @@
     "release": "changeset publish"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "0.18.2",
+    "@arethetypeswrong/cli": "0.18.5",
     "@changesets/changelog-github": "^0.7.0",
-    "@changesets/cli": "^2.31.0",
-    "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@changesets/cli": "^2.31.1",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@repo/eslint-config": "workspace:*",
-    "eslint": "^9.39.4",
-    "eslint-config-prettier": "^10.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
-    "prettier": "^3.8.3",
-    "publint": "^0.3.21",
-    "turbo": "^2.9.14",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.10",
+    "publint": "^0.3.25",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.60.0"
+    "typescript-eslint": "^8.72.1"
   },
   "pnpm": {
     "overrides": {
       "typescript": "$typescript",
-      "fflate": "0.8.2",
-      "axios": "^1.16.1",
-      "fast-uri": "^3.1.2",
-      "postcss": "^8.5.15",
+      "fflate": "^0.8.3",
+      "axios": "^1.20.0",
+      "fast-uri": "^3.1.9",
+      "postcss": "^8.5.23",
       "uuid": "^11.1.1",
-      "qs": "^6.15.2",
-      "follow-redirects": "^1.16.0"
+      "qs": "^6.16.0",
+      "follow-redirects": "^1.16.1",
+      "vite@^5": "^6.4.5"
     },
     "onlyBuiltDependencies": [
       "@nestjs/core",
