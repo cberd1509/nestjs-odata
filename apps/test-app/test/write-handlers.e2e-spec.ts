@@ -269,6 +269,17 @@ class LedgersController {
       this.handler.handleDeepCreate(body, 'Ledgers', manager),
     )
   }
+
+  // $batch operations run through these routes, like standalone requests.
+  @ODataPatch('Ledgers')
+  update(@Param('key') key: string, @Body() body: Record<string, unknown>) {
+    return this.handler.handleUpdate(key, body, 'Ledgers')
+  }
+
+  @ODataDelete('Ledgers')
+  remove(@Param('key') key: string) {
+    return this.handler.handleDelete(key, 'Ledgers')
+  }
 }
 
 @ODataController('Invoices')
@@ -558,11 +569,9 @@ describe('Custom write handlers (e2e)', () => {
         batchRequest('DELETE', '/odata/Invoices(1)'),
       ]),
     )
-    expect([...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])).toEqual([
-      '409',
-      '409',
-      '405',
-    ])
+    // The failed changeset is answered with the failing operation's error alone (§11.7.7.5).
+    expect([...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])).toEqual(['409', '405'])
+    expect(text).toMatch(/Content-ID: 2\r\n\r\nHTTP\/1\.1 409/)
     expect(await dataSource.getRepository(Account).findOneBy({ name: 'Rolled back' })).toBeNull()
   })
 
@@ -589,11 +598,8 @@ describe('Custom write handlers (e2e)', () => {
         ]),
       ]),
     )
-    expect([...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])).toEqual([
-      '500',
-      '500',
-      '500',
-    ])
+    // One part for the individual POST, one for the whole failed changeset.
+    expect([...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])).toEqual(['500', '500'])
     expect(text).not.toMatch(/TypeError|Cannot read/)
     expect(await dataSource.getRepository(Account).findOneBy({ name: 'Before void' })).toBeNull()
 

@@ -190,7 +190,7 @@ describe('buildODataErrorResponse hardening', () => {
     expect(buildODataErrorResponse(httpErrorsStyle)).toEqual({
       status: 413,
       language: 'en',
-      body: { error: { code: 'Error', message: 'Payload too large', details: [] } },
+      body: { error: { code: 'PayloadTooLarge', message: 'Payload too large', details: [] } },
     })
     const withStatusCode = Object.assign(new Error('Gone away'), { statusCode: 410 })
     expect(buildODataErrorResponse(withStatusCode).status).toBe(410)

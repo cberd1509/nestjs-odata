@@ -1,43 +1,46 @@
 /**
- * Unit tests for BatchController dispatch logic.
- *
- * Tests verify that the controller correctly dispatches HTTP methods
- * to the appropriate data operations.
+ * Unit tests for BatchController: operations are dispatched through the application's HTTP
+ * handler (here a fake Node request handler), changesets run in one transaction whose entity
+ * manager is visible to the operations, and a failed changeset is answered with one error part.
  */
 import 'reflect-metadata'
+import { EventEmitter } from 'node:events'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { BadRequestException, HttpException } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
-import { runWithODataRequestContext } from '@nestjs-odata/core'
+import { HttpAdapterHost } from '@nestjs/core'
 import { DataSource } from 'typeorm'
-import { EdmRegistry, ODATA_MODULE_OPTIONS } from '@nestjs-odata/core'
-import { BatchController, type BatchRequest, type BatchResponse } from './batch-controller.js'
-import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
+import {
+  EdmRegistry,
+  getODataBatchPart,
+  ODATA_BATCH_PART,
+  ODATA_MODULE_OPTIONS,
+  runWithODataBatchPart,
+  runWithODataRequestContext,
+} from '@nestjs-odata/core'
+import { BatchController, type BatchRequest } from './batch-controller.js'
+import { getODataChangesetManager } from './changeset-context.js'
+import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
 
-// Minimal mock for a TypeORM entity class
-class MockProduct {
-  id: number = 0
-  name: string = ''
-  price: number = 0
+interface Seen {
+  method?: string
+  url?: string
+  headers: IncomingMessage['headers']
+  body: string
+  manager: unknown
+  part: ReturnType<typeof getODataBatchPart>
+  /** Set on the injected request (survives a lost async context). */
+  attachedPart?: ReturnType<typeof getODataBatchPart>
 }
 
-const mockEdmRegistry = {
-  getEntitySet: vi.fn(),
-  getEntityType: vi.fn(),
-}
-
-const mockManager = {
-  findOne: vi.fn(),
-  find: vi.fn(),
-  delete: vi.fn(),
-  merge: vi.fn(),
-  save: vi.fn(),
-  getRepository: vi.fn(),
-}
-
-const mockRepo = {
-  create: vi.fn(),
-  save: vi.fn(),
-  preload: vi.fn(),
+/** What the fake application answers for one `METHOD url`. */
+type Route = (seen: Seen) => {
+  status: number
+  headers?: Record<string, string | string[]>
+  body?: unknown
+  /** Sent as is (no JSON serialization). */
+  raw?: string | Buffer
 }
 
 const mockQueryRunner = {
@@ -46,698 +49,535 @@ const mockQueryRunner = {
   commitTransaction: vi.fn(),
   rollbackTransaction: vi.fn(),
   release: vi.fn(),
-  manager: mockManager,
+  manager: { name: 'changeset-manager' },
 }
 
 const mockDataSource = {
-  manager: mockManager,
   createQueryRunner: vi.fn().mockReturnValue(mockQueryRunner),
-  getMetadata: vi.fn().mockReturnValue({ name: 'Product' }),
 }
 
-const mockOptions = {
-  serviceRoot: '/odata',
-  namespace: 'Default',
-  maxTop: 1000,
-  maxExpandDepth: 3,
-}
+const mockOptions = { serviceRoot: '/odata', errorLanguage: 'en' }
 
-describe('BatchController dispatch', () => {
-  let controller: BatchController
-  let mockReq: Record<string, unknown>
-  let mockRes: {
-    status: ReturnType<typeof vi.fn>
-    set: ReturnType<typeof vi.fn>
-    send: ReturnType<typeof vi.fn>
-    json: ReturnType<typeof vi.fn>
-  }
-
-  beforeEach(async () => {
-    vi.clearAllMocks()
-
-    mockManager.getRepository.mockReturnValue(mockRepo)
-    mockRepo.create.mockReturnValue({ id: 1, name: 'Test', price: 9.99 })
-    mockRepo.save.mockResolvedValue({ id: 1, name: 'Test', price: 9.99 })
-
-    mockEdmRegistry.getEntitySet.mockReturnValue({
-      name: 'Products',
-      entityTypeName: 'Product',
-      namespace: 'Default',
-      isReadOnly: false,
-    })
-    mockEdmRegistry.getEntityType.mockReturnValue({
+/** Products (with a `Supplier` navigation property) and Suppliers. */
+function productsEdm(): EdmRegistry {
+  const edm = new EdmRegistry()
+  edm.register(
+    {
       name: 'Product',
       namespace: 'Default',
-      properties: [
-        { name: 'id', type: 'Edm.Int32', nullable: false },
-        { name: 'name', type: 'Edm.String', nullable: false },
-        { name: 'price', type: 'Edm.Decimal', nullable: false },
-      ],
-      navigationProperties: [],
       keyProperties: ['id'],
       isReadOnly: false,
-    })
+      properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+      navigationProperties: [
+        { name: 'Supplier', type: 'Default.Supplier', nullable: true, isCollection: false },
+      ],
+    },
+    { name: 'Products', entityTypeName: 'Product', namespace: 'Default', isReadOnly: false },
+  )
+  edm.register(
+    {
+      name: 'Supplier',
+      namespace: 'Default',
+      keyProperties: ['id'],
+      isReadOnly: false,
+      properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+      navigationProperties: [],
+    },
+    { name: 'Suppliers', entityTypeName: 'Supplier', namespace: 'Default', isReadOnly: false },
+  )
+  return edm
+}
 
+function mockResponse() {
+  return {
+    status: vi.fn().mockReturnThis(),
+    set: vi.fn().mockReturnThis(),
+    send: vi.fn().mockReturnThis(),
+    json: vi.fn().mockReturnThis(),
+  }
+}
+
+describe('BatchController', () => {
+  let routes: Record<string, Route>
+  let seen: Seen[]
+
+  /** The fake Express application: a Node request handler. */
+  const app = (req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      const s: Seen = {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: Buffer.concat(chunks).toString('utf-8'),
+        manager: getODataChangesetManager(),
+        part: getODataBatchPart(),
+        attachedPart: (req as unknown as Record<symbol, Seen['part']>)[ODATA_BATCH_PART],
+      }
+      seen.push(s)
+      const route = routes[`${req.method} ${req.url}`]
+      const out = route
+        ? route(s)
+        : { status: 404, body: { message: `Cannot ${req.method} ${req.url}`, statusCode: 404 } }
+      if (out.status < 0) return // never answers
+      res.statusCode = out.status
+      for (const [k, v] of Object.entries(out.headers ?? {})) res.setHeader(k, v)
+      if (out.raw !== undefined) {
+        res.end(out.raw)
+      } else if (out.body === undefined) {
+        res.end()
+      } else {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify(out.body))
+      }
+    })
+  }
+
+  async function makeController(
+    batchOptions?: ODataBatchOptions,
+    edm: EdmRegistry = productsEdm(),
+  ): Promise<BatchController> {
     const module = await Test.createTestingModule({
       controllers: [BatchController],
       providers: [
+        { provide: EdmRegistry, useValue: edm },
+        { provide: HttpAdapterHost, useValue: { httpAdapter: { getInstance: () => app } } },
         { provide: DataSource, useValue: mockDataSource },
-        { provide: EdmRegistry, useValue: mockEdmRegistry },
         { provide: ODATA_MODULE_OPTIONS, useValue: mockOptions },
-        { provide: TYPEORM_ODATA_ENTITIES, useValue: [MockProduct] },
+        ...(batchOptions ? [{ provide: ODATA_BATCH_OPTIONS, useValue: batchOptions }] : []),
       ],
     }).compile()
-
-    controller = module.get(BatchController)
-
-    mockRes = {
-      status: vi.fn().mockReturnThis(),
-      set: vi.fn().mockReturnThis(),
-      send: vi.fn().mockReturnThis(),
-      json: vi.fn().mockReturnThis(),
-    }
-  })
-
-  function buildBatchBody(boundary: string, parts: string[]): string {
-    const lines: string[] = []
-    for (const part of parts) {
-      lines.push(`--${boundary}`)
-      lines.push(part)
-    }
-    lines.push(`--${boundary}--`)
-    return lines.join('\r\n')
+    return module.get(BatchController)
   }
 
-  // Test 3: GET dispatch
-  it('Test 3: dispatches GET /Products to collection get (returns 200)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /odata/Products HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockManager.find.mockResolvedValue([{ id: 1, name: 'Widget' }])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockManager.find).toHaveBeenCalled()
-    expect(mockRes.status).toHaveBeenCalledWith(200)
-    expect(mockRes.send).toHaveBeenCalled()
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 200 OK')
-  })
-
-  // Test 4: POST dispatch
-  it('Test 4: dispatches POST /Products to handleCreate (returns 201)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'POST /odata/Products HTTP/1.1',
-        'Content-Type: application/json',
-        '',
-        '{"name":"Widget","price":9.99}',
-      ].join('\r\n'),
-    ])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockRepo.create).toHaveBeenCalled()
-    expect(mockRepo.save).toHaveBeenCalled()
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 201 Created')
-  })
-
-  // Test 5: PATCH dispatch
-  it('Test 5: dispatches PATCH /Products(1) to handleUpdate (returns 200)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'PATCH /odata/Products(1) HTTP/1.1',
-        'Content-Type: application/json',
-        '',
-        '{"name":"Updated Widget"}',
-      ].join('\r\n'),
-    ])
-
-    const existingEntity = { id: 1, name: 'Widget', price: 9.99 }
-    const mergedEntity = { id: 1, name: 'Updated Widget', price: 9.99 }
-    mockManager.findOne.mockResolvedValue(existingEntity)
-    mockManager.merge.mockReturnValue(mergedEntity)
-    mockManager.save.mockResolvedValue(mergedEntity)
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockManager.findOne).toHaveBeenCalled()
-    expect(mockManager.merge).toHaveBeenCalled()
-    expect(mockManager.save).toHaveBeenCalled()
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 200 OK')
-  })
-
-  // Test 6: DELETE dispatch
-  it('Test 6: dispatches DELETE /Products(1) to handleDelete (returns 204)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'DELETE /odata/Products(1) HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockManager.delete.mockResolvedValue({ affected: 1 })
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockManager.delete).toHaveBeenCalled()
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 204 No Content')
-  })
-
-  it('Test 7: returns 400 when content-type boundary is missing', async () => {
-    mockReq = {
-      body: '--test--',
-      headers: { 'content-type': 'multipart/mixed' },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockRes.status).toHaveBeenCalledWith(400)
-    expect(mockRes.json).toHaveBeenCalled()
-  })
-
-  it('Test 8: returns 400 in batch part when entity URL has no alpha segment', async () => {
-    const boundary = 'batch_test'
-    // URL ending with "/" or only slashes — parseEntityUrl returns null
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /123/456 HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    // Controller returns 200 for the batch envelope, individual part has 400
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 400')
-  })
-
-  it('Test 9: dispatches GET /Products(1) by key (returns 200)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /odata/Products(1) HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockManager.findOne.mockResolvedValue({ id: 1, name: 'Widget', price: 9.99 })
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    expect(mockManager.findOne).toHaveBeenCalled()
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 200 OK')
-  })
-
-  it('Test 10: GET by key returns 404 when entity not found', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /odata/Products(999) HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockManager.findOne.mockResolvedValue(null)
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 404')
-  })
-
-  it('Test 11: DELETE returns 404 when entity not found (affected: 0)', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'DELETE /odata/Products(999) HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockManager.delete.mockResolvedValue({ affected: 0 })
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 404')
-  })
-
-  it('Test 12: PATCH without key returns 400', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'PATCH /odata/Products HTTP/1.1',
-        'Content-Type: application/json',
-        '',
-        '{"name":"Updated"}',
-      ].join('\r\n'),
-    ])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 400')
-  })
-
-  it('Test 13: DELETE without key returns 400', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'DELETE /odata/Products HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 400')
-  })
-
-  it('Test 14: unsupported method returns 405', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'HEAD /odata/Products HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 405')
-  })
-
-  it('Test 15: unknown entity set returns 404', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /odata/UnknownEntity HTTP/1.1',
-        '',
-      ].join('\r\n'),
-    ])
-
-    mockEdmRegistry.getEntitySet.mockReturnValue(null)
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 404')
-  })
-
-  it('Test 16: executes a changeset with rollback on failure', async () => {
-    const boundary = 'batch_changeset'
-    const changesetBoundary = 'changeset_inner'
-    const body = [
-      `--${boundary}`,
-      `Content-Type: multipart/mixed; boundary=${changesetBoundary}`,
-      '',
-      `--${changesetBoundary}`,
+  function op(
+    method: string,
+    url: string,
+    opts: { cid?: string; body?: unknown; headers?: string[] } = {},
+  ): string {
+    return [
       'Content-Type: application/http',
       'Content-Transfer-Encoding: binary',
+      ...(opts.cid ? [`Content-ID: ${opts.cid}`] : []),
       '',
-      'POST /odata/Products HTTP/1.1',
-      'Content-Type: application/json',
-      '',
-      '{"name":"Widget","price":9.99}',
-      `--${changesetBoundary}--`,
-      `--${boundary}--`,
+      `${method} ${url} HTTP/1.1`,
+      ...(opts.headers ?? []),
+      ...(opts.body !== undefined
+        ? ['Content-Type: application/json', '', JSON.stringify(opts.body)]
+        : ['', '']),
     ].join('\r\n')
+  }
 
-    mockRepo.save.mockRejectedValue(new Error('DB error'))
+  function changeset(parts: string[]): string {
+    return [
+      'Content-Type: multipart/mixed; boundary=cs',
+      '',
+      ...parts.flatMap((p) => ['--cs', p]),
+      '--cs--',
+    ].join('\r\n')
+  }
 
-    mockReq = {
+  async function run(
+    controller: BatchController,
+    parts: string[],
+    headers: Record<string, string> = {},
+    batchUrl = '/odata/$batch',
+    extra: Record<symbol, unknown> = {},
+  ): Promise<{ status: number; text: string }> {
+    const res = mockResponse()
+    const body = [...parts.flatMap((p) => ['--b', p]), '--b--'].join('\r\n')
+    const req = {
+      ...extra,
       body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+      originalUrl: batchUrl,
+      headers: { 'content-type': 'multipart/mixed; boundary=b', ...headers },
     }
+    try {
+      await controller.handleBatch(req as unknown as BatchRequest, res)
+    } catch (err) {
+      // Errors of the $batch request itself are thrown, for ODataExceptionFilter to answer.
+      if (!(err instanceof HttpException)) throw err
+      return { status: err.getStatus(), text: JSON.stringify(err.getResponse()) }
+    }
+    const sent: unknown = res.send.mock.calls[0]?.[0]
+    return { status: res.status.mock.calls[0]?.[0] as number, text: String(sent) }
+  }
 
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
-    )
+  const statuses = (text: string) => [...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])
 
-    expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled()
-    expect(mockRes.status).toHaveBeenCalledWith(200)
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockDataSource.createQueryRunner.mockReturnValue(mockQueryRunner)
+    seen = []
+    routes = {
+      'GET /odata/Products?$top=1': () => ({
+        status: 200,
+        body: { '@odata.context': 'ctx', value: [] },
+      }),
+      'GET /odata/Products(1)': () => ({
+        status: 200,
+        headers: { ETag: 'W/"1"' },
+        body: { id: 1 },
+      }),
+      'POST /odata/Products': () => ({
+        status: 201,
+        headers: { Location: '/odata/Products(7)' },
+        body: { id: 7 },
+      }),
+      'PATCH /odata/Products(7)': () => ({ status: 200, body: { id: 7 } }),
+      'DELETE /odata/Products(1)': () => ({
+        status: 403,
+        headers: { 'Content-Language': 'en' },
+        body: { error: { code: 'Forbidden', message: 'Forbidden resource', details: [] } },
+      }),
+    }
   })
 
-  it('Test 16b: maps changeset-level failures with batch context and the batch request', async () => {
-    const boundary = 'batch_changeset'
-    const changesetBoundary = 'changeset_inner'
-    const body = [
-      `--${boundary}`,
-      `Content-Type: multipart/mixed; boundary=${changesetBoundary}`,
-      '',
-      `--${changesetBoundary}`,
-      'Content-Type: application/http',
-      'Content-Transfer-Encoding: binary',
-      '',
-      'POST /odata/Products HTTP/1.1',
-      'Content-Type: application/json',
-      '',
-      '{"name":"Widget","price":9.99}',
-      `--${changesetBoundary}--`,
-      `--${boundary}--`,
-    ].join('\r\n')
-    // The commit itself fails: no single part is to blame.
+  it('dispatches each operation through the application with its query string', async () => {
+    const controller = await makeController()
+    const { status, text } = await run(controller, [op('GET', 'Products?$top=1')])
+    expect(status).toBe(200)
+    expect(seen[0]?.url).toBe('/odata/Products?$top=1')
+    expect(text).toContain('HTTP/1.1 200 OK')
+    expect(text).toContain('"@odata.context":"ctx"')
+  })
+
+  it('operations inherit the batch request headers; their own headers win', async () => {
+    const controller = await makeController()
+    await run(controller, [op('GET', '/odata/Products(1)', { headers: ['X-Tenant: b'] })], {
+      authorization: 'Bearer t',
+      'x-tenant': 'a',
+      prefer: 'odata.continue-on-error',
+    })
+    expect(seen[0]?.headers['authorization']).toBe('Bearer t')
+    expect(seen[0]?.headers['x-tenant']).toBe('b')
+    expect(seen[0]?.headers['prefer']).toBeUndefined()
+  })
+
+  it('exposes the operation through getODataBatchPart() while it runs', async () => {
+    const controller = await makeController()
+    await run(controller, [op('GET', '/odata/Products(1)', { cid: '5' })])
+    expect(seen[0]?.part).toMatchObject({
+      method: 'GET',
+      url: '/odata/Products(1)',
+      contentId: '5',
+      inChangeset: false,
+    })
+    expect(seen[0]?.manager).toBeUndefined()
+  })
+
+  it('runs a changeset in one transaction, nested in the response, resolving $N', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [
+      changeset([
+        op('POST', '/odata/Products', { cid: '1', body: { name: 'x' } }),
+        op('PATCH', '$1', { cid: '2', body: { name: 'y' } }),
+      ]),
+    ])
+    expect(seen.map((s) => s.url)).toEqual(['/odata/Products', '/odata/Products(7)'])
+    expect(seen.every((s) => s.manager === mockQueryRunner.manager)).toBe(true)
+    expect(seen.every((s) => s.part?.inChangeset === true)).toBe(true)
+    expect(seen[0]?.body).toBe('{"name":"x"}')
+    expect(mockQueryRunner.commitTransaction).toHaveBeenCalledOnce()
+    expect(text).toMatch(/Content-Type: multipart\/mixed; boundary=changeset_/)
+    expect(statuses(text)).toEqual(['201', '200'])
+  })
+
+  it('answers a failed changeset with the failing operation alone, and rolls back', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [
+      changeset([
+        op('POST', '/odata/Products', { cid: '1', body: {} }),
+        op('DELETE', '/odata/Products(1)', { cid: '2' }),
+        op('PATCH', '/odata/Products(7)', { cid: '3', body: {} }),
+      ]),
+    ])
+    expect(seen).toHaveLength(2) // the operation after the failure does not run
+    expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalledOnce()
+    expect(mockQueryRunner.commitTransaction).not.toHaveBeenCalled()
+    expect(statuses(text)).toEqual(['403'])
+    expect(text).toContain('Content-ID: 2')
+    expect(text).not.toContain('Content-ID: 1')
+    expect(text).not.toContain('boundary=changeset_')
+    expect(text).toContain('Content-Language: en')
+  })
+
+  it('maps changeset-level failures with batch context and the batch request', async () => {
+    const controller = await makeController()
     mockQueryRunner.commitTransaction.mockRejectedValueOnce(new Error('commit failed'))
     const errorMapper = vi.fn(() => ({ status: 409, code: 'COMMIT', message: 'retry' }))
     ;(controller as unknown as { options: Record<string, unknown> }).options = {
       ...mockOptions,
       errorMapper,
     }
-    mockReq = { body, headers: { 'content-type': `multipart/mixed; boundary=${boundary}` } }
-
-    // The request comes from the OData request context (set by the global interceptor).
-    await runWithODataRequestContext({ request: mockReq }, () =>
-      controller.handleBatch(
-        mockReq as unknown as BatchRequest,
-        mockRes as unknown as BatchResponse,
-      ),
+    const request = { url: '/odata/$batch' }
+    const { text } = await runWithODataRequestContext({ request }, () =>
+      run(controller, [changeset([op('POST', '/odata/Products', { cid: '1', body: {} })])]),
     )
-
     expect(errorMapper).toHaveBeenCalledWith(expect.any(Error), {
-      request: mockReq,
+      request,
       batch: { changeset: true },
     })
-    expect(String(mockRes.send.mock.calls[0][0])).toContain('HTTP/1.1 409')
+    expect(statuses(text)).toEqual(['409'])
   })
 
-  it('Test 17: reads body from stream when req.body is empty', async () => {
-    const boundary = 'batch_test'
-    const batchBody = [
-      'Content-Type: application/http',
-      'Content-Transfer-Encoding: binary',
-      '',
-      'GET /odata/Products HTTP/1.1',
-      '',
-    ].join('\r\n')
+  it('answers non-OData errors (no route) as OData errors', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [op('GET', '/odata/Nothing(1)')])
+    expect(statuses(text)).toEqual(['404'])
+    expect(text).toContain('"error":{"code"')
+    expect(text).toContain('Cannot GET /odata/Nothing(1)')
+  })
 
-    const fullBody = [`--${boundary}`, batchBody, `--${boundary}--`].join('\r\n')
+  it('refuses a nested $batch operation (400) without dispatching it', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [op('POST', '$batch', { body: {} })])
+    expect(statuses(text)).toEqual(['400'])
+    expect(seen).toHaveLength(0)
+  })
 
-    mockManager.find.mockResolvedValue([{ id: 1, name: 'Widget' }])
+  it('batch.entitySets: operations on other entity sets answer 403 without dispatching', async () => {
+    const controller = await makeController({ entitySets: ['Orders'] })
+    const { text } = await run(controller, [
+      op('GET', '/odata/Products(1)'),
+      op('GET', '/odata/$metadata'),
+    ])
+    expect(statuses(text)).toEqual(['403', '403'])
+    expect(seen).toHaveLength(0)
+    const allowed = await makeController({ entitySets: ['Products'] })
+    expect(statuses((await run(allowed, [op('GET', 'Products(1)')])).text)).toEqual(['200'])
+  })
 
-    // Simulate streaming request — use Node IncomingMessage-compatible EventEmitter
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { EventEmitter } = require('events') as typeof import('events')
+  it('batch.enabled: false answers 404 for the whole request', async () => {
+    const controller = await makeController({ enabled: false })
+    const { status, text } = await run(controller, [op('GET', '/odata/Products(1)')])
+    expect(status).toBe(404)
+    expect(text).toContain('The $batch endpoint is disabled')
+    expect(seen).toHaveLength(0)
+  })
+
+  it('returns 400 when the content-type boundary is missing', async () => {
+    const controller = await makeController()
+    await expect(
+      controller.handleBatch(
+        { body: 'x', headers: { 'content-type': 'multipart/mixed' } } as unknown as BatchRequest,
+        mockResponse(),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException)
+  })
+
+  it('reads the body from the stream when req.body is empty', async () => {
+    const controller = await makeController()
+    const fullBody = ['--b', op('GET', '/odata/Products(1)'), '--b--'].join('\r\n')
     const emitter = new EventEmitter()
-    const streamReq = emitter as unknown as BatchRequest & { headers: Record<string, string> }
-    streamReq.headers = { 'content-type': `multipart/mixed; boundary=${boundary}` }
-    // no body property — triggers stream path
-
+    const streamReq = emitter as unknown as BatchRequest
+    streamReq.headers = { 'content-type': 'multipart/mixed; boundary=b' }
     setImmediate(() => {
       emitter.emit('data', Buffer.from(fullBody))
       emitter.emit('end')
     })
-
-    await controller.handleBatch(streamReq, mockRes as unknown as BatchResponse)
-
-    expect(mockRes.status).toHaveBeenCalledWith(200)
+    const res = mockResponse()
+    await controller.handleBatch(streamReq, res)
+    expect(res.status).toHaveBeenCalledWith(200)
+    expect(String(res.send.mock.calls[0]?.[0])).toContain('HTTP/1.1 200 OK')
   })
 
-  it('Test 18b: when getMetadata throws for entity class, resolveEntityClass returns 500', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'GET /odata/Products HTTP/1.1',
-        '',
-      ].join('\r\n'),
+  // ── Review fixes (PR #87) ─────────────────────────────────────────────────
+
+  it('refuses a nested $batch whatever its case, and a $batch run from inside an operation', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [
+      op('POST', '/odata/$BATCH', { body: {} }),
+      op('POST', '%24Batch', { body: {} }),
     ])
+    expect(statuses(text)).toEqual(['400', '400'])
+    expect(seen).toHaveLength(0)
 
-    // Make getMetadata throw so resolveEntityClass catches and skips — returns undefined
-    mockDataSource.getMetadata.mockImplementationOnce(() => {
-      throw new Error('Entity not found in DataSource')
+    const part = { method: 'POST', url: 'x', inChangeset: false, batchRequest: {} }
+    const viaRequest = await run(controller, [op('GET', 'Products(1)')], {}, '/odata/$batch', {
+      [ODATA_BATCH_PART]: part,
     })
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
+    expect(viaRequest.status).toBe(400)
+    const viaContext = await runWithODataBatchPart(part, () =>
+      run(controller, [op('GET', 'Products(1)')]),
     )
-
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    // entity class not found -> 500 InternalServerError
-    expect(sentBody).toContain('HTTP/1.1 500')
+    expect(viaContext.status).toBe(400)
+    expect(seen).toHaveLength(0)
   })
 
-  // ── Content-ID reference resolution unit tests ───────────────────────────────
+  it('attaches the operation (and the changeset manager) to the injected request', async () => {
+    const controller = await makeController()
+    await run(controller, [changeset([op('POST', '/odata/Products', { cid: '1', body: {} })])])
+    expect(seen[0]?.attachedPart?.contentId).toBe('1')
+    expect(seen[0]?.attachedPart?.changeset).toBe(mockQueryRunner.manager)
+  })
 
-  // Typed accessor for the private resolveContentIdReferences method
+  it('fails an operation that does not answer in time, rolling back its changeset (504)', async () => {
+    routes['PATCH /odata/Products(7)'] = () => ({ status: -1 })
+    const controller = await makeController({ operationTimeout: 30 })
+    const { text } = await run(controller, [
+      changeset([
+        op('POST', '/odata/Products', { cid: '1', body: {} }),
+        op('PATCH', '$1', { cid: '2', body: {} }),
+      ]),
+    ])
+    expect(statuses(text)).toEqual(['504'])
+    expect(text).toContain('Content-ID: 2')
+    expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('entitySets: refuses navigation and $expand into entity sets outside the allow-list', async () => {
+    routes['GET /odata/Products(1)/id'] = () => ({ status: 200, body: { value: 1 } })
+    const controller = await makeController({ entitySets: ['Products'] })
+    const { text } = await run(controller, [
+      op('GET', 'Products(1)/Supplier'),
+      op('GET', 'Products?$expand=Supplier'),
+      // Query option names are case-insensitive for the route: so for the allow-list.
+      op('GET', 'Products?$EXPAND=Supplier'),
+      op('GET', 'Products?%24Expand=Supplier'),
+      op('GET', 'Products?$top=1&$expand=Supplier&$EXPAND=Supplier'),
+      op('GET', 'Products(1)/id'),
+      op('GET', 'Products?$top=1'),
+    ])
+    expect(statuses(text)).toEqual(['403', '403', '403', '403', '403', '200', '200'])
+    const both = await makeController({ entitySets: ['Products', 'Suppliers'] })
+    routes['GET /odata/Products(1)/Supplier'] = () => ({ status: 200, body: { id: 3 } })
+    expect(statuses((await run(both, [op('GET', 'Products(1)/Supplier')])).text)).toEqual(['200'])
+  })
+
+  it('entitySets: the service root comes from the $batch URL (global prefix equal to the root)', async () => {
+    routes['GET /odata/odata/Products(1)'] = () => ({ status: 200, body: { id: 1 } })
+    const controller = await makeController({ entitySets: ['Products'] })
+    const { text } = await run(controller, [op('GET', 'Products(1)')], {}, '/odata/odata/$batch')
+    expect(statuses(text)).toEqual(['200'])
+  })
+
+  it("passes a route's own non-OData error through unchanged (status, headers, body)", async () => {
+    routes['GET /odata/Products(2)'] = () => ({
+      status: 401,
+      headers: { 'WWW-Authenticate': 'Bearer realm="odata"', 'Retry-After': '5' },
+      body: { message: 'login first' },
+    })
+    const errorMapper = vi.fn(() => undefined)
+    const controller = await makeController()
+    ;(controller as unknown as { options: Record<string, unknown> }).options = {
+      ...mockOptions,
+      errorMapper,
+    }
+    const { text } = await run(controller, [op('GET', '/odata/Products(2)')])
+    expect(statuses(text)).toEqual(['401'])
+    expect(text).toContain('WWW-Authenticate: Bearer realm="odata"')
+    expect(text).toContain('Retry-After: 5')
+    expect(text).toContain('{"message":"login first"}')
+    expect(errorMapper).not.toHaveBeenCalled()
+  })
+
+  it('emits one Set-Cookie line per cookie', async () => {
+    routes['GET /odata/Products(1)'] = () => ({
+      status: 200,
+      headers: { 'Set-Cookie': ['a=1', 'b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT'] },
+      body: { id: 1 },
+    })
+    const controller = await makeController()
+    const { text } = await run(controller, [op('GET', '/odata/Products(1)')])
+    expect(text).toContain('Set-Cookie: a=1\r\n')
+    expect(text).toContain('Set-Cookie: b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT\r\n')
+  })
+
+  it('keeps binary operation bodies byte for byte', async () => {
+    const bytes = Buffer.from([0xff, 0xd8, 0x00, 0x80])
+    routes['GET /odata/Products(1)/$value'] = () => ({
+      status: 200,
+      headers: { 'Content-Type': 'image/jpeg' },
+      raw: bytes,
+    })
+    const controller = await makeController()
+    const res = mockResponse()
+    const body = ['--b', op('GET', '/odata/Products(1)/$value'), '--b--'].join('\r\n')
+    await controller.handleBatch(
+      {
+        body,
+        originalUrl: '/odata/$batch',
+        headers: { 'content-type': 'multipart/mixed; boundary=b' },
+      } as unknown as BatchRequest,
+      res,
+    )
+    const sent = res.send.mock.calls[0]?.[0] as Buffer
+    expect(Buffer.isBuffer(sent)).toBe(true)
+    expect(sent.includes(bytes)).toBe(true)
+  })
+
+  // ── Content-ID reference resolution (WRITE-03) ────────────────────────────
+
   type ResolveFn = (
     part: Record<string, unknown>,
-    map: ReadonlyMap<string, string>,
+    map: Map<string, string>,
   ) => Record<string, unknown>
   const resolveRef = (c: BatchController): ResolveFn =>
-    // Access private method via index signature to avoid unsafe-any lint errors
     (c as unknown as Record<string, (...args: unknown[]) => unknown>)[
       'resolveContentIdReferences'
     ].bind(c) as unknown as ResolveFn
 
-  it('ContentID-1: resolveContentIdReferences with empty map returns same part object (reference equality)', () => {
-    const part = {
-      kind: 'request' as const,
-      contentId: '1',
-      method: 'PATCH',
-      url: '$1',
-      headers: {},
-      body: undefined,
-    }
-    const result = resolveRef(controller)(part, new Map())
-    expect(result).toBe(part) // reference equality — no new object
+  it('ContentID: an empty map returns the same part object', async () => {
+    const controller = await makeController()
+    const part = { kind: 'request' as const, method: 'PATCH', url: '$1', headers: {} }
+    expect(resolveRef(controller)(part, new Map())).toBe(part)
   })
 
-  it('ContentID-2: resolveContentIdReferences substitutes $1 in URL', () => {
-    const part = {
-      kind: 'request' as const,
-      method: 'PATCH',
-      url: '$1',
-      headers: {},
-    }
-    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part, contentIdMap)
-    expect(result['url']).toBe('/odata/Orders(42)')
-  })
-
-  it('ContentID-3: resolveContentIdReferences substitutes $1/SubPath in URL', () => {
-    const part = {
-      kind: 'request' as const,
-      method: 'POST',
-      url: '$1/Items',
-      headers: {},
-    }
-    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part, contentIdMap)
-    expect(result['url']).toBe('/odata/Orders(42)/Items')
-  })
-
-  it('ContentID-4: resolveContentIdReferences substitutes $1 in body', () => {
-    const part = {
-      kind: 'request' as const,
-      method: 'PATCH',
-      url: '$1',
-      headers: {},
-      body: '{"ref":"$1","status":"confirmed"}',
-    }
-    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part, contentIdMap)
-    expect(result['body']).toContain('/odata/Orders(42)')
-  })
-
-  it('ContentID-5: resolveContentIdReferences with no matching pattern returns same part object', () => {
-    const part = {
-      kind: 'request' as const,
-      method: 'GET',
-      url: '/odata/Orders',
-      headers: {},
-    }
-    const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part, contentIdMap)
-    expect(result).toBe(part) // no substitution — same reference
-  })
-
-  it('Test 18: PATCH with not-found entity returns 404', async () => {
-    const boundary = 'batch_test'
-    const body = buildBatchBody(boundary, [
-      [
-        'Content-Type: application/http',
-        'Content-Transfer-Encoding: binary',
-        '',
-        'PATCH /odata/Products(999) HTTP/1.1',
-        'Content-Type: application/json',
-        '',
-        '{"name":"Updated"}',
-      ].join('\r\n'),
-    ])
-
-    mockManager.findOne.mockResolvedValue(null)
-
-    mockReq = {
-      body,
-      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
-    }
-
-    await controller.handleBatch(
-      mockReq as unknown as BatchRequest,
-      mockRes as unknown as BatchResponse,
+  it('ContentID: substitutes $1 in the URL (also $1/SubPath) and the body', async () => {
+    const controller = await makeController()
+    const map = new Map([['1', '/odata/Orders(42)']])
+    const resolve = resolveRef(controller)
+    expect(resolve({ method: 'PATCH', url: '$1', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(42)',
     )
+    expect(resolve({ method: 'POST', url: '$1/Items', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(42)/Items',
+    )
+    expect(
+      resolve({ method: 'PATCH', url: 'x', headers: {}, body: '{"ref":"$1"}' }, map)['body'],
+    ).toContain('/odata/Orders(42)')
+  })
 
-    const sentBody = mockRes.send.mock.calls[0][0] as string
-    expect(sentBody).toContain('HTTP/1.1 404')
+  it('ContentID: replaces whole tokens only, with exact IDs', async () => {
+    const controller = await makeController()
+    const map = new Map([
+      ['1', '/odata/Orders(42)'],
+      ['10', '/odata/Orders(99)'],
+    ])
+    const resolve = resolveRef(controller)
+    expect(resolve({ method: 'PATCH', url: '$10', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(99)',
+    )
+    expect(resolve({ method: 'GET', url: '$10/Items', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(99)/Items',
+    )
+    // Not a reference: a token elsewhere in the URL, or a longer ID.
+    expect(resolve({ method: 'GET', url: 'Orders?$filter=a eq $1', headers: {} }, map)['url']).toBe(
+      'Orders?$filter=a eq $1',
+    )
+    expect(resolve({ method: 'GET', url: '$12', headers: {} }, map)['url']).toBe('$12')
+    const body = JSON.stringify({
+      note: 'costs $1',
+      'Order@odata.bind': '$1',
+      'Lines@odata.bind': ['$10', '$1'],
+      nested: { link: '$1/Items' },
+    })
+    const resolved = JSON.parse(
+      resolve({ method: 'POST', url: 'Lines', headers: {}, body }, map)['body'] as string,
+    ) as Record<string, unknown>
+    expect(resolved).toEqual({
+      note: 'costs $1',
+      'Order@odata.bind': '/odata/Orders(42)',
+      'Lines@odata.bind': ['/odata/Orders(99)', '/odata/Orders(42)'],
+      nested: { link: '/odata/Orders(42)/Items' },
+    })
+  })
+
+  it('ContentID: no matching token returns the same part object', async () => {
+    const controller = await makeController()
+    const part = { kind: 'request' as const, method: 'GET', url: '/odata/Orders', headers: {} }
+    expect(resolveRef(controller)(part, new Map([['1', '/odata/Orders(42)']]))).toBe(part)
   })
 })

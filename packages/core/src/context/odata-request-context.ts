@@ -11,7 +11,10 @@ import { Observable } from 'rxjs'
  * having to be request-scoped providers.
  */
 export interface ODataRequestContext {
-  /** The Nest execution context of the route being handled (the `$batch` route for batch parts). */
+  /**
+   * The Nest execution context of the route being handled. A `$batch` operation runs through
+   * its own route, so this is that route's context (see `getODataBatchPart()`).
+   */
   readonly executionContext?: ExecutionContext
   /** The platform request object (Express or Fastify request) when the route is HTTP. */
   readonly request?: unknown

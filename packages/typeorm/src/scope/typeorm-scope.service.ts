@@ -2,7 +2,7 @@ import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common
 import {
   EdmRegistry,
   getODataRequestContext,
-  navigationTargetTypeName,
+  resolveNavigationTarget,
   ODATA_MODULE_OPTIONS,
   type EdmEntityType,
   type ExpandNode,
@@ -109,7 +109,7 @@ export function renderPrimaryKeyQuery(
 /**
  * Resolves and renders row-level scopes (see `ODataScopeFn`) for the TypeORM adapter.
  *
- * `TypeOrmAutoHandler` and the `$batch` controller use it on every read and before every
+ * `TypeOrmAutoHandler` uses it (also for `$batch` operations, passing the changeset's manager) on every read and before every
  * update, replace and delete. Custom controllers that build queries with
  * `TypeOrmQueryTranslator` directly call {@link prepare} and pass the plan to `translate()`.
  */
@@ -336,9 +336,7 @@ export class TypeOrmScopeService {
     navType: string,
     path: readonly string[],
   ): { entitySetName: string; entityType: EdmEntityType } | undefined {
-    const typeName = navigationTargetTypeName(navType)
-    const entityType = this.edmRegistry.getEntityType(typeName)
-    const entitySet = this.edmRegistry.getEntitySetByTypeName(typeName)
+    const { typeName, entityType, entitySet } = resolveNavigationTarget(this.edmRegistry, navType)
     if (!entityType || !entitySet) {
       if (this.options.requireScope) {
         throw new InternalServerErrorException(

@@ -69,8 +69,8 @@ interface ODataErrorMapping {
 }
 
 interface ODataErrorMapperContext {
-  host?: ArgumentsHost // the failing route (undefined for $batch operations)
-  request?: unknown // the request (the $batch request for batch operations)
+  host?: ArgumentsHost // the failing route (a $batch operation's own route too)
+  request?: unknown // the request (a $batch operation's own request)
   // Set for $batch errors: the failing operation, or { changeset: true } when a changeset
   // fails as a whole (for example its commit)
   batch?: { method?: string; url?: string; contentId?: string; changeset?: boolean }
@@ -116,10 +116,14 @@ invalid (default mapping, with a warning), and an invalid `errorLanguage` fails 
   routes, wherever they are declared (they carry `ODataExceptionFilter`; error responses are
   always `application/json`);
 - `$metadata` and the service document;
-- every failing operation of a `$batch` request, including the library's own errors (a missing
-  entity, a missing key, a stale `If-Match`, an unsupported method): the part gets the mapped
-  status and body. In a changeset, the mapped error is the response of every part of the
-  changeset. `ctx.request` is the `$batch` request (from the OData request context).
+- every failing operation of a `$batch` request. Operations run through their routes, so they
+  are mapped by the route's `ODataExceptionFilter` like standalone requests, with
+  `ctx.batch = { method, url, contentId }` added and `ctx.request` / `ctx.host` of the
+  operation's own request (the `$batch` request is `getODataBatchPart()?.batchRequest`). The
+  library's own operation errors (no route for the operation, a nested `$batch`, a target outside
+  the `batch.entitySets` allow-list) and changeset-level failures (`ctx.batch.changeset`, for
+  example a failed commit; `ctx.request` is then the `$batch` request) reach the mapper too. A
+  failed changeset is answered with the failing operation's mapped error alone.
 
 Unmapped errors that wrap another error (`new Error('…', { cause })`) are mapped by their
 `cause` when it maps to a 4xx (an `HttpException`, an OData error, a `status`-carrying error);

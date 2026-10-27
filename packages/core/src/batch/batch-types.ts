@@ -60,11 +60,24 @@ export interface BatchResponsePart {
   readonly contentId?: string
   /** HTTP status code for this operation */
   readonly statusCode: number
-  /** Response headers for this operation */
-  readonly headers: Readonly<Record<string, string>>
-  /** Serialized response body, if any */
-  readonly body?: string
+  /** Response headers for this operation (one entry per value for `Set-Cookie`) */
+  readonly headers: Readonly<Record<string, string | readonly string[]>>
+  /** Serialized response body, if any: text, or the raw bytes of a binary body */
+  readonly body?: string | Buffer
 }
+
+/**
+ * The response to a successful changeset: a nested multipart/mixed part holding one response
+ * per changeset request, each with its request's Content-ID (OData-Protocol 4.01 §11.7.7.5).
+ * A failed changeset is answered with a single {@link BatchResponsePart} instead.
+ */
+export interface BatchChangesetResponse {
+  readonly kind: 'changeset'
+  readonly parts: readonly BatchResponsePart[]
+}
+
+/** One top-level part of a batch response: an operation's response or a changeset's. */
+export type BatchResponseItem = BatchResponsePart | BatchChangesetResponse
 
 /**
  * The complete batch response, ready to be serialized to multipart/mixed.

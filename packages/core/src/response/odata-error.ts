@@ -41,10 +41,14 @@ export interface ODataErrorMapping {
 export interface ODataErrorMapperContext {
   /**
    * The Nest arguments host of the failing route, when the error is caught by
-   * `ODataExceptionFilter`. Undefined for `$batch` parts.
+   * `ODataExceptionFilter` (also for a `$batch` operation, which runs through its own route).
+   * Undefined for errors of the `$batch` request itself.
    */
   readonly host?: ArgumentsHost
-  /** The platform request (for `$batch` parts, the `$batch` request). */
+  /**
+   * The platform request: for a `$batch` operation, the operation's own request (the `$batch`
+   * request is `getODataBatchPart()?.batchRequest`).
+   */
   readonly request?: unknown
   /**
    * Set when the error comes from a `$batch` request: from one operation (`method`, `url`,
@@ -94,15 +98,19 @@ const STATUS_CODES: Record<number, string> = {
   403: 'Forbidden',
   404: 'NotFound',
   405: 'MethodNotAllowed',
+  406: 'NotAcceptable',
   409: 'Conflict',
   410: 'Gone',
   412: 'PreconditionFailed',
+  413: 'PayloadTooLarge',
+  415: 'UnsupportedMediaType',
   422: 'UnprocessableEntity',
   428: 'PreconditionRequired',
   429: 'TooManyRequests',
   500: 'InternalServerError',
   501: 'NotImplemented',
   503: 'ServiceUnavailable',
+  504: 'GatewayTimeout',
 }
 
 /** Map an HTTP status to the OData error code the library uses by default. */

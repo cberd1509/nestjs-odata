@@ -30,6 +30,7 @@ import {
   WriteNotAllowedException,
 } from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
+import { getODataChangesetManager } from '../batch/changeset-context.js'
 
 /**
  * TypeOrmAutoHandler — handles OData GET and $count requests automatically
@@ -180,7 +181,10 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
     work: (repo: Repository<ObjectLiteral>, manager?: EntityManager) => Promise<T>,
   ): Promise<T> {
-    const repo = this.resolveRepo(entitySetName)
+    // Inside a `$batch` changeset the write joins the changeset's transaction.
+    const changeset = getODataChangesetManager()
+    const repo = this.resolveRepo(entitySetName, changeset)
+    if (changeset) return work(repo, changeset)
     if (!this.scopes?.isScoped(entitySetName)) return work(repo)
     return repo.manager.transaction((manager) => work(manager.getRepository(repo.target), manager))
   }
@@ -211,8 +215,16 @@ export class TypeOrmAutoHandler {
    * This is what makes multi-entity `forFeature([A, B, …])` route to the
    * correct table per request. Falls back to the constructor-injected default
    * repo when no DataSource is available (single-entity test fixtures).
+   *
+   * With `manager` (a `$batch` changeset's), the repository works through that manager.
    */
-  private resolveRepo(entitySetName: string): Repository<ObjectLiteral> {
+  private resolveRepo(entitySetName: string, manager?: EntityManager): Repository<ObjectLiteral> {
+    const repo = this.defaultRepo(entitySetName)
+    return manager ? manager.getRepository(repo.target) : repo
+  }
+
+  /** The entity set's repository on the DataSource (see {@link resolveRepo}). */
+  private defaultRepo(entitySetName: string): Repository<ObjectLiteral> {
     if (!this.dataSource) return this.repo
     const entitySet = this.edmRegistry.getEntitySet(entitySetName)
     if (!entitySet) return this.repo
@@ -241,7 +253,8 @@ export class TypeOrmAutoHandler {
    */
   async handleGet(query: ODataQuery, requestUrl: string): Promise<ODataQueryResult> {
     const entityType = this.resolveEntityType(query.entitySetName)
-    const repo = this.resolveRepo(query.entitySetName)
+    const manager = getODataChangesetManager()
+    const repo = this.resolveRepo(query.entitySetName, manager)
     const maxTop = this.options.maxTop ?? 1000
     const effectiveTop = Math.min(query.top ?? maxTop, maxTop)
 
@@ -251,7 +264,7 @@ export class TypeOrmAutoHandler {
       top: effectiveTop + 1,
     }
 
-    const scopes = await this.scopes?.prepare(query, 'collection')
+    const scopes = await this.scopes?.prepare(query, 'collection', manager)
     const translateResult = this.translator.translate(fetchQuery, entityType, repo, scopes)
 
     const includeCount = query.count === true
@@ -299,7 +312,8 @@ export class TypeOrmAutoHandler {
    */
   async handleCount(query: ODataQuery): Promise<number> {
     const entityType = this.resolveEntityType(query.entitySetName)
-    const repo = this.resolveRepo(query.entitySetName)
+    const manager = getODataChangesetManager()
+    const repo = this.resolveRepo(query.entitySetName, manager)
 
     // Strip everything except filter and entitySetName (Pitfall 3 — T-03-12)
     const countQuery: ODataQuery = {
@@ -307,7 +321,7 @@ export class TypeOrmAutoHandler {
       filter: query.filter,
     }
 
-    const scopes = await this.scopes?.prepare(countQuery, 'count')
+    const scopes = await this.scopes?.prepare(countQuery, 'count', manager)
     const { qb } = this.translator.translate(countQuery, entityType, repo, scopes)
     return qb.getCount()
   }
@@ -395,10 +409,11 @@ export class TypeOrmAutoHandler {
     ifNoneMatchHeader?: string,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
-    const repo = this.resolveRepo(entitySetName)
+    const manager = getODataChangesetManager()
+    const repo = this.resolveRepo(entitySetName, manager)
     const where = parseODataKey(keyStr, entityType.keyProperties)
     const entity = this.scopes
-      ? await this.scopes.findOne(entitySetName, where, 'entity')
+      ? await this.scopes.findOne(entitySetName, where, 'entity', manager)
       : await repo.findOne({ where })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
@@ -429,13 +444,14 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
   ): Promise<{ entity: unknown; locationUrl: string }> {
     const entityType = this.resolveEntityType(entitySetName)
+    const manager = getODataChangesetManager()
     const handlers = this.handlersFor(entitySetName)
     if (handlers) {
       return withAllowHeader(() =>
-        this.createWithHandlers(handlers, body, entitySetName, entityType),
+        this.createWithHandlers(handlers, body, entitySetName, entityType, manager),
       )
     }
-    const repo = this.resolveRepo(entitySetName)
+    const repo = this.resolveRepo(entitySetName, manager)
     const saved = await repo.save(repo.create(this.prepareBody(entityType, body, 'create')))
     const locationUrl = entityLocation(
       this.options.serviceRoot,
@@ -796,10 +812,20 @@ export class TypeOrmAutoHandler {
     const where = parseODataKey(keyStr, entityType.keyProperties)
     const conditions = this.conditions(ifMatchHeader)
     this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
+    // Inside a `$batch` changeset the check runs (and locks) in the changeset's transaction,
+    // which the handler writes through (`ctx.manager`).
+    const manager = getODataChangesetManager()
     if (this.scopes?.isScoped(entitySetName)) {
-      await this.findForWrite(entitySetName, keyStr, where, this.resolveRepo(entitySetName))
+      await this.findForWrite(
+        entitySetName,
+        keyStr,
+        where,
+        this.resolveRepo(entitySetName, manager),
+        manager,
+      )
     }
     const ctx = buildWriteContext(entitySetName, entityType, operation, {
+      manager,
       rawKey: keyStr,
       ifMatch: conditions.ifMatch,
       ifNoneMatch: conditions.ifNoneMatch,

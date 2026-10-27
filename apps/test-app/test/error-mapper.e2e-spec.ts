@@ -244,7 +244,7 @@ describe('errorMapper (e2e)', () => {
     expect(contexts.at(-1)?.request).toBeDefined()
   })
 
-  it("maps the library's own $batch part errors, with the request from the request context", async () => {
+  it("maps the library's own $batch part errors, with the operation's own request", async () => {
     contexts.length = 0
     const body = [
       `--${BOUNDARY}`,
@@ -275,6 +275,10 @@ describe('errorMapper (e2e)', () => {
       url: '/odata/Widgets(999)',
       contentId: '9',
     })
-    expect((contexts.at(-1)?.request as { url: string }).url).toBe('/odata/$batch')
+    // The operation runs through its route: the mapper gets its request and host.
+    expect((contexts.at(-1)?.request as { originalUrl: string }).originalUrl).toBe(
+      '/odata/Widgets(999)',
+    )
+    expect(contexts.at(-1)?.host).toBeDefined()
   })
 })

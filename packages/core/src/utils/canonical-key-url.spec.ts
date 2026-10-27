@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rewriteCanonicalKeyUrl } from './canonical-key-url.js'
+import { rewriteCanonicalKeyUrl, splitKeyPredicate } from './canonical-key-url.js'
 
 const sets = new Set(['Products', 'OrderItems'])
 const isEntitySet = (name: string) => sets.has(name)
@@ -62,5 +62,13 @@ describe('rewriteCanonicalKeyUrl (OData-URL 4.01 §4.3.1)', () => {
     rewrite('/odata'.repeat(10_000) + '/Products(' + '('.repeat(50_000))
     rewrite('/odata/Products(' + ')'.repeat(50_000) + '/'.repeat(50_000))
     expect(performance.now() - started).toBeLessThan(500)
+  })
+})
+
+describe('splitKeyPredicate', () => {
+  it('splits a segment into its name and key predicate', () => {
+    expect(splitKeyPredicate('Products(1)')).toEqual({ name: 'Products', key: '1' })
+    expect(splitKeyPredicate("Products('a(b)')")).toEqual({ name: 'Products', key: "'a(b)'" })
+    expect(splitKeyPredicate('Products')).toEqual({ name: 'Products' })
   })
 })

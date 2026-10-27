@@ -241,15 +241,27 @@ describe('OData $batch endpoint (e2e)', () => {
     const responseText = getResponseText(res)
 
     expect(res.status).toBe(200)
-    // Both changeset parts should have error status due to rollback
+    // A failed changeset is answered with a single error response (OData-Protocol §11.7.7.5)
     const codes = parseResponseStatusCodes(responseText)
-    expect(codes.length).toBeGreaterThan(0)
-    expect(codes.every((c) => c >= 400)).toBe(true)
+    expect(codes).toEqual([404])
 
     // Verify DB state is unchanged — no new product was added
     const afterRes = await request.get('/odata/Products').expect(200)
     const countAfter = (afterRes.body as { value: unknown[] }).value.length
     expect(countAfter).toBe(countBefore)
+  })
+
+  // ── #65: query options, $expand included, get the standalone result ─────────
+
+  it('GET with $filter, $expand (nested options), $orderby and $count equals the standalone request', async () => {
+    const url =
+      '/odata/Products?$filter=price%20gt%201&$expand=category($select=name)&$orderby=name&$top=2&$count=true'
+    const standalone = await request.get(url).expect(200)
+    const res = await postBatch(request, buildBatchBody([individualRequest('GET', url)]))
+    const text = getResponseText(res)
+    const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
+    expect(JSON.parse(json)).toEqual(standalone.body)
+    expect((standalone.body as { '@odata.count': number })['@odata.count']).toBeGreaterThan(0)
   })
 
   // ── Test 10 (e2e): Independent request isolation ────────────────────────────

@@ -3,6 +3,7 @@ import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import { buildODataErrorResponse } from './odata-error.js'
 import { ODataEmptyResponse } from './odata-empty-response.js'
+import { batchErrorContext, getODataBatchPart } from '../batch/batch-dispatch.js'
 
 /** Minimal shape of an HTTP response object (Express or Fastify compatible) */
 interface HttpResponse {
@@ -65,10 +66,17 @@ export class ODataExceptionFilter implements ExceptionFilter {
       else response.send?.()
       return
     }
+    // A `$batch` operation runs through its route like a standalone request; the mapper also
+    // learns which operation of the batch failed.
+    const part = getODataBatchPart(http.getRequest?.())
     const { status, body, language } = buildODataErrorResponse(
       exception,
       this.options?.errorMapper,
-      { host, request: http.getRequest?.() },
+      {
+        host,
+        request: http.getRequest?.(),
+        ...(part ? { batch: batchErrorContext(part) } : {}),
+      },
       this.options?.errorLanguage,
     )
     // A route may have set another Content-Type (e.g. text/plain on /$count) before failing.

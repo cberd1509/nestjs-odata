@@ -196,15 +196,24 @@ would be inconsistent with the actual route paths.
 
 ## ODataTypeOrmModule.forRoot() options
 
-Optional, imported once in the root module. `changesetRunner` runs every `$batch` changeset of
-the application inside your own unit of work instead of a TypeORM `QueryRunner` transaction.
-See [$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).
+Optional, imported once in the root module.
+
+| Option                   | Type                    | Default               | Description                                                                                                                                                                                                                  |
+| ------------------------ | ----------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `changesetRunner`        | `ODataChangesetRunner?` | TypeORM `QueryRunner` | Runs every `$batch` changeset inside your own unit of work. See [$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).                                                                          |
+| `batch.enabled`          | `boolean?`              | `true`                | `false` turns `POST {serviceRoot}/$batch` off (404).                                                                                                                                                                         |
+| `batch.entitySets`       | `string[]?`             | every entity set      | Allow-list of entity sets `$batch` operations may reach (resource path, navigation and `$expand` targets); other targets answer 403 without reaching their route. See [$batch](./batch#turning-batch-off-or-restricting-it). |
+| `batch.operationTimeout` | `number?`               | `30000`               | Milliseconds one `$batch` operation may take; then 504, and its changeset fails and rolls back. `0` disables the limit.                                                                                                      |
 
 ```typescript
 ODataTypeOrmModule.forRoot({
   changesetRunner: (work, { request }) => unitOfWork.run(request, (manager) => work(manager)),
+  batch: { entitySets: ['Products', 'Orders'] },
 })
 ```
+
+`$batch` operations always run through their routes (guards, interceptors, pipes), like
+standalone requests; these options only restrict the endpoint further.
 
 ## Per-entity security overrides
 

@@ -1,32 +1,75 @@
 /**
  * OData v4 $batch endpoint controller.
  *
- * Accepts POST /$batch with a multipart/mixed body containing multiple
- * OData operations. Dispatches each sub-request to the appropriate CRUD
- * handler. Wraps changesets in TypeORM QueryRunner transactions for
- * atomicity (D-02, BATCH-02).
+ * Accepts POST /$batch with a multipart/mixed body containing multiple OData operations.
+ * Each operation is dispatched, in process, through the application's own HTTP stack
+ * (`dispatchBatchOperation`): it reaches its route with the same middleware, guards,
+ * interceptors, pipes and exception filters as the standalone request (OData-Protocol 4.01
+ * §11.7: operations are "evaluated according to the same semantics used when the request
+ * appears outside the context of a batch request").
+ *
+ * Changesets run atomically in one transaction (a TypeORM QueryRunner, or the application's
+ * `changesetRunner`). Its entity manager travels with each operation of the changeset as the
+ * `changeset` of its batch part (`getODataChangesetManager()`), which `TypeOrmAutoHandler`,
+ * row-level scopes and write handlers use.
  *
  * Security:
  *   T-05-01: Boundary validation delegated to parseBatchBody (throws 400).
- *   T-05-02: MAX_BATCH_OPERATIONS limit enforced by parseBatchBody.
- *   T-05-03: Sub-request URLs parsed via regex — never passed to shell/eval.
+ *   T-05-02: MAX_BATCH_OPERATIONS limit enforced by parseBatchBody; no nesting or re-entrancy.
+ *   T-05-03: Operation URLs are resolved with the WHATWG URL parser, confined to the service
+ *            root and only routed, never evaluated.
  *   T-05-05: Error responses use OData error format, no stack traces.
+ *   #67:     Operations cannot bypass route guards: they run through the route.
  */
 
 import {
+  BadRequestException,
   Controller,
   HttpException,
+  HttpStatus,
+  Inject,
+  NotFoundException,
+  Optional,
   Post,
   Req,
   Res,
-  Inject,
-  HttpStatus,
-  Optional,
-  NotFoundException,
   UseFilters,
 } from '@nestjs/common'
+import { HttpAdapterHost } from '@nestjs/core'
 import type { IncomingMessage } from 'http'
-import { DataSource, type EntityManager, type ObjectLiteral } from 'typeorm'
+import { DataSource, type EntityManager } from 'typeorm'
+import {
+  BatchOperationTimeoutError,
+  batchErrorContext,
+  batchOperationHeaders,
+  buildODataErrorResponse,
+  dispatchBatchOperation,
+  EdmRegistry,
+  extractBoundary,
+  getODataBatchPart,
+  getODataRequestContext,
+  headerValue,
+  inheritedBatchHeaders,
+  ODataExceptionFilter,
+  ODATA_MODULE_OPTIONS,
+  parseBatchBody,
+  parseBatchUrl,
+  parseQuery,
+  resolveBatchOperationUrl,
+  resolveNavigationTarget,
+  splitKeyPredicate,
+  type BatchChangesetResponse,
+  type BatchRequestPart,
+  type BatchResponseItem,
+  type BatchResponsePart,
+  type EdmEntityType,
+  type ExpandNode,
+  type ODataModuleResolvedOptions,
+} from '@nestjs-odata/core'
+import { buildBatchResponse } from './batch-response-builder.js'
+import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
+import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
+import type { ODataChangesetRunner } from '../write/write.types.js'
 
 /**
  * Minimal interface for the subset of Express Request used by BatchController.
@@ -35,6 +78,7 @@ import { DataSource, type EntityManager, type ObjectLiteral } from 'typeorm'
 export interface BatchRequest extends IncomingMessage {
   body?: unknown
   rawBody?: Buffer | string
+  originalUrl?: string
   headers: Record<string, string | string[] | undefined>
 }
 
@@ -44,54 +88,13 @@ export interface BatchRequest extends IncomingMessage {
 export interface BatchResponse {
   status(code: number): this
   set(field: string, value: string): this
-  send(body: string): this
+  send(body: string | Buffer): this
   json(body: unknown): this
 }
-import {
-  buildODataErrorResponse,
-  EdmRegistry,
-  ODataExceptionFilter,
-  odataErrorBody,
-  ETAG_PROVIDER,
-  getODataRequestContext,
-  ODATA_MODULE_OPTIONS,
-  parseODataKey,
-  parseBatchBody,
-  extractBoundary,
-  resolveReturnPreference,
-  type ODataModuleResolvedOptions,
-  type BatchResponsePart,
-  type BatchRequestPart,
-  type EdmEntityType,
-  type IETagProvider,
-} from '@nestjs-odata/core'
-import { buildBatchResponse } from './batch-response-builder.js'
-import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
-import type { EntityClass } from '@nestjs-odata/core'
-import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
-import { entityLocation } from '../utils/entity-key.js'
-import { ODataWriteRegistry } from '../write/write-registry.js'
-import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
-import type { ODataChangesetRunner, ODataWriteHandlers } from '../write/write.types.js'
-import {
-  hasEntityETag,
-  IF_MATCH_REQUIRED_MESSAGE,
-  preconditionFailure,
-  resolveEntityETag,
-} from '../write/etag.js'
-import { prepareWriteBody, type WriteBodyOperation } from '../write/body.js'
-import {
-  assertHandlerEntity,
-  buildWriteContext,
-  createHandlerFor,
-  writeNotAllowed,
-  WriteNotAllowedException,
-} from '../write/handlers.js'
 
 /**
- * Internal error used to signal a failed changeset operation so the
- * QueryRunner transaction can be rolled back.
- * Carries the status code and serialized body from the failed operation.
+ * Internal error used to signal a failed changeset operation so the transaction is rolled
+ * back. The failing operation's response is recorded by the caller.
  */
 class ChangesetOperationError extends Error {
   constructor() {
@@ -101,80 +104,108 @@ class ChangesetOperationError extends Error {
   }
 }
 
-/** HTTP methods a write handler serves. */
-const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE'])
+/** Default of `batch.operationTimeout`: how long one operation may take, in milliseconds. */
+export const DEFAULT_BATCH_OPERATION_TIMEOUT = 30_000
 
-/** Methods that modify an existing entity: preconditions (`If-Match`, `If-None-Match`) apply. */
-const KEYED_WRITE_METHODS = new Set(['PATCH', 'PUT', 'DELETE'])
-
-/** Where a batch error came from, for the error mapper's context (part, or changeset). */
-type ErrorOrigin = Pick<BatchRequestPart, 'contentId'> &
-  Partial<Pick<BatchRequestPart, 'method' | 'url'>>
-
-/**
- * Parse entity set name and optional key from a sub-request URL.
- *
- * Strategy:
- *   1. Strip query string first.
- *   2. Try to match last segment with key: /EntitySet(key) at path end.
- *   3. Fall back to matching last path segment (no key).
- *
- * Per T-05-03: URL parsing is regex-based, never used for shell/eval.
- *
- * Returns null if the URL cannot be parsed.
- */
-function parseEntityUrl(url: string): { entitySetName: string; key?: string } | null {
-  // Strip query string
-  const pathOnly = url.split('?')[0]
-
-  // Match segment with key: /EntitySetName(key) at end of path
-  const withKeyMatch = /\/([A-Za-z][A-Za-z0-9_]*)\(([^)]*)\)$/.exec(pathOnly)
-  if (withKeyMatch) {
-    return { entitySetName: withKeyMatch[1] ?? '', key: withKeyMatch[2] }
-  }
-
-  // Match last path segment without key
-  const withoutKeyMatch = /\/([A-Za-z][A-Za-z0-9_]*)$/.exec(pathOnly)
-  if (withoutKeyMatch) {
-    return { entitySetName: withoutKeyMatch[1] ?? '', key: undefined }
-  }
-
-  return null
+/** What every operation of one `$batch` request shares, computed once per request. */
+interface BatchScope {
+  readonly request: BatchRequest
+  /** The `$batch` URL: relative operation URLs resolve against it. */
+  readonly base: URL
+  /** Path segments of the service root (the `$batch` URL's path without `$batch`). */
+  readonly serviceSegments: readonly string[]
+  /** Headers of the `$batch` request that its operations inherit. */
+  readonly inheritedHeaders: Readonly<Record<string, string>>
 }
 
-/** The `content-language` header of an error part, if any. */
-function languageHeader(headers: Record<string, string>): Record<string, string> {
-  const language = headers['content-language']
-  return language ? { 'content-language': language } : {}
+/**
+ * The message of Nest's own "no route" answer (`404 { message: 'Cannot GET /x', ... }`), or
+ * `undefined` for any other response: only then is no route behind the response.
+ */
+function noRouteMessage(statusCode: number, body: Buffer | undefined): string | undefined {
+  if (statusCode !== 404 || !body) return undefined
+  try {
+    const parsed = JSON.parse(body.toString('utf-8')) as { message?: unknown; error?: unknown }
+    const message = parsed.message
+    return typeof message === 'string' &&
+      /^Cannot [A-Z]+ /.test(message) &&
+      typeof parsed.error !== 'object'
+      ? message
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** `$<Content-ID>` as a whole value, or as the first segment of a URL (`$1/Items`). */
+function resolveReference(value: string, contentIdMap: ReadonlyMap<string, string>): string {
+  if (!value.startsWith('$')) return value
+  const end = value.search(/[/?]/)
+  const id = value.slice(1, end === -1 ? undefined : end)
+  const target = contentIdMap.get(id)
+  return target === undefined ? value : target + (end === -1 ? '' : value.slice(end))
+}
+
+/**
+ * Every string value of a JSON value that is a whole `$<Content-ID>` reference, resolved. Returns
+ * `value` itself (same reference) when nothing was replaced.
+ */
+function resolveJsonReferences(value: unknown, contentIdMap: ReadonlyMap<string, string>): unknown {
+  if (typeof value === 'string') return resolveReference(value, contentIdMap)
+  if (!value || typeof value !== 'object') return value
+  let changed = false
+  const resolve = (v: unknown): unknown => {
+    const r = resolveJsonReferences(v, contentIdMap)
+    if (r !== v) changed = true
+    return r
+  }
+  const result = Array.isArray(value)
+    ? value.map(resolve)
+    : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolve(v)]))
+  return changed ? result : value
+}
+
+/** Path segments of a URL path, percent-decoded. */
+function pathSegments(path: string): string[] {
+  return path
+    .split('/')
+    .filter((s) => s !== '')
+    .map((s) => {
+      try {
+        return decodeURIComponent(s)
+      } catch {
+        return s
+      }
+    })
 }
 
 /**
  * BatchController handles POST /$batch requests.
  *
- * The service root prefix is set dynamically when registering this controller
- * in ODataTypeOrmModule.forFeature().
+ * Registered once per application (by `ODataBatchModule`, imported by every
+ * `ODataTypeOrmModule.forFeature()`); its path prefix is the service root.
  */
 @Controller()
 @UseFilters(ODataExceptionFilter)
 export class BatchController {
+  /** The `batch.entitySets` allow-list, if any. */
+  private readonly allowedEntitySets: ReadonlySet<string> | undefined
+
   constructor(
+    private readonly adapterHost: HttpAdapterHost,
     private readonly dataSource: DataSource,
-    private readonly edmRegistry: EdmRegistry,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
-    @Inject(TYPEORM_ODATA_ENTITIES) private readonly entityClasses: EntityClass[],
-    @Optional()
-    @Inject(TypeOrmScopeService)
-    private readonly scopes?: TypeOrmScopeService,
-    @Optional()
-    @Inject(ODataWriteRegistry)
-    private readonly writes?: ODataWriteRegistry,
+    @Inject(EdmRegistry) private readonly edmRegistry: EdmRegistry,
     @Optional()
     @Inject(ODATA_CHANGESET_RUNNER)
     private readonly changesetRunner?: ODataChangesetRunner,
     @Optional()
-    @Inject(ETAG_PROVIDER)
-    private readonly etagProvider?: IETagProvider,
-  ) {}
+    @Inject(ODATA_BATCH_OPTIONS)
+    private readonly batchOptions?: ODataBatchOptions,
+  ) {
+    const entitySets = batchOptions?.entitySets
+    this.allowedEntitySets = entitySets ? new Set(entitySets) : undefined
+  }
 
   /**
    * Run a changeset's operations atomically: through the app's `changesetRunner` when one is
@@ -188,7 +219,6 @@ export class BatchController {
         request: request?.request,
       })
     }
-    // Kept as an explicit QueryRunner (the pre-existing changeset mechanism).
     const queryRunner = this.dataSource.createQueryRunner()
     await queryRunner.connect()
     await queryRunner.startTransaction()
@@ -205,248 +235,66 @@ export class BatchController {
   }
 
   /**
-   * A response part carrying an entity: the body gets `@odata.etag` and the part an `ETag`
-   * header when the entity set has an ETag (same rules as the HTTP routes).
-   */
-  private entityPart(
-    contentId: string | undefined,
-    statusCode: number,
-    entitySetName: string,
-    entity: Record<string, unknown>,
-    headers: Record<string, string> = {},
-  ): BatchResponsePart {
-    const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
-    return {
-      contentId,
-      statusCode,
-      headers: etag ? { ...headers, etag } : headers,
-      body: JSON.stringify(etag ? { '@odata.etag': etag, ...entity } : entity),
-    }
-  }
-
-  /**
-   * 412 when the part's `If-Match` does not match the entity's current ETag, or its
-   * `If-None-Match` does (`*` matches any existing entity). Batch parts follow the same rules as
-   * standalone requests (OData-Protocol 4.01 §11.7, §8.2.4, §8.2.5).
-   */
-  private preconditionFailed(
-    contentId: string | undefined,
-    entitySetName: string,
-    entity: ObjectLiteral,
-    part: BatchRequestPart,
-  ): BatchResponsePart | undefined {
-    const ifMatch = part.headers['if-match']
-    const ifNoneMatch = part.headers['if-none-match']
-    if (!ifMatch && !ifNoneMatch) return undefined
-    const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
-    const failure = preconditionFailure({ ifMatch, ifNoneMatch }, etag)
-    if (!failure) return undefined
-    return this.errorPart(failure.status, failure.message, {
-      contentId,
-      method: part.method,
-      url: part.url,
-    })
-  }
-
-  /**
-   * 428 for a PATCH, PUT or DELETE part without `If-Match` on an entity set that requires it
-   * (`requireIfMatch`, OData-Protocol 4.01 §8.2.4), before anything is read or written.
-   */
-  private ifMatchMissing(
-    part: BatchRequestPart,
-    entitySetName: string,
-  ): BatchResponsePart | undefined {
-    if (!KEYED_WRITE_METHODS.has(part.method.toUpperCase())) return undefined
-    if (part.headers['if-match'] || !this.writes?.requiresIfMatch(entitySetName)) return undefined
-    return this.errorPart(428, IF_MATCH_REQUIRED_MESSAGE, part)
-  }
-
-  /** {@link prepareWriteBody} with the module's `ignoreUnknownProperties` option. */
-  private prepareBody(
-    entityType: EdmEntityType,
-    body: Record<string, unknown>,
-    operation: WriteBodyOperation,
-  ): Record<string, unknown> {
-    return prepareWriteBody(entityType, body, operation, {
-      ignoreUnknown: this.options.ignoreUnknownProperties,
-    })
-  }
-
-  /**
-   * Apply the part's `Prefer: return=minimal` to a successful POST, PATCH or PUT (OData-Protocol
-   * 4.01 §8.2.8.7): 204 without a body, `Preference-Applied`, and for a create its `Location`
-   * and `OData-EntityId`. `return=representation` keeps the body and is reported too. The
-   * `Prefer` header of the `$batch` request itself is not applied to its parts.
-   */
-  private applyReturnPreference(
-    part: BatchRequestPart,
-    result: BatchResponsePart,
-  ): BatchResponsePart {
-    const method = part.method.toUpperCase()
-    if (method !== 'POST' && method !== 'PATCH' && method !== 'PUT') return result
-    if (result.statusCode !== 200 && result.statusCode !== 201) return result
-    const prefer = part.headers['prefer']
-    const applied = resolveReturnPreference(prefer, part.url)
-    if (!applied || resolveReturnPreference(prefer, undefined) !== applied) return result
-    const headers = { ...result.headers, 'preference-applied': `return=${applied}` }
-    if (applied === 'representation') return { ...result, headers }
-    const location = result.headers['location']
-    return {
-      contentId: result.contentId,
-      statusCode: 204,
-      headers: location ? { ...headers, 'odata-entityid': location } : headers,
-      body: undefined,
-    }
-  }
-
-  /**
-   * Dispatch a POST/PATCH/PUT/DELETE batch part to the entity set's write handlers.
-   * Rows outside the entity set's row-level scope answer 404 before the handler runs (without
-   * a row lock outside a changeset, like the HTTP routes).
-   * `ctx.manager` is set only inside a changeset (the changeset's transaction).
-   */
-  private async dispatchToHandlers(
-    handlers: ODataWriteHandlers<any>,
-    part: BatchRequestPart,
-    entitySetName: string,
-    entityType: EdmEntityType,
-    entityClass: EntityClass,
-    key: string | undefined,
-    manager: EntityManager,
-    changesetManager: EntityManager | undefined,
-  ): Promise<BatchResponsePart> {
-    const method = part.method.toUpperCase()
-    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const extra = {
-      manager: changesetManager,
-      batch: { contentId: part.contentId, inChangeset: changesetManager !== undefined },
-      ifMatch: part.headers['if-match'],
-      ifNoneMatch: part.headers['if-none-match'],
-      requireIfMatch: this.writes?.requiresIfMatch(entitySetName) ?? false,
-    }
-
-    if (method === 'POST') {
-      const { operation, handler } = createHandlerFor(handlers, entitySetName, entityType, body)
-      const ctx = buildWriteContext(entitySetName, entityType, operation, extra)
-      const entity = assertHandlerEntity(
-        await handler.call(handlers, body, ctx),
-        entitySetName,
-        operation,
-      )
-      return this.entityPart(part.contentId, 201, entitySetName, entity, {
-        location: entityLocation(
-          this.options.serviceRoot,
-          entitySetName,
-          entityType.keyProperties,
-          entity,
-        ),
-      })
-    }
-
-    if (key === undefined) {
-      return this.errorPart(400, `${method} requires a key: ${part.url}`, part)
-    }
-    const where = parseODataKey(key, entityType.keyProperties)
-    if (
-      this.scopes?.isScoped(entitySetName) &&
-      !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
-    ) {
-      return this.notFound(entitySetName, key, part)
-    }
-
-    const ctxFor = (operation: 'update' | 'replace' | 'delete') =>
-      buildWriteContext(entitySetName, entityType, operation, { ...extra, rawKey: key })
-    if (method === 'PATCH' || method === 'PUT') {
-      const operation = method === 'PATCH' ? 'update' : 'replace'
-      const handler = handlers[operation]
-      if (!handler) throw writeNotAllowed(entitySetName, operation, handlers)
-      const result = await handler.call(handlers, where, body, ctxFor(operation))
-      const entity = assertHandlerEntity(result, entitySetName, operation)
-      return this.entityPart(part.contentId, 200, entitySetName, entity)
-    }
-
-    if (!handlers.delete) throw writeNotAllowed(entitySetName, 'delete', handlers)
-    await handlers.delete(where, ctxFor('delete'))
-    return { contentId: part.contentId, statusCode: 204, headers: {}, body: undefined }
-  }
-
-  /**
-   * Load an entity by key for a batch part, through the entity set's row-level scope when it
-   * has one (so rows outside the scope look absent: 404).
-   */
-  private async findScoped(
-    entitySetName: string,
-    entityClass: EntityClass,
-    where: Record<string, unknown>,
-    manager: EntityManager,
-    operation: 'entity' | 'write',
-  ): Promise<ObjectLiteral | null> {
-    if (!this.scopes) return manager.findOne(entityClass, { where })
-    const found = await this.scopes.findOne(entitySetName, where, operation, manager, {
-      lock: operation === 'write',
-    })
-    return found ?? null
-  }
-
-  /**
    * POST {serviceRoot}/$batch
    *
    * Reads raw body (must be pre-configured with body-parser for text/plain or rawBody),
-   * parses multipart/mixed, dispatches sub-requests, builds multipart response.
+   * parses multipart/mixed, dispatches sub-requests, builds multipart response. Errors of the
+   * `$batch` request itself are thrown and answered by `ODataExceptionFilter`.
    */
   @Post('$batch')
   async handleBatch(@Req() req: BatchRequest, @Res() res: BatchResponse): Promise<void> {
+    if (this.batchOptions?.enabled === false) {
+      throw new NotFoundException('The $batch endpoint is disabled')
+    }
+    // Re-entrancy: a $batch reached from inside a batch operation (however its URL is spelled)
+    // would multiply the operation limit.
+    if (getODataBatchPart(req)) {
+      throw new BadRequestException('A $batch request cannot contain a $batch request')
+    }
+
     let rawBody: string
     try {
       rawBody = await this.extractRawBody(req)
     } catch (err) {
-      this.badRequest(res, String(err))
-      return
+      throw new BadRequestException(String(err))
     }
-
-    const contentTypeHeader = req.headers['content-type']
-    const contentType =
-      (Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader) ?? ''
 
     let boundary: string
     try {
-      boundary = extractBoundary(contentType)
+      boundary = extractBoundary(headerValue(req.headers['content-type']) ?? '')
     } catch {
-      this.badRequest(res, 'Missing or invalid boundary in Content-Type for $batch request')
-      return
+      throw new BadRequestException(
+        'Missing or invalid boundary in Content-Type for $batch request',
+      )
     }
 
     let parsed
     try {
       parsed = parseBatchBody(rawBody, boundary)
     } catch (err) {
-      this.badRequest(res, err instanceof Error ? err.message : 'Malformed batch body')
-      return
+      throw new BadRequestException(err instanceof Error ? err.message : 'Malformed batch body')
     }
 
-    const responseParts: BatchResponsePart[] = []
+    const base = parseBatchUrl(req.originalUrl ?? req.url ?? `${this.options.serviceRoot}/$batch`)
+    const scope: BatchScope = {
+      request: req,
+      base,
+      serviceSegments: pathSegments(base.pathname).slice(0, -1),
+      inheritedHeaders: inheritedBatchHeaders(req.headers),
+    }
 
+    const responseParts: BatchResponseItem[] = []
     for (const part of parsed.parts) {
       if (part.kind === 'request') {
-        const responsePart = await this.dispatchIndividualRequest(part)
-        responseParts.push(responsePart)
+        responseParts.push(await this.runOperation(part, scope))
       } else if (part.kind === 'changeset') {
-        const changesetParts = await this.executeChangeset(part.parts)
-        responseParts.push(...changesetParts)
+        responseParts.push(await this.executeChangeset(part.parts, scope))
       }
     }
 
     const { contentType: responseContentType, body } = buildBatchResponse(responseParts)
 
     res.status(HttpStatus.OK).set('Content-Type', responseContentType).send(body)
-  }
-
-  /** 400 for a malformed `$batch` request, with `Content-Language` (OData-Protocol §9.4). */
-  private badRequest(res: BatchResponse, message: string): void {
-    res
-      .status(HttpStatus.BAD_REQUEST)
-      .set('Content-Language', this.options.errorLanguage ?? 'en')
-      .json(odataErrorBody('BadRequest', message))
   }
 
   /**
@@ -489,97 +337,65 @@ export class BatchController {
   }
 
   /**
-   * Dispatch a single individual request (outside a changeset).
-   * Failures are caught and returned as per-operation error responses (BATCH-03).
-   */
-  private async dispatchIndividualRequest(part: BatchRequestPart): Promise<BatchResponsePart> {
-    try {
-      // A write outside a changeset still runs its scope check and the write in one
-      // transaction, so the row cannot leave the scope in between.
-      // Not for entity sets with write handlers: they own their transaction, and a row lock
-      // held here while the handler writes on another connection would deadlock.
-      const entitySetName = parseEntityUrl(part.url)?.entitySetName
-      if (
-        part.method.toUpperCase() !== 'GET' &&
-        entitySetName &&
-        this.scopes?.isScoped(entitySetName) &&
-        !this.writes?.getHandlers(entitySetName)
-      ) {
-        return await this.dataSource.transaction((manager) =>
-          this.dispatchWithManager(part, manager),
-        )
-      }
-      return await this.dispatchWithManager(part, this.dataSource.manager)
-    } catch (err) {
-      return this.buildErrorResponse(err, part)
-    }
-  }
-
-  /**
-   * Execute all operations in a changeset within a single QueryRunner transaction.
-   * If any operation fails, all are rolled back (BATCH-02).
+   * Execute the operations of a changeset in one transaction, in order. When one fails
+   * (status >= 400), the transaction is rolled back, the remaining operations do not run, and
+   * the changeset is answered with that operation's error response alone, as a single
+   * `application/http` part carrying its Content-ID (OData-Protocol 4.01 §11.7.7.5). Otherwise
+   * the responses form a nested multipart/mixed part.
    *
-   * Per D-02: full changeset rollback on any failure.
    * Per WRITE-03 / T-10-08: contentIdMap is local to each changeset call — never leaks across changesets.
    */
-  private async executeChangeset(parts: readonly BatchRequestPart[]): Promise<BatchResponsePart[]> {
-    // The failing part's response, recorded outside the thrown error: a changesetRunner may
-    // wrap or replace the error it sees, and the client must still get the part's own status.
+  private async executeChangeset(
+    parts: readonly BatchRequestPart[],
+    scope: BatchScope,
+  ): Promise<BatchResponseItem> {
+    // The failing operation's response, recorded outside the thrown error: a changesetRunner
+    // may wrap or replace the error it sees, and the client must still get the part's status.
     let failure: BatchResponsePart | undefined
     try {
-      return await this.runChangeset(async (manager) => {
-        // Per T-10-08: declared inside the changeset so each changeset gets a fresh Map.
+      const results = await this.runChangeset(async (manager) => {
         const contentIdMap = new Map<string, string>()
-        const results: BatchResponsePart[] = []
-
+        const responses: BatchResponsePart[] = []
         for (const part of parts) {
           // Resolve any $N references in URL and body before dispatching (WRITE-03)
           const resolvedPart = this.resolveContentIdReferences(part, contentIdMap)
-          const result = await this.dispatchWithManager(resolvedPart, manager, true)
-          results.push(result)
-
-          // Per D-02: if any changeset operation fails (status >= 400), roll back
-          // the entire changeset — do not commit partial changes.
+          const result = await this.runOperation(resolvedPart, scope, manager)
           if (result.statusCode >= 400) {
             failure = result
             throw new ChangesetOperationError()
           }
+          responses.push(result)
 
-          // Store location URL in contentIdMap after a successful create with Content-ID
-          // (WRITE-03): 201, or 204 under Prefer: return=minimal, both carry Location.
-          const location = result.headers['location']
+          // Record the created entity's URL for $N references: a 201, or a 204 under
+          // Prefer: return=minimal, both carry Location.
+          const location = headerValue(result.headers['location'])
           const created = result.statusCode === 201 || result.statusCode === 204
           if (created && location && part.contentId !== undefined) {
             contentIdMap.set(part.contentId, location)
           }
         }
-        return results
+        return responses
       })
+      return { kind: 'changeset', parts: results } satisfies BatchChangesetResponse
     } catch (err) {
-      // All changeset parts get the same error response (BATCH-02 atomicity)
-      const errorResponse = failure
-        ? {
-            statusCode: failure.statusCode,
-            headers: languageHeader(failure.headers),
-            body: failure.body,
-          }
-        : this.buildErrorResponse(err)
-      return parts.map((p) => ({ ...errorResponse, contentId: p.contentId }))
+      // The failing operation's own error response, as sent by its route (§11.7.7.5: "a single
+      // response ... that applies to all requests in the change set").
+      return failure ?? this.buildErrorResponse(err)
     }
   }
 
   /**
-   * Resolve Content-ID references ($N) in a BatchRequestPart's URL and body.
+   * Resolve Content-ID references (`$N`) in a BatchRequestPart's URL and body.
    *
-   * Per WRITE-03: $N in a URL or body is substituted with the location URL recorded
-   * for content ID N from a prior 201 response in the same changeset.
-   *
-   * Fast path: returns the original part unchanged when contentIdMap is empty or
-   * no $N patterns match (avoids unnecessary object allocation).
+   * Per WRITE-03 / OData-Protocol §11.7.7.2: `$N` stands for the URL of the entity created by
+   * the request with Content-ID `N` in the same changeset. Only whole references are replaced,
+   * with exact IDs (`$1` never matches inside `$10`): the URL when it is `$N` or starts with
+   * `$N/`, and JSON string values (e.g. `@odata.bind`) that are `$N` or start with `$N/`.
+   * Text such as `"costs $1"` is left alone.
    *
    * Per immutability rules: never mutates the readonly BatchRequestPart — returns a new object.
    * Per T-10-07: substitution uses only URLs already in contentIdMap (populated by our own
-   * 201 responses) — no code evaluation, no cross-changeset leak.
+   * responses) — no code evaluation, no cross-changeset leak.
    */
   private resolveContentIdReferences(
     part: BatchRequestPart,
@@ -587,391 +403,192 @@ export class BatchController {
   ): BatchRequestPart {
     if (contentIdMap.size === 0) return part // fast path: nothing to resolve
 
-    let url = part.url
+    const url = resolveReference(part.url, contentIdMap)
     let body = part.body
-
-    for (const [id, resolvedUrl] of contentIdMap) {
-      // Use plain string replacement to avoid RegExp injection via Content-ID values.
-      // OData spec restricts Content-ID to numeric-only strings, so "$N" is the exact token.
-      const token = `$${id}`
-      url = url.replaceAll(token, resolvedUrl)
-      if (body) {
-        body = body.replaceAll(token, resolvedUrl)
+    if (body?.includes('"$')) {
+      try {
+        const parsed: unknown = JSON.parse(body)
+        const resolved = resolveJsonReferences(parsed, contentIdMap)
+        if (resolved !== parsed) body = JSON.stringify(resolved)
+      } catch {
+        // Not JSON: no references to resolve.
       }
     }
 
-    // Return original if nothing changed (reference equality fast path)
     if (url === part.url && body === part.body) return part
 
     return { ...part, url, ...(body !== part.body ? { body } : {}) }
   }
 
   /**
-   * Dispatch a parsed sub-request to the appropriate handler using the given EntityManager.
-   * Uses the EntityManager so changesets can use a transaction-scoped manager.
-   *
-   * Per T-05-03: URL parsing is regex-based, entity operations go through TypeORM parameterized queries.
+   * Run one operation through its route, in process, and turn the result into a batch
+   * response part. The operation inherits the `$batch` request's headers (credentials,
+   * `Accept-Language`, custom headers), except body, batch-level and conditional ones; its own
+   * headers win. While it runs, `getODataBatchPart()` describes it (with the changeset's
+   * entity manager as `changeset` inside a changeset).
    */
-  private async dispatchWithManager(
+  private async runOperation(
     part: BatchRequestPart,
-    manager: EntityManager,
-    inChangeset = false,
+    scope: BatchScope,
+    changesetManager?: EntityManager,
   ): Promise<BatchResponsePart> {
-    return this.applyReturnPreference(part, await this.dispatchPart(part, manager, inChangeset))
-  }
-
-  /** Dispatch one part (see {@link dispatchWithManager}), before its `Prefer` is applied. */
-  private async dispatchPart(
-    part: BatchRequestPart,
-    manager: EntityManager,
-    inChangeset: boolean,
-  ): Promise<BatchResponsePart> {
-    const parsed = parseEntityUrl(part.url)
-    if (!parsed) {
-      return this.errorPart(400, `Cannot parse entity URL: ${part.url}`, part)
+    let url: URL
+    try {
+      url = resolveBatchOperationUrl(part.url, scope.base)
+    } catch {
+      return this.errorPart(400, `Cannot parse the operation URL: ${part.url}`, part)
     }
-
-    const { entitySetName, key } = parsed
-
-    // Resolve entity type from registry
-    const entitySet = this.edmRegistry.getEntitySet(entitySetName)
-    if (!entitySet) {
-      return this.errorPart(404, `Entity set '${entitySetName}' not found`, part)
+    const segments = pathSegments(url.pathname)
+    // Only resources of this service: never other application routes (`../admin`,
+    // `http://host/auth/login`), which would bypass path-based controls in front of the app.
+    const { serviceSegments } = scope
+    if (
+      segments.length < serviceSegments.length ||
+      !serviceSegments.every((s, i) => segments[i] === s)
+    ) {
+      return this.errorPart(400, `The operation URL is outside the service: ${part.url}`, part)
     }
-
-    const entityType = this.edmRegistry.getEntityType(entitySet.entityTypeName)
-    if (!entityType) {
-      return this.errorPart(404, `Entity type '${entitySet.entityTypeName}' not found`, part)
+    // Express routing is case-insensitive: `$BATCH` reaches this controller too.
+    if (segments.at(-1)?.toLowerCase() === '$batch') {
+      return this.errorPart(400, 'A $batch request cannot contain a $batch request', part)
     }
-
-    // Resolve the TypeORM entity class for this entity set
-    const entityClass = this.resolveEntityClass(entityType.name)
-    if (!entityClass) {
-      return this.errorPart(500, `Entity class not found for '${entityType.name}'`, part)
+    if (
+      this.allowedEntitySets &&
+      !this.isAllowed(segments.slice(serviceSegments.length), url.searchParams)
+    ) {
+      return this.errorPart(403, `Operation not allowed in $batch: ${part.url}`, part)
     }
-
-    const method = part.method.toUpperCase()
-    const missing = this.ifMatchMissing(part, entitySetName)
-    if (missing) return missing
 
     try {
-      const handlers = WRITE_METHODS.has(method)
-        ? this.writes?.getHandlers(entitySetName)
-        : undefined
-      if (handlers) {
-        return await this.dispatchToHandlers(
-          handlers,
-          part,
-          entitySetName,
-          entityType,
-          entityClass,
-          key,
-          manager,
-          inChangeset ? manager : undefined,
-        )
+      const response = await dispatchBatchOperation(
+        this.adapterHost.httpAdapter,
+        {
+          method: part.method,
+          url: `${url.pathname}${url.search}`,
+          headers: batchOperationHeaders(
+            scope.inheritedHeaders,
+            part.headers,
+            part.body !== undefined && part.body !== '',
+          ),
+          body: part.body,
+          remoteAddress: scope.request.socket?.remoteAddress,
+          timeoutMs: this.batchOptions?.operationTimeout ?? DEFAULT_BATCH_OPERATION_TIMEOUT,
+        },
+        {
+          method: part.method,
+          url: part.url,
+          contentId: part.contentId,
+          inChangeset: changesetManager !== undefined,
+          batchRequest: scope.request,
+          changeset: changesetManager,
+        },
+      )
+      // No route answered (Nest's own 404): answer it as an OData error. Any other response,
+      // errors included, is the route's own and passes through unchanged.
+      const noRoute = noRouteMessage(response.statusCode, response.body)
+      if (noRoute !== undefined) return this.errorPart(404, noRoute, part)
+      return {
+        contentId: part.contentId,
+        statusCode: response.statusCode,
+        headers: response.headers,
+        body: response.body,
       }
-      if (method === 'GET') {
-        if (key !== undefined) {
-          return await this.dispatchGetByKey(
-            key,
-            entitySetName,
-            entityType.keyProperties,
-            entityClass,
-            manager,
-            part,
-          )
-        }
-        // Collection GET — not supported in batch (read-only outside changeset)
-        return await this.dispatchGetCollection(entitySetName, entityClass, manager, part.contentId)
-      } else if (method === 'POST') {
-        return await this.dispatchCreate(part, entitySetName, entityType, entityClass, manager)
-      } else if (method === 'PATCH') {
-        if (key === undefined) {
-          return this.errorPart(400, `PATCH requires a key: ${part.url}`, part)
-        }
-        return await this.dispatchUpdate(key, part, entitySetName, entityType, entityClass, manager)
-      } else if (method === 'PUT') {
-        if (key === undefined) {
-          return this.errorPart(400, `PUT requires a key: ${part.url}`, part)
-        }
-        return await this.dispatchReplace(
-          key,
-          part,
-          entitySetName,
-          entityType,
-          entityClass,
-          manager,
-        )
-      } else if (method === 'DELETE') {
-        if (key === undefined) {
-          return this.errorPart(400, `DELETE requires a key: ${part.url}`, part)
-        }
-        return await this.dispatchDelete(
-          key,
-          part,
-          entitySetName,
-          entityType.keyProperties,
-          entityClass,
-          manager,
-          part.contentId,
-        )
-      }
-
-      return this.errorPart(405, `Method '${method}' not supported in $batch`, part)
     } catch (err) {
+      if (err instanceof BatchOperationTimeoutError) {
+        return this.errorPart(504, err.message, part)
+      }
       return this.buildErrorResponse(err, part)
     }
   }
 
-  /** GET /EntitySet(key) */
-  private async dispatchGetByKey(
-    keyStr: string,
-    entitySetName: string,
-    keyProperties: readonly string[],
-    entityClass: EntityClass,
-    manager: EntityManager,
-    part: BatchRequestPart,
-  ): Promise<BatchResponsePart> {
-    const contentId = part.contentId
-    const where = parseODataKey(keyStr, keyProperties)
-    const entity = await this.findScoped(entitySetName, entityClass, where, manager, 'entity')
-    if (!entity) return this.notFound(entitySetName, keyStr, part)
-    return this.entityPart(contentId, 200, entitySetName, entity)
-  }
-
-  /** GET /EntitySet (collection — basic support) */
-  private async dispatchGetCollection(
-    entitySetName: string,
-    entityClass: EntityClass,
-    manager: EntityManager,
-    contentId?: string,
-  ): Promise<BatchResponsePart> {
-    // Apply maxTop limit to prevent unbounded queries (T-05-06 / SEC-01).
-    let items: ObjectLiteral[]
-    if (this.scopes) {
-      // Same result as manager.find() (eager relations, take), restricted to the scope.
-      const qb = manager.createQueryBuilder(entityClass as new () => ObjectLiteral, 'entity')
-      qb.setFindOptions({ take: this.options.maxTop, loadEagerRelations: true })
-      applyScopeToQuery(
-        qb,
-        'entity',
-        await this.scopes.subqueryFor(entitySetName, 'collection', [], manager),
-      )
-      items = await qb.getMany()
-    } else {
-      items = await manager.find(entityClass, {
-        take: this.options.maxTop,
-      })
-    }
-    return {
-      contentId,
-      statusCode: 200,
-      headers: {},
-      body: JSON.stringify({ value: items }),
-    }
-  }
-
-  /** POST /EntitySet */
-  private async dispatchCreate(
-    part: BatchRequestPart,
-    entitySetName: string,
-    entityType: EdmEntityType,
-    entityClass: EntityClass,
-    manager: EntityManager,
-  ): Promise<BatchResponsePart> {
-    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const repo = manager.getRepository(entityClass)
-    // Computed properties ignored, unknown ones refused (400), as over HTTP.
-    const created = repo.create(this.prepareBody(entityType, body, 'create'))
-    const saved = (await repo.save(created)) as Record<string, unknown>
-    return this.entityPart(part.contentId, 201, entitySetName, saved, {
-      location: entityLocation(
-        this.options.serviceRoot,
-        entitySetName,
-        entityType.keyProperties,
-        saved,
-      ),
-    })
-  }
-
-  /** PATCH /EntitySet(key) */
-  private async dispatchUpdate(
-    keyStr: string,
-    part: BatchRequestPart,
-    entitySetName: string,
-    entityType: EdmEntityType,
-    entityClass: EntityClass,
-    manager: EntityManager,
-  ): Promise<BatchResponsePart> {
-    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const where = parseODataKey(keyStr, entityType.keyProperties)
-    const EntityCls = entityClass as new () => ObjectLiteral
-    // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
-    // Computed properties are dropped, unknown ones refused (400).
-    const patch = this.prepareBody(entityType, body, 'update')
-    const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) return this.notFound(entitySetName, keyStr, part)
-    const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
-    if (stale) return stale
-    // Merge patch fields onto the existing entity, then save.
-    const merged = manager.merge(EntityCls, existing, patch)
-    const saved = await manager.save(EntityCls, merged)
-    return this.entityPart(part.contentId, 200, entitySetName, saved)
+  /** The entity set and entity type a navigation property of `type` leads to, if any. */
+  private navTarget(
+    type: EdmEntityType,
+    name: string,
+  ): { entitySet: string; entityType: EdmEntityType } | undefined {
+    const target = resolveNavigationTarget(this.edmRegistry, type, name)
+    if (!target?.entitySet || !target.entityType) return undefined
+    return { entitySet: target.entitySet.name, entityType: target.entityType }
   }
 
   /**
-   * PUT /EntitySet(key) — full entity replacement.
-   *
-   * Per OData v4 spec (D-01): all entity properties replaced.
-   * Unspecified fields reset to column defaults (null for nullable, default value otherwise).
-   * Distinct from PATCH merge semantics used by dispatchUpdate().
-   *
-   * Uses repo.metadata.columns for column introspection — same pattern as handleReplace().
+   * True when every entity set the operation reaches is in the `entitySets` allow-list: the
+   * entity set of the resource path (`Products(1)`), the targets of navigation segments
+   * (`Products(1)/Supplier`) and of `$expand` (nested too, whatever the case of the option
+   * name, parsed like the route parses it). `path` is relative to the service root. Unknown
+   * resources (`$metadata`, a segment the EDM does not know) are refused.
    */
-  private async dispatchReplace(
-    keyStr: string,
-    part: BatchRequestPart,
-    entitySetName: string,
-    entityType: EdmEntityType,
-    entityClass: EntityClass,
-    manager: EntityManager,
-  ): Promise<BatchResponsePart> {
-    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const where = parseODataKey(keyStr, entityType.keyProperties)
-    const EntityCls = entityClass as new () => ObjectLiteral
-
-    // Key properties in the body are ignored (OData §11.4.3, T-10-01): the URL key decides the
-    // row. Computed properties are dropped, unknown ones refused (400).
-    const values = this.prepareBody(entityType, body, 'replace')
-
-    const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) return this.notFound(entitySetName, keyStr, part)
-    const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
-    if (stale) return stale
-
-    // Build full replacement using column metadata — same logic as handleReplace()
-    const meta = this.dataSource.getMetadata(entityClass)
-    const replacement: Record<string, unknown> = {}
-
-    // Set key values from URL
-    for (const kp of entityType.keyProperties) {
-      replacement[kp] = where[kp]
-    }
-
-    for (const col of meta.columns) {
-      if (col.isPrimary) continue
-      if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue
-
-      const propName = col.propertyName
-      if (Object.prototype.hasOwnProperty.call(values, propName)) {
-        replacement[propName] = values[propName]
-      } else if (col.default !== undefined) {
-        replacement[propName] = col.default
-      } else if (col.isNullable) {
-        replacement[propName] = null
+  private isAllowed(path: readonly string[], query: URLSearchParams): boolean {
+    const allowed = this.allowedEntitySets
+    const first = splitKeyPredicate(path[0] ?? '').name
+    if (!first || !allowed?.has(first)) return false
+    const entitySet = this.edmRegistry.getEntitySet(first)
+    let type = entitySet ? this.edmRegistry.getEntityType(entitySet.entityTypeName) : undefined
+    if (!type) return false
+    for (const raw of path.slice(1)) {
+      const segment = splitKeyPredicate(raw).name
+      if (segment.startsWith('$')) continue // $count, $value, $ref
+      const target = this.navTarget(type, segment)
+      if (target) {
+        if (!allowed.has(target.entitySet)) return false
+        type = target.entityType
+      } else if (!type.properties.some((p) => p.name === segment)) {
+        return false
       }
     }
-
-    const repo = manager.getRepository(EntityCls)
-    const entity = repo.create(replacement as ObjectLiteral)
-    const saved = await manager.save(EntityCls, entity)
-    return this.entityPart(part.contentId, 200, entitySetName, saved)
+    // Every $expand option, whatever its case (`$EXPAND`) or how often it is repeated.
+    for (const [name, value] of query) {
+      if (name.toLowerCase() !== '$expand') continue
+      let expand: ExpandNode | undefined
+      try {
+        expand = parseQuery(`$expand=${value}`).expand
+      } catch {
+        continue // the route refuses an invalid $expand itself (400)
+      }
+      if (!this.expandAllowed(type, expand)) return false
+    }
+    return true
   }
 
-  /** DELETE /EntitySet(key) */
-  private async dispatchDelete(
-    keyStr: string,
-    part: BatchRequestPart,
-    entitySetName: string,
-    keyProperties: readonly string[],
-    entityClass: EntityClass,
-    manager: EntityManager,
-    contentId?: string,
-  ): Promise<BatchResponsePart> {
-    const where = parseODataKey(keyStr, keyProperties)
-    const notFound = () => this.notFound(entitySetName, keyStr, part)
-    const ifMatch = part.headers['if-match']
-    // Load the row only when the scope or a precondition needs it.
-    if (
-      this.scopes?.isScoped(entitySetName) ||
-      part.headers['if-none-match'] ||
-      (ifMatch && hasEntityETag(entitySetName, this.writes, this.etagProvider))
-    ) {
-      const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-      if (!existing) return notFound()
-      const stale = this.preconditionFailed(contentId, entitySetName, existing, part)
-      if (stale) return stale
+  /** True when every `$expand` target (nested ones too) is an allow-listed entity set. */
+  private expandAllowed(type: EdmEntityType, expand: ExpandNode | undefined): boolean {
+    for (const item of expand?.items ?? []) {
+      let current = type
+      for (const name of item.navigationProperty.split('/')) {
+        const target = this.navTarget(current, name)
+        if (!target || !this.allowedEntitySets?.has(target.entitySet)) return false
+        current = target.entityType
+      }
+      if (!this.expandAllowed(current, item.expand)) return false
     }
-    const result = await manager.delete(entityClass, where)
-    if (result.affected === 0) return notFound()
-    return {
-      contentId,
-      statusCode: 204,
-      headers: {},
-      body: undefined,
-    }
+    return true
   }
 
   /**
    * Build an OData error response part from an exception, through the application's
-   * `errorMapper` (ODataModule.forRoot() option) and then the default mapping. The library's
-   * own errors (404, a missing key, 412, …) go through here too, so the mapper sees every
-   * failing part. Without `origin`, the error belongs to a changeset as a whole.
-   * Never exposes stack traces (T-05-05).
+   * `errorMapper` (ODataModule.forRoot() option) and then the default mapping. Without
+   * `origin`, the error belongs to a changeset as a whole. Never exposes stack traces (T-05-05).
    */
-  private buildErrorResponse(err: unknown, origin?: ErrorOrigin): BatchResponsePart {
+  private buildErrorResponse(err: unknown, origin?: BatchRequestPart): BatchResponsePart {
     const { status, body, language } = buildODataErrorResponse(
       err,
       this.options.errorMapper,
       {
         request: getODataRequestContext()?.request,
-        batch: origin
-          ? { method: origin.method, url: origin.url, contentId: origin.contentId }
-          : { changeset: true },
+        batch: origin ? batchErrorContext(origin) : { changeset: true },
       },
       this.options.errorLanguage,
     )
-    // OData §9.2.2: a 405 lists the allowed methods. §9.4: errors carry Content-Language.
-    const notAllowed = err instanceof WriteNotAllowedException ? err : undefined
     return {
       contentId: origin?.contentId,
       statusCode: status,
-      headers: {
-        'content-language': language,
-        ...(notAllowed && status === 405 ? { allow: notAllowed.allow } : {}),
-      },
+      headers: { 'content-language': language },
       body: JSON.stringify(body),
     }
   }
 
   /** An error part raised by the library itself (`HttpException(message, status)`). */
-  private errorPart(status: number, message: string, origin: ErrorOrigin): BatchResponsePart {
+  private errorPart(status: number, message: string, origin: BatchRequestPart): BatchResponsePart {
     return this.buildErrorResponse(new HttpException(message, status), origin)
-  }
-
-  /** 404 part for an entity that does not exist or is outside its row-level scope. */
-  private notFound(entitySetName: string, keyStr: string, origin: ErrorOrigin): BatchResponsePart {
-    return this.buildErrorResponse(
-      new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`),
-      origin,
-    )
-  }
-
-  /**
-   * Resolve a TypeORM entity class from an EDM entity type name.
-   * Matches by checking DataSource metadata for each registered entity class.
-   */
-  private resolveEntityClass(entityTypeName: string): EntityClass | undefined {
-    for (const cls of this.entityClasses) {
-      try {
-        const meta = this.dataSource.getMetadata(cls)
-        if (meta.name === entityTypeName) {
-          return cls
-        }
-      } catch {
-        // Entity not found in this DataSource — skip
-      }
-    }
-    return undefined
   }
 }

@@ -166,6 +166,7 @@ The TypeORM adapter module. Derives OData EDM from TypeORM entity metadata.
 ```typescript
 ODataTypeOrmModule.forRoot(options?: {
   changesetRunner?: ODataChangesetRunner
+  batch?: ODataBatchOptions // { enabled?, entitySets?, operationTimeout? }
 }): DynamicModule
 ```
 
@@ -176,6 +177,10 @@ Optional, imported once in the root module (global). Application-wide adapter se
   [$batch changesets and atomicity](../guide/write-handlers#batch-changesets-and-atomicity).
   For a runner with injected dependencies, provide the `ODATA_CHANGESET_RUNNER` token from a
   `@Global()` module instead.
+- `batch` controls the `$batch` endpoint: `enabled: false` answers 404, `entitySets` allow-lists
+  the entity sets operations may reach (resource path, navigation and `$expand` targets; others
+  answer 403), `operationTimeout` limits each operation (ms, default 30 000; then 504). Provided under the
+  `ODATA_BATCH_OPTIONS` token. See [$batch](../guide/batch#turning-batch-off-or-restricting-it).
 
 ### ODataTypeOrmModule.forFeature()
 
@@ -236,7 +241,7 @@ type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
 3. Registers `TypeOrmQueryTranslator` for `$filter`, `$select`, `$orderby`, `$expand`, `$search`, `$apply` translation
 4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling. Multi-entity safe: each request resolves the right Repository from its entity-set name (no need to split into per-feature modules)
 5. Registers `TypeOrmETagProvider` and `TypeOrmSearchProvider` for ETag concurrency and `$search` support
-6. Registers `BatchController` at `POST {serviceRoot}/$batch`
+6. Imports `ODataBatchModule`, which registers `BatchController` at `POST {serviceRoot}/$batch` once per application: one endpoint serves the entity sets of every `forFeature()` module
 7. (When `options.controllers` is set) Patches each controller's `PATH_METADATA` with `serviceRoot` and registers it in the dynamic module's `controllers` array
 
 **Examples:**
@@ -275,6 +280,41 @@ import { getODataRequestContext, runWithODataRequestContext } from '@nestjs-odat
 getODataRequestContext() // { executionContext?, request? } | undefined outside a request
 runWithODataRequestContext({ request }, () => handler.handleGet(query, url)) // outside HTTP
 ```
+
+### $batch operations
+
+Each `$batch` operation runs through its own route, so the request context is the operation's.
+While it runs, `getODataBatchPart()` describes it:
+
+```typescript
+import { getODataBatchPart, type ODataBatchPartContext } from '@nestjs-odata/core'
+
+interface ODataBatchPartContext {
+  method: string // as sent in the batch
+  url: string // as sent, after $<Content-ID> references are resolved
+  contentId?: string
+  inChangeset: boolean
+  batchRequest: unknown // the platform request of the enclosing $batch request
+  changeset?: unknown // the changeset's unit of work (TypeORM: its EntityManager)
+}
+
+getODataBatchPart(request?) // ODataBatchPartContext | undefined (not in a $batch)
+```
+
+The operation is attached to its request (`request[ODATA_BATCH_PART]`, Express adapter) and kept
+in an `AsyncLocalStorage` (the only carrier on Fastify). `getODataBatchPart(request?)` reads
+`request` (else the request of the OData request context) first, then the async context: pass the
+request from guards and middleware.
+
+Lower-level helpers used by the adapter's `BatchController`, exported for other adapters:
+`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress?, timeoutMs? }, part?)`
+(runs one operation through the Express application or Fastify's `inject()`, in process, as the
+batch operation `part`; rejects with `BatchOperationTimeoutError` after `timeoutMs`; the
+response's headers keep multi-valued headers as arrays, its body is a `Buffer`),
+`inheritedBatchHeaders(batchHeaders)` and `batchOperationHeaders(inherited, partHeaders, hasBody)`
+(the headers an operation gets), `parseBatchUrl(batchUrl)`,
+`resolveBatchOperationUrl(operationUrl, batchUrl)` (a `URL`), `batchErrorContext(part)`,
+`headerValue(value)` and `runWithODataBatchPart(part, fn)`.
 
 ## Injection tokens
 

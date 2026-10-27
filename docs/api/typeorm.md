@@ -233,8 +233,9 @@ which set `<navigation>@odata.count` on the parent entities.
 
 ## TypeOrmScopeService
 
-Resolves and renders [row-level scopes](../guide/row-level-scopes). `TypeOrmAutoHandler` and the
-`$batch` controller use it; inject it in custom controllers.
+Resolves and renders [row-level scopes](../guide/row-level-scopes). `TypeOrmAutoHandler` uses it
+(also for `$batch` operations); inject it in custom controllers. Without a `manager`, it queries
+through the current `$batch` changeset's manager, else the `DataSource`'s.
 
 ```typescript
 class TypeOrmScopeService {
@@ -370,6 +371,38 @@ Derive EDM entity configurations from the given entity classes and their TypeORM
 Injectable service that implements `OnModuleInit`. Runs after the TypeORM `DataSource` is ready and derives EDM metadata from registered entity classes, registering them in the `EdmRegistry`.
 
 This class is provided automatically by `ODataTypeOrmModule.forFeature()` and does not need to be used directly.
+
+---
+
+## $batch
+
+See [$batch](../guide/batch).
+
+```typescript
+// The entity manager of the $batch changeset being executed (undefined outside one).
+// TypeOrmAutoHandler, scopes and write handlers (ctx.manager) use it automatically; use it in
+// your own route code that writes, so the writes commit or roll back with the changeset.
+// It is the `changeset` of getODataBatchPart(request) (see @nestjs-odata/core).
+function getODataChangesetManager(request?: unknown): EntityManager | undefined
+
+interface ODataBatchOptions {
+  enabled?: boolean // default true; false answers 404
+  entitySets?: readonly string[] // allow-list (path, navigation, $expand); others answer 403
+  operationTimeout?: number // ms per operation, default DEFAULT_BATCH_OPERATION_TIMEOUT (30 000)
+}
+const DEFAULT_BATCH_OPERATION_TIMEOUT: number
+const ODATA_BATCH_OPTIONS: symbol // DI token set by ODataTypeOrmModule.forRoot({ batch })
+
+// Declares BatchController once; imported by every forFeature().
+class ODataBatchModule {}
+class BatchController {} // POST {serviceRoot}/$batch
+
+// The body is a Buffer: binary operation bodies are kept byte for byte.
+function buildBatchResponse(parts: readonly BatchResponseItem[]): {
+  contentType: string
+  body: Buffer
+}
+```
 
 ---
 
