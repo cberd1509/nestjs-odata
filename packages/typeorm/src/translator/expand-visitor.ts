@@ -292,13 +292,17 @@ export class TypeOrmExpandVisitor {
     const id = ++aliasSequence
     const r = `odata_rank${id}`
     const key = target.primaryColumns[0]
-    const order = (item.orderBy ?? [])
-      .map((o) => {
-        const property = o.expression.kind === 'PropertyAccess' ? o.expression.path[0] : undefined
-        const column = property ? target.findColumnWithPropertyPath(property) : undefined
-        return column ? `${r}.${escape(column.databaseName)} ${o.direction.toUpperCase()}` : ''
-      })
-      .filter(Boolean)
+    const order: string[] = []
+    for (const o of item.orderBy ?? []) {
+      const property =
+        o.expression.kind === 'PropertyAccess' && o.expression.path.length === 1
+          ? o.expression.path[0]
+          : undefined
+      const column = property ? target.findColumnWithPropertyPath(property) : undefined
+      // An ordering the ranking can't reproduce would page the wrong rows: page in memory instead.
+      if (!column) return undefined
+      order.push(`${r}.${escape(column.databaseName)} ${o.direction.toUpperCase()}`)
+    }
     order.push(`${r}.${escape(key.databaseName)} ASC`)
     const partition = fkColumns.map((c) => `${r}.${escape(c.databaseName)}`).join(', ')
 
