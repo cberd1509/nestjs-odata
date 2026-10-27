@@ -2,6 +2,11 @@
 
 ## Development Setup
 
+Prerequisites: Node.js 22.22.1 or later (CI uses the version in `.node-version`, currently 24) and
+pnpm 10 (the exact version is pinned in the root `package.json` `packageManager` field; run
+`corepack enable` to use it). The contributor tooling (lint-staged, commitlint, Vitest) needs
+Node.js 22 or later; the published packages themselves do not declare an engines constraint.
+
 ```bash
 git clone https://github.com/cberd1509/nestjs-odata.git
 cd nestjs-odata
@@ -35,9 +40,17 @@ pnpm --filter @nestjs-odata/test-app test
 # Watch mode
 pnpm --filter @nestjs-odata/test-app test:watch
 
-# With coverage (80% threshold enforced)
+# With coverage (thresholds enforced)
 pnpm test -- --coverage
 ```
+
+Coverage thresholds are 80% for statements, functions and lines in both packages. Branch coverage
+is 80% for `@nestjs-odata/core` and 70% for `@nestjs-odata/typeorm`: Vitest 4's V8 provider counts
+branches more strictly than Vitest 3 did, so the adapter's existing suite measures lower.
+
+Tests run on Vitest 4 with `unplugin-swc`, which compiles test files with SWC so that
+`emitDecoratorMetadata` works (esbuild, Vitest's default transformer, does not emit decorator
+metadata). Keep `plugins: [swc.vite()]` in every `vitest.config.ts`.
 
 ## Local Development
 
