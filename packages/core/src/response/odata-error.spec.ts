@@ -258,6 +258,7 @@ describe('default mapping of unsupported query features', () => {
       body: {
         error: { code: 'NotImplemented', message: "'$root' is not supported", details: [] },
       },
+      language: 'en',
     })
   })
 })
