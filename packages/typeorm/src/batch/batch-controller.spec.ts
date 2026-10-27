@@ -22,6 +22,7 @@ import {
 import { BatchController, type BatchRequest } from './batch-controller.js'
 import { getODataChangesetManager } from './changeset-context.js'
 import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
+import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
 
 interface Seen {
   method?: string
@@ -579,5 +580,139 @@ describe('BatchController', () => {
     const controller = await makeController()
     const part = { kind: 'request' as const, method: 'GET', url: '/odata/Orders', headers: {} }
     expect(resolveRef(controller)(part, new Map([['1', '/odata/Orders(42)']]))).toBe(part)
+  })
+
+  // ── Allow-list, body sources and changeset runner edge cases ──────────────
+
+  it('entitySets: $-segments and properties pass; unknown segments and unregistered sets are refused', async () => {
+    routes['GET /odata/Products/$count'] = () => ({ status: 200, raw: '3' })
+    routes['GET /odata/Products(1)/Supplier/id'] = () => ({ status: 200, body: { value: 3 } })
+    const edm = productsEdm()
+    const controller = await makeController(
+      { entitySets: ['Products', 'Suppliers', 'Ghosts'] },
+      edm,
+    )
+    const { text } = await run(controller, [
+      op('GET', 'Products/$count'),
+      op('GET', 'Products(1)/Supplier/id'),
+      // Neither a navigation nor a structural property of Product.
+      op('GET', 'Products(1)/bogus'),
+      // Allow-listed, but not an entity set of the EDM.
+      op('GET', 'Ghosts'),
+      // The service root itself is no entity set.
+      op('GET', '/odata/'),
+    ])
+    expect(statuses(text)).toEqual(['200', '200', '403', '403', '403'])
+    expect(seen.map((s) => s.url)).toEqual([
+      '/odata/Products/$count',
+      '/odata/Products(1)/Supplier/id',
+    ])
+  })
+
+  it('entitySets: nested $expand targets are checked; an unparsable $expand is left to the route', async () => {
+    routes['GET /odata/Products?$expand=Supplier($select=id)'] = () => ({ status: 200, body: {} })
+    routes['GET /odata/Products?$expand=(('] = () => ({
+      status: 400,
+      body: { error: { code: '400', message: 'bad' } },
+    })
+    const both = await makeController({ entitySets: ['Products', 'Suppliers'] })
+    const { text } = await run(both, [
+      op('GET', 'Products?$expand=Supplier($select=id)'),
+      op('GET', 'Products?$expand=(('),
+      op('GET', 'Products?$expand=Supplier/Nope'),
+    ])
+    expect(statuses(text)).toEqual(['200', '400', '403'])
+  })
+
+  it('answers 400 for an operation URL that cannot be parsed', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [op('GET', 'http://[bad')])
+    expect(statuses(text)).toEqual(['400'])
+    expect(text).toContain('Cannot parse the operation URL')
+    expect(seen).toHaveLength(0)
+  })
+
+  it('reads the body from req.rawBody (string or Buffer), and falls back to req.url', async () => {
+    const controller = await makeController()
+    const body = ['--b', op('GET', '/odata/Products(1)'), '--b--'].join('\r\n')
+    for (const rawBody of [body, Buffer.from(body)]) {
+      const res = mockResponse()
+      await controller.handleBatch(
+        {
+          rawBody,
+          url: '/odata/$batch',
+          headers: { 'content-type': 'multipart/mixed; boundary=b' },
+        } as unknown as BatchRequest,
+        res,
+      )
+      expect(res.status).toHaveBeenCalledWith(200)
+      expect(String(res.send.mock.calls[0]?.[0])).toContain('HTTP/1.1 200 OK')
+    }
+    expect(seen.map((s) => s.url)).toEqual(['/odata/Products(1)', '/odata/Products(1)'])
+  })
+
+  it('answers 400 without a Content-Type, and when the body stream fails or is too large', async () => {
+    const controller = await makeController()
+    await expect(
+      controller.handleBatch({ body: 'x', headers: {} } as unknown as BatchRequest, mockResponse()),
+    ).rejects.toThrow('Missing or invalid boundary')
+
+    const failing = new EventEmitter() as unknown as BatchRequest
+    failing.headers = { 'content-type': 'multipart/mixed; boundary=b' }
+    setImmediate(() =>
+      (failing as unknown as EventEmitter).emit('error', new Error('socket hang up')),
+    )
+    await expect(controller.handleBatch(failing, mockResponse())).rejects.toThrow('socket hang up')
+
+    const huge = new EventEmitter() as unknown as BatchRequest & { destroy: () => void }
+    huge.headers = { 'content-type': 'multipart/mixed; boundary=b' }
+    huge.destroy = vi.fn()
+    setImmediate(() => {
+      ;(huge as unknown as EventEmitter).emit('data', Buffer.alloc(6 * 1024 * 1024))
+      ;(huge as unknown as EventEmitter).emit('data', Buffer.alloc(6 * 1024 * 1024))
+    })
+    await expect(controller.handleBatch(huge, mockResponse())).rejects.toThrow(
+      'Batch request body exceeds maximum size',
+    )
+    expect(huge.destroy).toHaveBeenCalled()
+  })
+
+  it('runs changesets through the configured changesetRunner, with the request context', async () => {
+    const appManager = { name: 'app-unit-of-work' }
+    const runner = vi.fn((work: (m: unknown) => Promise<unknown>) => work(appManager))
+    const module = await Test.createTestingModule({
+      controllers: [BatchController],
+      providers: [
+        { provide: EdmRegistry, useValue: productsEdm() },
+        { provide: HttpAdapterHost, useValue: { httpAdapter: { getInstance: () => app } } },
+        { provide: DataSource, useValue: mockDataSource },
+        { provide: ODATA_MODULE_OPTIONS, useValue: mockOptions },
+        { provide: ODATA_CHANGESET_RUNNER, useValue: runner },
+      ],
+    }).compile()
+    const controller = module.get(BatchController)
+    const request = { user: 'ann' }
+    const { text } = await runWithODataRequestContext({ request }, () =>
+      run(controller, [changeset([op('POST', '/odata/Products', { cid: '1', body: {} })])]),
+    )
+    expect(statuses(text)).toEqual(['201'])
+    expect(runner).toHaveBeenCalledOnce()
+    expect(runner.mock.calls[0]?.[1]).toEqual({ executionContext: undefined, request })
+    expect(seen[0]?.manager).toBe(appManager)
+    expect(mockDataSource.createQueryRunner).not.toHaveBeenCalled()
+  })
+
+  it('ContentID: resolves references nested in objects, leaving non-JSON bodies and scalars alone', async () => {
+    const controller = await makeController()
+    const map = new Map([['1', '/odata/Orders(42)']])
+    const resolve = resolveRef(controller)
+    const body = JSON.stringify({ a: { b: ['$1', null, 3, { c: '$1' }] }, n: null })
+    expect(
+      JSON.parse(resolve({ method: 'POST', url: 'X', headers: {}, body }, map)['body'] as string),
+    ).toEqual({ a: { b: ['/odata/Orders(42)', null, 3, { c: '/odata/Orders(42)' }] }, n: null })
+    const notJson = { method: 'POST', url: 'X', headers: {}, body: '"$1 not json' }
+    expect(resolve(notJson, map)).toBe(notJson)
+    const unchanged = { method: 'POST', url: 'X', headers: {}, body: '{"x":"$2"}' }
+    expect(resolve(unchanged, map)).toBe(unchanged)
   })
 })

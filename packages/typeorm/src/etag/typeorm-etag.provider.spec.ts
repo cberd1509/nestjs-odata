@@ -195,4 +195,70 @@ describe('TypeOrmETagProvider', () => {
       expect(provider.validateIfMatch('W/"stale-value"', entity, 'updatedAt')).toBe(false)
     })
   })
+
+  describe('getETagColumn() resolution edge cases', () => {
+    it('returns undefined for an unknown entity set', () => {
+      const edmRegistry = {
+        getEntitySet: vi.fn().mockReturnValue(undefined),
+      } as unknown as EdmRegistry
+      const provider = new TypeOrmETagProvider(
+        { entityMetadatas: [] } as unknown as DataSource,
+        edmRegistry,
+      )
+      expect(provider.getETagColumn('Nope')).toBeUndefined()
+    })
+
+    it('returns undefined when the entity type has no TypeORM metadata', () => {
+      const provider = new TypeOrmETagProvider(
+        { entityMetadatas: [] } as unknown as DataSource,
+        makeEdmRegistry('Ghost'),
+      )
+      expect(provider.getETagColumn('Ghosts')).toBeUndefined()
+    })
+
+    it('returns undefined for an EntitySchema-based entity (target is not a class)', () => {
+      const meta = {
+        ...makeEntityMetadata('Schema', [makeColumn('updatedAt', { isUpdateDate: true })]),
+        target: 'Schema',
+      }
+      const provider = new TypeOrmETagProvider(
+        { entityMetadatas: [meta] } as unknown as DataSource,
+        makeEdmRegistry('Schema'),
+      )
+      expect(provider.getETagColumn('Schemas')).toBeUndefined()
+    })
+
+    it('caches the result per entity set, including "no ETag column"', () => {
+      class Plain {
+        id = 0
+      }
+      class Stamped {
+        id = 0
+        updatedAt = new Date()
+      }
+      const plainMeta = { ...makeEntityMetadata('Plain', [makeColumn('id')]), target: Plain }
+      const stampedMeta = {
+        ...makeEntityMetadata('Stamped', [makeColumn('updatedAt', { isUpdateDate: true })]),
+        target: Stamped,
+      }
+      const edmRegistry = {
+        getEntitySet: vi.fn((name: string) => ({
+          name,
+          entityTypeName: name.slice(0, -1),
+          namespace: 'Default',
+        })),
+      } as unknown as EdmRegistry
+      const provider = new TypeOrmETagProvider(
+        { entityMetadatas: [plainMeta, stampedMeta] } as unknown as DataSource,
+        edmRegistry,
+      )
+
+      expect(provider.getETagColumn('Plains')).toBeUndefined()
+      expect(provider.getETagColumn('Plains')).toBeUndefined()
+      expect(provider.getETagColumn('Stampeds')).toBe('updatedAt')
+      expect(provider.getETagColumn('Stampeds')).toBe('updatedAt')
+      // One metadata lookup per entity set; repeated calls hit the cache.
+      expect(edmRegistry.getEntitySet).toHaveBeenCalledTimes(2)
+    })
+  })
 })

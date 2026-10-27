@@ -468,6 +468,150 @@ describe('TypeOrmScopeService', () => {
     expect(await handler.handleCount(lambda('a'))).toBe(1)
     expect(await handler.handleCount(lambda('b'))).toBe(0)
   })
+
+  describe('navigation targets that are not entity sets', () => {
+    /** EDM where Folder also has `ghosts` (an unregistered type) and Phantoms has no TypeORM entity. */
+    function edmWithGhosts(): EdmRegistry {
+      const ghostly = new EdmRegistry()
+      const folder = edm.getEntityType('Folder')!
+      ghostly.register(
+        {
+          ...folder,
+          navigationProperties: [
+            ...folder.navigationProperties,
+            {
+              name: 'ghosts',
+              type: 'Collection(Default.Ghost)',
+              nullable: true,
+              isCollection: true,
+            },
+            { name: 'ghost', type: 'Default.Ghost', nullable: true, isCollection: false },
+          ],
+        },
+        { ...edm.getEntitySet('Folders')!, name: 'Folders' },
+      )
+      ghostly.register(edm.getEntityType('Doc')!, { ...edm.getEntitySet('Docs')!, name: 'Docs' })
+      ghostly.register(
+        { ...folder, name: 'Phantom', navigationProperties: [] },
+        { name: 'Phantoms', entityTypeName: 'Phantom', namespace: 'Default', isReadOnly: false },
+      )
+      return ghostly
+    }
+
+    function serviceOn(
+      registry: EdmRegistry,
+      scopes: Record<string, ODataScopeFn>,
+      requireScope: boolean,
+    ) {
+      const reg = new ODataScopeRegistry()
+      for (const [set, fn] of Object.entries(scopes)) reg.register(set, fn, fn)
+      return new TypeOrmScopeService(dataSource, registry, { ...baseOptions, requireScope }, reg)
+    }
+
+    const ghostsAny = {
+      kind: 'LambdaExpr',
+      operator: 'any',
+      collection: 'ghosts',
+      variable: null,
+      predicate: null,
+    } as const
+    const ghostPath = {
+      kind: 'BinaryExpr',
+      operator: 'eq',
+      left: { kind: 'PropertyAccess', path: ['ghost', 'id'] },
+      right: { kind: 'Literal', value: 1 },
+    } as const
+
+    it('requireScope: fails closed for $expand, lambdas and navigation paths into them', async () => {
+      const service = serviceOn(edmWithGhosts(), { Folders: ownerScope, Docs: ownerScope }, true)
+      const message = /Navigation 'ghosts' targets 'Ghost', which is not an OData entity set/
+      await expect(
+        service.prepare(
+          { entitySetName: 'Folders', expand: { items: [{ navigationProperty: 'ghosts' }] } },
+          'collection',
+        ),
+      ).rejects.toThrow(message)
+      await expect(
+        service.prepare({ entitySetName: 'Folders', filter: ghostsAny }, 'collection'),
+      ).rejects.toThrow(message)
+      await expect(
+        service.prepare({ entitySetName: 'Folders', filter: ghostPath as never }, 'collection'),
+      ).rejects.toThrow(/Navigation 'ghost' targets 'Ghost'/)
+    })
+
+    it('without requireScope: such targets are skipped (nothing to scope)', async () => {
+      const service = serviceOn(edmWithGhosts(), { Folders: ownerScope }, false)
+      const plan = await asOwner('a', () =>
+        service.prepare(
+          {
+            entitySetName: 'Folders',
+            filter: {
+              kind: 'BinaryExpr',
+              operator: 'and',
+              left: ghostsAny,
+              right: ghostPath,
+            } as never,
+            expand: { items: [{ navigationProperty: 'ghosts' }] },
+          },
+          'collection',
+        ),
+      )
+      expect(plan.root).toBeDefined()
+      expect(plan.expand.size).toBe(0)
+      expect(plan.lambda.size).toBe(0)
+    })
+
+    it('ignores unknown lambda collections and collection-valued path segments (the pipe rejects them)', async () => {
+      const { service } = makeService({ Folders: ownerScope, Docs: ownerScope })
+      const plan = await asOwner('a', () =>
+        service.prepare(
+          {
+            entitySetName: 'Folders',
+            filter: {
+              kind: 'BinaryExpr',
+              operator: 'or',
+              left: { ...ghostsAny, collection: 'nope' },
+              right: {
+                kind: 'BinaryExpr',
+                operator: 'eq',
+                left: { kind: 'PropertyAccess', path: ['docs', 'title'] },
+                right: { kind: 'Literal', value: 'x' },
+              },
+            } as never,
+          },
+          'collection',
+        ),
+      )
+      expect(plan.lambda.size).toBe(0)
+    })
+
+    it('fails clearly for an unregistered entity set or one without a TypeORM entity', async () => {
+      const service = serviceOn(edmWithGhosts(), { Phantoms: ownerScope }, false)
+      await expect(service.prepare({ entitySetName: 'Nope' }, 'collection')).rejects.toThrow(
+        "TypeOrmScopeService: entity set 'Nope' is not registered",
+      )
+      await expect(service.findOne('Phantoms', { id: 1 }, 'entity')).rejects.toThrow(
+        "TypeOrmScopeService: no TypeORM entity named 'Phantom'",
+      )
+    })
+
+    it('$apply steps other than filter contribute no scope targets', async () => {
+      const { service } = makeService({ Docs: ownerScope, Folders: ownerScope })
+      const plan = await asOwner('a', () =>
+        service.prepare(
+          {
+            entitySetName: 'Docs',
+            apply: { steps: [{ kind: 'ApplyGroupBy', properties: ['title'] }] } as never,
+            // $expand is ignored with $apply: the response has no entities to expand.
+            expand: { items: [{ navigationProperty: 'folder' }] },
+          },
+          'collection',
+        ),
+      )
+      expect(plan.root).toBeDefined()
+      expect(plan.expand.size).toBe(0)
+    })
+  })
 })
 
 describe('lookupScope', () => {
