@@ -23,6 +23,23 @@ Required peer dependencies (if not already installed):
 pnpm add @nestjs/common @nestjs/core typeorm @nestjs/typeorm
 ```
 
+### Supported versions
+
+| Peer               | Supported ranges                    |
+| ------------------ | ----------------------------------- |
+| `@nestjs/common`   | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `@nestjs/core`     | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `@nestjs/typeorm`  | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `typeorm`          | `^0.3.0 \|\| ^1.0.0`                |
+| `reflect-metadata` | `^0.1.13 \|\| ^0.2.0`               |
+
+Both packages ship ESM (`import`) and CommonJS (`require`) builds. NestJS 12 is ESM-only, so an
+ESM application (`"type": "module"` with `"module": "NodeNext"`) imports the ESM build directly;
+a CommonJS application on NestJS 12 needs a Node.js version with `require(esm)` support
+(20.19+, 22.12+ or 24+). The repository's `pnpm smoke:nest12` script installs the packed
+packages into an ESM NestJS 12 + TypeORM 1 app and runs it end to end; CI runs it on every
+pull request.
+
 ## TypeScript configuration
 
 Enable decorator metadata in your `tsconfig.json`:

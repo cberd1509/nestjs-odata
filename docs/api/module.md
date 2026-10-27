@@ -111,7 +111,7 @@ Build the exclude pattern array for `app.setGlobalPrefix()` so OData routes
 double-prefixed by NestJS.
 
 Returns Express 5 splat-style patterns covering both the bare service root
-and its children — compatible with NestJS 11.
+and its children — compatible with NestJS 11 and 12.
 
 **Parameters:**
 

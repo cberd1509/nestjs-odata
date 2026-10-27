@@ -26,6 +26,8 @@ OData v4 for NestJS with zero double-declaration. Define your entities once in T
 pnpm add @nestjs-odata/core @nestjs-odata/typeorm reflect-metadata
 ```
 
+Works with NestJS 10, 11 and 12 (including ESM-only NestJS 12 apps) and TypeORM 0.3 or 1.x.
+
 ```typescript
 // product.entity.ts
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm'
