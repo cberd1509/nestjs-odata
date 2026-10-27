@@ -9,6 +9,8 @@ import {
 } from '@nestjs-odata/core'
 import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
+import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
+import type { ODataScopeOperation, TypeOrmScopePlan } from '../scope/scope.types.js'
 
 /**
  * TypeOrmAutoHandler — handles OData GET and $count requests automatically
@@ -34,7 +36,34 @@ export class TypeOrmAutoHandler {
     private readonly repo: Repository<ObjectLiteral>,
     @Optional() @Inject(ETAG_PROVIDER) private readonly etagProvider?: IETagProvider,
     private readonly dataSource?: DataSource,
+    private readonly scopes?: TypeOrmScopeService,
   ) {}
+
+  /** Resolve the row-level scopes of a query (none when no scope service is wired). */
+  private async scopePlan(
+    query: ODataQuery,
+    operation: ODataScopeOperation,
+  ): Promise<TypeOrmScopePlan | undefined> {
+    return this.scopes ? this.scopes.prepare(query, operation) : undefined
+  }
+
+  /**
+   * Load the entity an update, replace or delete targets through its row-level scope.
+   * Returns `null` when the entity set is unscoped (the caller keeps its own lookup) and
+   * throws 404 when the entity does not exist or is outside the scope.
+   */
+  private async findInScopeForWrite(
+    entitySetName: string,
+    keyStr: string,
+    where: Record<string, unknown>,
+  ): Promise<ObjectLiteral | null> {
+    if (!this.scopes?.isScoped(entitySetName)) return null
+    const entity = await this.scopes.findOne(entitySetName, where, 'write')
+    if (!entity) {
+      throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
+    }
+    return entity
+  }
 
   /**
    * Resolve EdmEntityType from the registry at request time.
@@ -102,7 +131,8 @@ export class TypeOrmAutoHandler {
       top: effectiveTop + 1,
     }
 
-    const translateResult = this.translator.translate(fetchQuery, entityType, repo)
+    const scopes = await this.scopePlan(query, 'collection')
+    const translateResult = this.translator.translate(fetchQuery, entityType, repo, scopes)
 
     const includeCount = query.count === true
     const rawResult = await this.translator.execute(translateResult, includeCount)
@@ -151,7 +181,8 @@ export class TypeOrmAutoHandler {
       filter: query.filter,
     }
 
-    const { qb } = this.translator.translate(countQuery, entityType, repo)
+    const scopes = await this.scopePlan(countQuery, 'count')
+    const { qb } = this.translator.translate(countQuery, entityType, repo, scopes)
     return qb.getCount()
   }
 
@@ -240,7 +271,9 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const entity = await repo.findOne({ where })
+    const entity = this.scopes?.isScoped(entitySetName)
+      ? await this.scopes.findOne(entitySetName, where, 'entity')
+      : await repo.findOne({ where })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
@@ -494,12 +527,13 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where)
 
     // ETag If-Match validation before update
     if (this.etagProvider && ifMatchHeader) {
       const etagColumn = this.etagProvider.getETagColumn(entitySetName)
       if (etagColumn) {
-        const current = await repo.findOne({ where })
+        const current = scoped ?? (await repo.findOne({ where }))
         if (!current) {
           throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
         }
@@ -575,8 +609,10 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    // Find existing entity to confirm it exists
-    const existing = await repo.findOne({ where })
+    // Find existing entity to confirm it exists (through its row-level scope, if any)
+    const existing =
+      (await this.findInScopeForWrite(entitySetName, keyStr, where)) ??
+      (await repo.findOne({ where }))
     if (!existing) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
@@ -644,12 +680,13 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where)
 
     // ETag If-Match validation before delete
     if (this.etagProvider && ifMatchHeader) {
       const etagColumn = this.etagProvider.getETagColumn(entitySetName)
       if (etagColumn) {
-        const current = await repo.findOne({ where })
+        const current = scoped ?? (await repo.findOne({ where }))
         if (!current) {
           throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
         }

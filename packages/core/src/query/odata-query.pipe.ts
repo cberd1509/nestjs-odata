@@ -124,9 +124,18 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
    * Per D-10: validates property references before any DB query is constructed.
    * Per T-03-01: unknown properties throw ODataValidationError (not a generic error).
    */
-  private validateFilterNode(node: FilterNode, entityType: EdmEntityType): void {
+  private validateFilterNode(
+    node: FilterNode,
+    entityType: EdmEntityType,
+    lambda?: { readonly variable: string; readonly targetType: EdmEntityType },
+  ): void {
     switch (node.kind) {
       case 'PropertyAccess': {
+        // Inside a lambda predicate, `t/title` refers to the collection's entity type.
+        if (lambda && node.path.length > 1 && node.path[0] === lambda.variable) {
+          this.validateFilterNode({ ...node, path: node.path.slice(1) }, lambda.targetType)
+          break
+        }
         const propertyName = node.path[0]
         if (!propertyName) break
         const knownNames = entityType.properties.map((p) => p.name)
@@ -141,26 +150,46 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
         break
       }
       case 'BinaryExpr':
-        this.validateFilterNode(node.left, entityType)
-        this.validateFilterNode(node.right, entityType)
+        this.validateFilterNode(node.left, entityType, lambda)
+        this.validateFilterNode(node.right, entityType, lambda)
         break
       case 'UnaryExpr':
-        this.validateFilterNode(node.operand, entityType)
+        this.validateFilterNode(node.operand, entityType, lambda)
         break
       case 'FunctionCall':
         for (const arg of node.args) {
-          this.validateFilterNode(arg, entityType)
+          this.validateFilterNode(arg, entityType, lambda)
         }
         break
-      case 'LambdaExpr':
-        if (node.predicate) {
+      case 'LambdaExpr': {
+        if (!node.predicate) break
+        const navProp = entityType.navigationProperties.find(
+          (np) => np.name.toLowerCase() === node.collection.toLowerCase(),
+        )
+        const targetType = navProp ? this.navigationTargetType(navProp.type) : undefined
+        if (node.variable && targetType) {
+          this.validateFilterNode(node.predicate, entityType, {
+            variable: node.variable,
+            targetType,
+          })
+        } else {
           this.validateFilterNode(node.predicate, entityType)
         }
         break
+      }
       case 'Literal':
         // Literals have no property references to validate
         break
     }
+  }
+
+  /** Resolve `Default.X` / `Collection(Default.X)` to the registered entity type `X`. */
+  private navigationTargetType(navType: string): EdmEntityType | undefined {
+    const inner =
+      navType.startsWith('Collection(') && navType.endsWith(')')
+        ? navType.slice('Collection('.length, -1)
+        : navType
+    return this.edmRegistry.getEntityType(inner.split('.').pop() ?? inner)
   }
 
   /**

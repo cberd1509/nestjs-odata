@@ -1,4 +1,14 @@
-import { DynamicModule, Inject, Injectable, Module, OnModuleInit } from '@nestjs/common'
+import {
+  DynamicModule,
+  Inject,
+  Injectable,
+  Module,
+  OnApplicationBootstrap,
+  OnModuleInit,
+  type ModuleMetadata,
+  type Provider,
+} from '@nestjs/common'
+import { ModuleRef } from '@nestjs/core'
 import { PATH_METADATA } from '@nestjs/common/constants.js'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { DataSource, type ObjectLiteral } from 'typeorm'
@@ -26,6 +36,9 @@ import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
 import { TypeOrmETagProvider } from './etag/typeorm-etag.provider.js'
 import { TypeOrmSearchProvider } from './translator/search-provider.js'
 import { BatchController } from './batch/batch-controller.js'
+import { ODataScopeRegistry } from './scope/scope-registry.js'
+import { TypeOrmScopeService } from './scope/typeorm-scope.service.js'
+import type { ODataScope, ODataScopeDefinition, ODataScopeFn } from './scope/scope.types.js'
 
 /**
  * DI injection token for the array of TypeORM entity classes
@@ -40,6 +53,42 @@ export const TYPEORM_ODATA_ENTITIES = Symbol('TYPEORM_ODATA_ENTITIES')
  * OData entity-set name. Empty when callers passed plain entity classes.
  */
 export const TYPEORM_ODATA_SET_NAME_OVERRIDES = Symbol('TYPEORM_ODATA_SET_NAME_OVERRIDES')
+
+/**
+ * DI injection token for the row-level scopes passed to ODataTypeOrmModule.forFeature():
+ * `{ byEntity, defaultScope }`, keyed by entity class.
+ */
+export const TYPEORM_ODATA_SCOPES = Symbol('TYPEORM_ODATA_SCOPES')
+
+/** Value provided under {@link TYPEORM_ODATA_SCOPES}. */
+export interface TypeOrmODataScopes {
+  readonly byEntity: ReadonlyMap<unknown, ODataScopeDefinition>
+  readonly defaultScope?: ODataScopeDefinition
+}
+
+/** Options of ODataTypeOrmModule.forFeature(). */
+export interface ODataTypeOrmFeatureOptions {
+  serviceRoot?: string
+  /**
+   * OData controllers decorated with @ODataController() that belong to this
+   * feature. When provided, forFeature() will:
+   *   1. Patch each controller's PATH_METADATA to prepend the serviceRoot
+   *      (same job that ODataModule.forRoot({controllers}) does).
+   *   2. Register them in this dynamic module's `controllers` array so DI
+   *      can resolve `TypeOrmAutoHandler` (which lives in this module).
+   */
+  controllers?: (new (...args: any[]) => any)[]
+  /**
+   * Row-level scope for every entity of this feature that has no `scope` of its own.
+   * See {@link ODataTypeOrmFeatureConfig.scope}.
+   */
+  defaultScope?: ODataScopeDefinition
+  /**
+   * Modules whose exported providers class-based scopes inject (for example the module that
+   * provides your access-control service).
+   */
+  imports?: ModuleMetadata['imports']
+}
 
 /**
  * Object-config form accepted by ODataTypeOrmModule.forFeature() that lets
@@ -58,6 +107,13 @@ export interface ODataTypeOrmFeatureConfig {
   readonly entity: EntityClassOrSchema
   /** Custom OData entity-set name. Takes precedence over @ODataEntitySet decorator and pluralization. */
   readonly name?: string
+  /**
+   * Row-level scope of this entity set: a function `(qb, ctx) => void | Promise<void>` or an
+   * injectable class implementing `ODataScope`. It restricts every read and the existence check
+   * of every update, replace and delete, including when the entity set is reached through
+   * `$expand` or a lambda in `$filter`. See the "Row-level scopes" guide.
+   */
+  readonly scope?: ODataScopeDefinition
 }
 
 /** Anything accepted by ODataTypeOrmModule.forFeature() — bare entity class or config object. */
@@ -72,18 +128,27 @@ function isFeatureConfig(item: ODataTypeOrmFeatureItem): item is ODataTypeOrmFea
 function normalizeFeatureItems(items: ODataTypeOrmFeatureItem[]): {
   entities: EntityClassOrSchema[]
   nameOverrides: Map<EntityClassOrSchema, string>
+  scopes: Map<EntityClassOrSchema, ODataScopeDefinition>
 } {
   const entities: EntityClassOrSchema[] = []
   const nameOverrides = new Map<EntityClassOrSchema, string>()
+  const scopes = new Map<EntityClassOrSchema, ODataScopeDefinition>()
   for (const item of items) {
     if (isFeatureConfig(item)) {
       entities.push(item.entity)
       if (item.name) nameOverrides.set(item.entity, item.name)
+      if (item.scope) scopes.set(item.entity, item.scope)
     } else {
       entities.push(item)
     }
   }
-  return { entities, nameOverrides }
+  return { entities, nameOverrides, scopes }
+}
+
+/** True for a class implementing `ODataScope` (as opposed to a scope function). */
+function isScopeClass(def: ODataScopeDefinition): def is new (...args: any[]) => ODataScope {
+  const proto = (def as { prototype?: { apply?: unknown } }).prototype
+  return typeof proto?.apply === 'function'
 }
 
 /**
@@ -97,7 +162,10 @@ function normalizeFeatureItems(items: ODataTypeOrmFeatureItem[]): {
  * registration in the EdmRegistry.
  */
 @Injectable()
-export class TypeOrmEdmInitializer implements OnModuleInit {
+export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstrap {
+  /** Entity sets this feature registered, checked against `requireScope` at bootstrap. */
+  private readonly entitySetNames: string[] = []
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly edmRegistry: EdmRegistry,
@@ -105,7 +173,29 @@ export class TypeOrmEdmInitializer implements OnModuleInit {
     @Inject(TYPEORM_ODATA_ENTITIES) private readonly entityClasses: EntityClass[],
     @Inject(TYPEORM_ODATA_SET_NAME_OVERRIDES)
     private readonly setNameOverrides: ReadonlyMap<unknown, string>,
+    @Inject(TYPEORM_ODATA_SCOPES) private readonly scopes?: TypeOrmODataScopes,
+    @Inject(ODataScopeRegistry) private readonly scopeRegistry?: ODataScopeRegistry,
+    @Inject(ModuleRef) private readonly moduleRef?: ModuleRef,
   ) {}
+
+  /** Fail at startup when `requireScope` is on and an entity set of this feature has no scope. */
+  onApplicationBootstrap(): void {
+    if (!this.options.requireScope || !this.scopeRegistry) return
+    const missing = this.entitySetNames.filter((name) => !this.scopeRegistry!.has(name))
+    if (missing.length > 0) {
+      throw new Error(
+        `ODataTypeOrmModule: requireScope is enabled but these entity sets have no row-level ` +
+          `scope: ${missing.join(', ')}. Pass a \`scope\` per entity or a \`defaultScope\` to forFeature().`,
+      )
+    }
+  }
+
+  /** Turn a scope definition into a function (resolving class scopes from this module). */
+  private toScopeFn(def: ODataScopeDefinition): ODataScopeFn {
+    if (!isScopeClass(def)) return def
+    const instance = this.moduleRef!.get(def, { strict: true })
+    return (qb, ctx) => instance.apply(qb, ctx)
+  }
 
   onModuleInit(): void {
     const deriver = new TypeOrmEdmDeriver(
@@ -146,6 +236,20 @@ export class TypeOrmEdmInitializer implements OnModuleInit {
         isReadOnly: config.isReadOnly,
       }
       this.edmRegistry.register(entityType, entitySet)
+
+      // The registry keeps the first registration of a type, so look the set name up again.
+      const registeredSet =
+        [...this.edmRegistry.getEntitySets().values()].find(
+          (es) => es.entityTypeName === config.entityTypeName,
+        )?.name ?? entitySetName
+      this.entitySetNames.push(registeredSet)
+
+      const entityClass =
+        this.entityClasses[metadatas.findIndex((m) => m.name === config.entityTypeName)]
+      const scopeDef = this.scopes?.byEntity.get(entityClass) ?? this.scopes?.defaultScope
+      if (scopeDef && this.scopeRegistry) {
+        this.scopeRegistry.register(registeredSet, this.toScopeFn(scopeDef), scopeDef)
+      }
     }
   }
 }
@@ -174,27 +278,19 @@ export class ODataTypeOrmModule {
    */
   static forFeature(
     items: ODataTypeOrmFeatureItem[],
-    options?: {
-      serviceRoot?: string
-      /**
-       * OData controllers decorated with @ODataController() that belong to this
-       * feature. When provided, forFeature() will:
-       *   1. Patch each controller's PATH_METADATA to prepend the serviceRoot
-       *      (same job that ODataModule.forRoot({controllers}) does).
-       *   2. Register them in this dynamic module's `controllers` array so DI
-       *      can resolve `TypeOrmAutoHandler` (which lives in this module).
-       *
-       * This eliminates the previous "declare in two places" papercut: callers
-       * no longer need to list controllers in BOTH `ODataModule.forRoot({controllers})`
-       * and `@Module({controllers})` to get routes working.
-       */
-      controllers?: (new (...args: any[]) => any)[]
-    },
+    options?: ODataTypeOrmFeatureOptions,
   ): DynamicModule {
     // Normalize: accept either plain entity classes or { entity, name } config
     // objects in the same array. The name override is applied at EDM-registration
     // time in TypeOrmEdmInitializer.
-    const { entities, nameOverrides } = normalizeFeatureItems(items)
+    const { entities, nameOverrides, scopes } = normalizeFeatureItems(items)
+    const scopeClassProviders: Provider[] = [
+      ...new Set(
+        [...scopes.values(), ...(options?.defaultScope ? [options.defaultScope] : [])].filter(
+          isScopeClass,
+        ),
+      ),
+    ]
 
     // Patch BatchController's PATH_METADATA to include the serviceRoot so
     // POST {serviceRoot}/$batch is registered correctly.
@@ -218,7 +314,7 @@ export class ODataTypeOrmModule {
 
     return {
       module: ODataTypeOrmModule,
-      imports: [TypeOrmModule.forFeature(entities)],
+      imports: [TypeOrmModule.forFeature(entities), ...(options?.imports ?? [])],
       controllers: [BatchController, ...featureControllers],
       providers: [
         {
@@ -228,6 +324,30 @@ export class ODataTypeOrmModule {
         {
           provide: TYPEORM_ODATA_SET_NAME_OVERRIDES,
           useValue: nameOverrides,
+        },
+        {
+          provide: TYPEORM_ODATA_SCOPES,
+          useValue: {
+            byEntity: scopes,
+            defaultScope: options?.defaultScope,
+          } satisfies TypeOrmODataScopes,
+        },
+        ...scopeClassProviders,
+        {
+          // One registry per application, shared by every forFeature() import.
+          provide: ODataScopeRegistry,
+          useFactory: (edmRegistry: EdmRegistry) => ODataScopeRegistry.for(edmRegistry),
+          inject: [EdmRegistry],
+        },
+        {
+          provide: TypeOrmScopeService,
+          useFactory: (
+            dataSource: DataSource,
+            edmRegistry: EdmRegistry,
+            resolved: ODataModuleResolvedOptions,
+            registry: ODataScopeRegistry,
+          ) => new TypeOrmScopeService(dataSource, edmRegistry, resolved, registry),
+          inject: [DataSource, EdmRegistry, ODATA_MODULE_OPTIONS, ODataScopeRegistry],
         },
         TypeOrmEdmInitializer,
         {
@@ -285,6 +405,7 @@ export class ODataTypeOrmModule {
             options: ODataModuleResolvedOptions,
             dataSource: DataSource,
             etagProvider: TypeOrmETagProvider,
+            scopeService: TypeOrmScopeService,
           ): TypeOrmAutoHandler => {
             const firstEntity = entities[0]
             if (!firstEntity) {
@@ -298,6 +419,7 @@ export class ODataTypeOrmModule {
               repo,
               etagProvider,
               dataSource,
+              scopeService,
             )
           },
           inject: [
@@ -306,6 +428,7 @@ export class ODataTypeOrmModule {
             ODATA_MODULE_OPTIONS,
             DataSource,
             TypeOrmETagProvider,
+            TypeOrmScopeService,
           ],
         },
       ],
@@ -317,6 +440,8 @@ export class ODataTypeOrmModule {
         ETAG_PROVIDER,
         TypeOrmSearchProvider,
         SEARCH_PROVIDER,
+        TypeOrmScopeService,
+        ODataScopeRegistry,
       ],
     }
   }

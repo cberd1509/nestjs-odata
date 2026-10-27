@@ -213,6 +213,13 @@ async deleteProduct(@Param('key') key: string) {
 }
 ```
 
+### Row-level access
+
+Guards decide whether a request may call a route. To restrict _which rows_ it sees, register a
+[row-level scope](./row-level-scopes) per entity set. Scopes apply to collections, `$count`,
+by-key reads, every `$expand` path, lambdas in `$filter`, `$apply`, `$batch` and the existence
+checks of writes. Set `requireScope: true` so an entity set without a scope fails closed.
+
 ## Recommended production configuration
 
 ```typescript

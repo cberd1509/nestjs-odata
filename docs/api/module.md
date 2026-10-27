@@ -41,6 +41,12 @@ interface ODataModuleOptions {
   maxDeepInsertDepth?: number
 
   /**
+   * Fail closed when an entity set has no row-level scope. Default: false.
+   * See the "Row-level scopes" guide.
+   */
+  requireScope?: boolean
+
+  /**
    * @ODataController classes to register and path-patch with serviceRoot.
    * Controllers listed here have their route prefix set to `{serviceRoot}/{entitySetName}`.
    */
@@ -145,6 +151,8 @@ ODataTypeOrmModule.forFeature(
   options?: {
     serviceRoot?: string
     controllers?: Type[]
+    defaultScope?: ODataScopeDefinition
+    imports?: ModuleMetadata['imports']
   }
 ): DynamicModule
 ```
@@ -164,17 +172,21 @@ Registers TypeORM entities for OData auto-derivation.
 type ODataTypeOrmFeatureConfig = {
   readonly entity: EntityClassOrSchema
   readonly name?: string
+  /** Row-level scope: a function `(qb, ctx) => void | Promise<void>` or an injectable `ODataScope` class */
+  readonly scope?: ODataScopeDefinition
 }
 type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
 ```
 
 **Parameters:**
 
-| Parameter             | Type                        | Description                                                                                                                                                                                  |
-| --------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `items`               | `ODataTypeOrmFeatureItem[]` | Entity classes and/or `{ entity, name }` configs                                                                                                                                             |
-| `options.serviceRoot` | `string?`                   | Optional. Inherits from `ODataModule.registeredServiceRoot` by default.                                                                                                                      |
-| `options.controllers` | `Type[]?`                   | OData controllers (decorated with `@ODataController`). When provided, `forFeature` patches their `PATH_METADATA` with `serviceRoot` AND registers them — no separate `@Module` entry needed. |
+| Parameter              | Type                         | Description                                                                                                                                                                                  |
+| ---------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `items`                | `ODataTypeOrmFeatureItem[]`  | Entity classes and/or `{ entity, name }` configs                                                                                                                                             |
+| `options.serviceRoot`  | `string?`                    | Optional. Inherits from `ODataModule.registeredServiceRoot` by default.                                                                                                                      |
+| `options.controllers`  | `Type[]?`                    | OData controllers (decorated with `@ODataController`). When provided, `forFeature` patches their `PATH_METADATA` with `serviceRoot` AND registers them — no separate `@Module` entry needed. |
+| `options.defaultScope` | `ODataScopeDefinition?`      | [Row-level scope](../guide/row-level-scopes) for every item without its own `scope`.                                                                                                         |
+| `options.imports`      | `ModuleMetadata['imports']?` | Modules whose providers class-based scopes inject.                                                                                                                                           |
 
 **What it does:**
 
@@ -209,6 +221,19 @@ ODataTypeOrmModule.forFeature(
 ```
 
 ---
+
+## Request context
+
+`ODataModule.forRoot()` and `forRootAsync()` register `ODataRequestContextInterceptor` as a global
+interceptor. It keeps the current `ExecutionContext` and request for the whole handler, so adapters
+can hand them to application hooks such as row-level scopes.
+
+```typescript
+import { getODataRequestContext, runWithODataRequestContext } from '@nestjs-odata/core'
+
+getODataRequestContext() // { executionContext?, request? } | undefined outside a request
+runWithODataRequestContext({ request }, () => handler.handleGet(query, url)) // outside HTTP
+```
 
 ## Injection tokens
 

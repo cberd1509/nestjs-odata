@@ -155,3 +155,10 @@ When exceeded, the response is:
   }
 }
 ```
+
+## Nested query options and row-level scopes
+
+`$filter`, `$select` and `$orderby` inside `$expand(...)` apply to the related rows only: a nested
+`$filter` that matches nothing yields an empty collection (or `null`), never a missing parent.
+When the target entity set has a [row-level scope](./row-level-scopes), it restricts the expanded
+rows in the same way, at every depth.

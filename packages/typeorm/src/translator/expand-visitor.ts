@@ -1,10 +1,28 @@
-import type { SelectQueryBuilder, ObjectLiteral } from 'typeorm'
+import type { SelectQueryBuilder, ObjectLiteral, EntityManager } from 'typeorm'
 import type { ExpandNode, ExpandItem, EdmEntityType } from '@nestjs-odata/core'
 import { ODataValidationError } from '@nestjs-odata/core'
 import type { EdmRegistry } from '@nestjs-odata/core'
 import { TypeOrmFilterVisitor } from './filter-visitor.js'
-import { TypeOrmSelectVisitor } from './select-visitor.js'
 import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
+import type { TypeOrmScopePlan } from '../scope/scope.types.js'
+import {
+  navigationTargetTypeName,
+  renameParameters,
+  scopeInCondition,
+} from '../scope/typeorm-scope.service.js'
+
+/** Options for {@link TypeOrmExpandVisitor} beyond the query builder and the registry. */
+export interface TypeOrmExpandVisitorOptions {
+  /** Row-level scopes of the request; each expanded entity set's scope goes in its JOIN. */
+  readonly scopes?: TypeOrmScopePlan
+  /**
+   * Entity manager used to render nested `$filter`s inside `$expand` into the JOIN condition.
+   * Without it, nested filters are rejected.
+   */
+  readonly manager?: EntityManager
+  readonly maxFilterDepth?: number
+  readonly dialect?: 'sqlite' | 'postgres' | 'ansi'
+}
 
 /**
  * TypeOrmExpandVisitor — translates $expand AST nodes into TypeORM
@@ -32,6 +50,7 @@ export class TypeOrmExpandVisitor {
     private readonly qb: SelectQueryBuilder<ObjectLiteral>,
     private readonly edmRegistry: EdmRegistry,
     private readonly maxExpandDepth: number,
+    private readonly options: TypeOrmExpandVisitorOptions = {},
   ) {}
 
   /**
@@ -47,6 +66,7 @@ export class TypeOrmExpandVisitor {
     parentAlias: string,
     entityType: EdmEntityType,
     currentDepth: number,
+    path: readonly string[] = [],
   ): void {
     if (currentDepth >= this.maxExpandDepth) {
       throw new ODataValidationError(
@@ -57,7 +77,7 @@ export class TypeOrmExpandVisitor {
     }
 
     for (const item of expandNode.items) {
-      this.applyExpandItem(item, parentAlias, entityType, currentDepth)
+      this.applyExpandItem(item, parentAlias, entityType, currentDepth, path)
     }
   }
 
@@ -66,6 +86,7 @@ export class TypeOrmExpandVisitor {
     parentAlias: string,
     entityType: EdmEntityType,
     currentDepth: number,
+    parentPath: readonly string[],
   ): void {
     // Validate against EDM navigation properties (D-10, T-04-09)
     const navProp = entityType.navigationProperties.find(
@@ -79,20 +100,49 @@ export class TypeOrmExpandVisitor {
       )
     }
 
+    const path = [...parentPath, navProp.name]
     // Build unique alias: parentAlias_navigationProperty
     const joinAlias = `${parentAlias}_${item.navigationProperty}`
-    this.qb.leftJoinAndSelect(`${parentAlias}.${item.navigationProperty}`, joinAlias)
 
-    // Resolve the target entity type for nested query options
-    const targetEntityType = this.edmRegistry.getEntityType(navProp.type)
+    // Resolve the target entity type for nested query options. Navigation types are
+    // qualified (`Default.Category`, `Collection(Default.OrderItem)`); the registry is keyed
+    // by the bare type name.
+    const targetEntityType = this.edmRegistry.getEntityType(navigationTargetTypeName(navProp.type))
 
-    // Apply nested query options on the joined relation
+    // JOIN condition: the target's row-level scope and the nested $filter. Both restrict
+    // which related rows are expanded, never which parent rows are returned.
+    const conditions: string[] = []
+    const params: Record<string, unknown> = {}
+    const scoped = this.options.scopes?.expand.get(path.join('/'))
+    if (scoped) {
+      conditions.push(scopeInCondition(scoped, (c) => `${joinAlias}.${c.propertyPath}`))
+      Object.assign(params, scoped.params)
+    }
     if (item.filter && targetEntityType) {
-      new TypeOrmFilterVisitor(this.qb, joinAlias, targetEntityType).visit(item.filter)
+      const nested = this.renderNestedFilter(item, targetEntityType, joinAlias, path)
+      conditions.push(nested.sql)
+      Object.assign(params, nested.params)
     }
-    if (item.select && targetEntityType) {
-      new TypeOrmSelectVisitor(this.qb, joinAlias, targetEntityType).apply(item.select)
+    const condition = conditions.length > 0 ? conditions.join(' AND ') : undefined
+
+    // Nested $select: join without selecting, then add only the requested columns and the key.
+    const selectItems =
+      item.select && !item.select.all && item.select.items?.length && targetEntityType
+        ? item.select.items
+        : undefined
+    if (selectItems && targetEntityType) {
+      this.qb.leftJoin(`${parentAlias}.${item.navigationProperty}`, joinAlias, condition, params)
+      const columns = new Set([
+        ...targetEntityType.keyProperties.map((k) => `${joinAlias}.${k}`),
+        ...selectItems.map((si) => `${joinAlias}.${si.path[0]}`),
+      ])
+      this.qb.addSelect([...columns])
+    } else {
+      const relation = `${parentAlias}.${item.navigationProperty}`
+      if (condition) this.qb.leftJoinAndSelect(relation, joinAlias, condition, params)
+      else this.qb.leftJoinAndSelect(relation, joinAlias)
     }
+
     if (item.orderBy?.length) {
       new TypeOrmOrderByVisitor(this.qb, joinAlias).apply(item.orderBy)
     }
@@ -108,7 +158,48 @@ export class TypeOrmExpandVisitor {
 
     // Recursive nested expand (D-07)
     if (item.expand && targetEntityType) {
-      this.apply(item.expand, joinAlias, targetEntityType, currentDepth + 1)
+      this.apply(item.expand, joinAlias, targetEntityType, currentDepth + 1, path)
     }
+  }
+
+  /**
+   * Render a nested `$filter` as `<key> IN (SELECT <key> FROM <target> WHERE <filter>)` so it
+   * can go in the JOIN condition. Lambdas in it get the scopes of their targets.
+   */
+  private renderNestedFilter(
+    item: ExpandItem,
+    targetEntityType: EdmEntityType,
+    joinAlias: string,
+    path: readonly string[],
+  ): { sql: string; params: Record<string, unknown> } {
+    const manager = this.options.manager
+    const metadata = manager?.connection.entityMetadatas.find(
+      (m) => m.name === targetEntityType.name,
+    )
+    if (!manager || !metadata) {
+      throw new ODataValidationError(
+        `$filter inside $expand is not supported for '${item.navigationProperty}'`,
+        targetEntityType.name,
+        '$filter',
+      )
+    }
+    const subAlias = `${joinAlias}_filter`
+    const sub = manager
+      .createQueryBuilder(metadata.target, subAlias)
+      .select(metadata.primaryColumns.map((c) => `${subAlias}.${c.propertyPath}`))
+    const lambdaScopes = this.options.scopes?.lambda
+    new TypeOrmFilterVisitor(
+      sub,
+      subAlias,
+      targetEntityType,
+      this.options.maxFilterDepth,
+      this.options.dialect,
+      manager.getRepository(metadata.target),
+      lambdaScopes ? (nav) => lambdaScopes.get([...path, nav].join('/')) : undefined,
+    ).visit(item.filter!)
+    const rendered = renameParameters(sub.getQuery(), sub.getParameters())
+    const columns = metadata.primaryColumns.map((c) => `${joinAlias}.${c.propertyPath}`)
+    const lhs = columns.length === 1 ? columns[0] : `(${columns.join(', ')})`
+    return { sql: `${lhs} IN (${rendered.sql})`, params: rendered.params }
   }
 }

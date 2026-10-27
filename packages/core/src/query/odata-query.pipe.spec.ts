@@ -362,4 +362,44 @@ describe('ODataQueryPipe', () => {
       )
     })
   })
+
+  describe('lambda predicates', () => {
+    const reviewType: EdmEntityType = {
+      name: 'Review',
+      namespace: 'Default',
+      properties: [{ name: 'Stars', type: 'Edm.Int32', nullable: false }],
+      navigationProperties: [],
+      keyProperties: ['Stars'],
+      isReadOnly: false,
+    }
+    const withReviews: EdmEntityType = {
+      ...mockEntityType,
+      navigationProperties: [
+        ...mockEntityType.navigationProperties,
+        {
+          name: 'Reviews',
+          type: 'Collection(Default.Review)',
+          nullable: false,
+          isCollection: true,
+        },
+      ],
+    }
+
+    beforeEach(() => {
+      mockEdmRegistry.getEntityType.mockImplementation((name: string) =>
+        name === 'Product' ? withReviews : name === 'Review' ? reviewType : undefined,
+      )
+    })
+
+    it('validates `r/Stars` against the collection entity type, not the root', () => {
+      const result = createPipe().transform({ $filter: 'Reviews/any(r: r/Stars gt 3)' }, metadata)
+      expect(result.filter?.kind).toBe('LambdaExpr')
+    })
+
+    it('rejects an unknown property of the collection entity type', () => {
+      expect(() =>
+        createPipe().transform({ $filter: 'Reviews/any(r: r/Nope gt 3)' }, metadata),
+      ).toThrow("Property 'Nope' not found on entity 'Review'")
+    })
+  })
 })

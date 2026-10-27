@@ -13,7 +13,7 @@
  *   T-05-05: Error responses use OData error format, no stack traces.
  */
 
-import { Controller, Post, Req, Res, Inject, HttpStatus } from '@nestjs/common'
+import { Controller, Post, Req, Res, Inject, HttpStatus, Optional } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import { DataSource, type EntityManager, type ObjectLiteral } from 'typeorm'
 
@@ -50,6 +50,7 @@ import {
 import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
 import type { EntityClass } from '@nestjs-odata/core'
+import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -140,7 +141,27 @@ export class BatchController {
     private readonly edmRegistry: EdmRegistry,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
     @Inject(TYPEORM_ODATA_ENTITIES) private readonly entityClasses: EntityClass[],
+    @Optional()
+    @Inject(TypeOrmScopeService)
+    private readonly scopes?: TypeOrmScopeService,
   ) {}
+
+  /**
+   * Load an entity by key for a batch part, through the entity set's row-level scope when it
+   * has one (so rows outside the scope look absent: 404).
+   */
+  private async findScoped(
+    entitySetName: string,
+    entityClass: EntityClass,
+    where: Record<string, unknown>,
+    manager: EntityManager,
+    operation: 'entity' | 'write',
+  ): Promise<ObjectLiteral | null> {
+    if (this.scopes?.isScoped(entitySetName)) {
+      return (await this.scopes.findOne(entitySetName, where, operation, manager)) ?? null
+    }
+    return manager.findOne(entityClass as new () => ObjectLiteral, { where })
+  }
 
   /**
    * POST {serviceRoot}/$batch
@@ -424,7 +445,7 @@ export class BatchController {
           )
         }
         // Collection GET — not supported in batch (read-only outside changeset)
-        return await this.dispatchGetCollection(entityClass, manager, part.contentId)
+        return await this.dispatchGetCollection(entitySetName, entityClass, manager, part.contentId)
       } else if (method === 'POST') {
         return await this.dispatchCreate(
           part,
@@ -507,7 +528,7 @@ export class BatchController {
     contentId?: string,
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
-    const entity = await manager.findOne(entityClass as new () => ObjectLiteral, { where })
+    const entity = await this.findScoped(entitySetName, entityClass, where, manager, 'entity')
     if (!entity) {
       return {
         contentId,
@@ -529,14 +550,26 @@ export class BatchController {
 
   /** GET /EntitySet (collection — basic support) */
   private async dispatchGetCollection(
+    entitySetName: string,
     entityClass: EntityClass,
     manager: EntityManager,
     contentId?: string,
   ): Promise<BatchResponsePart> {
     // Apply maxTop limit to prevent unbounded queries (T-05-06 / SEC-01).
-    const items = await manager.find(entityClass as new () => ObjectLiteral, {
-      take: this.options.maxTop,
-    })
+    let items: ObjectLiteral[]
+    if (this.scopes?.isScoped(entitySetName)) {
+      const qb = manager.createQueryBuilder(entityClass as new () => ObjectLiteral, 'entity')
+      applyScopeToQuery(
+        qb,
+        'entity',
+        await this.scopes.subqueryFor(entitySetName, 'collection', [], manager),
+      )
+      items = await qb.take(this.options.maxTop).getMany()
+    } else {
+      items = await manager.find(entityClass as new () => ObjectLiteral, {
+        take: this.options.maxTop,
+      })
+    }
     return {
       contentId,
       statusCode: 200,
@@ -586,7 +619,7 @@ export class BatchController {
     const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
     const where = parseODataKey(keyStr, keyProperties)
     const EntityCls = entityClass as new () => ObjectLiteral
-    const existing = await manager.findOne(EntityCls, { where })
+    const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) {
       return {
         contentId: part.contentId,
@@ -644,7 +677,7 @@ export class BatchController {
       }
     }
 
-    const existing = await manager.findOne(EntityCls, { where })
+    const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) {
       return {
         contentId: part.contentId,
@@ -702,6 +735,18 @@ export class BatchController {
     contentId?: string,
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
+    const notFound = (): BatchResponsePart => ({
+      contentId,
+      statusCode: 404,
+      headers: {},
+      body: buildODataError('NotFound', `Entity '${entitySetName}' with key '${keyStr}' not found`),
+    })
+    if (
+      this.scopes?.isScoped(entitySetName) &&
+      !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
+    ) {
+      return notFound()
+    }
     const result = await manager.delete(entityClass as new () => ObjectLiteral, where)
     if (result.affected === 0) {
       return {

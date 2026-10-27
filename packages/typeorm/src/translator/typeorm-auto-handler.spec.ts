@@ -165,6 +165,8 @@ describe('TypeOrmAutoHandler', () => {
         // In the unit fixture there's no DataSource so it falls back to the
         // injected default repo.
         expect.anything(),
+        // Fourth arg is the row-level scope plan; none without a TypeOrmScopeService.
+        undefined,
       )
       expect(result.items).toBeDefined()
     })
@@ -508,7 +510,7 @@ describe('TypeOrmAutoHandler', () => {
 
       // The translator should have been called with the injected default repo
       // (3rd argument), proving the no-DataSource branch returned `this.repo`.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo, undefined)
     })
 
     it('Test R2: falls back to default repo when the entity set is unknown', async () => {
@@ -536,7 +538,7 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
 
       // No entity class matched — the fallback branch should pass the default repo.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo, undefined)
     })
 
     it('Test R3: looks up Repository from DataSource when entity class matches', async () => {
@@ -563,7 +565,12 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
 
       // The DataSource-resolved repo should win over the default one.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, resolvedRepo)
+      expect(translateMock).toHaveBeenCalledWith(
+        expect.anything(),
+        entityType,
+        resolvedRepo,
+        undefined,
+      )
     })
 
     it('Test R4: falls back to default repo when entity set is not in EdmRegistry but resolveEntityType would have thrown — short-circuit safety', async () => {
@@ -595,7 +602,12 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleCount(makeQuery({ entitySetName: 'Others' }))
 
       // Walked entityMetadatas, found no match → returned default repo.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), otherEntityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(
+        expect.anything(),
+        otherEntityType,
+        repo,
+        undefined,
+      )
     })
   })
 
