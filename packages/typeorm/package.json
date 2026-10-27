@@ -1,6 +1,6 @@
 {
   "name": "@nestjs-odata/typeorm",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "TypeORM adapter for @nestjs-odata/core — auto-derives OData EDM from TypeORM entity metadata",
   "license": "MIT",
   "repository": {
