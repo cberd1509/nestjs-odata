@@ -148,6 +148,7 @@ async create(@Body() body: Record<string, unknown>) {
 
 - Changesets cannot contain `GET` requests (reads are never transactional per OData spec)
 - `Content-ID` headers allow referencing the result of one changeset operation in a subsequent one
+- Every operation URL must resolve inside the service root (relative URLs resolve against the `$batch` URL); other URLs and nested `$batch` operations answer `400`
 
 ### Content-ID references
 

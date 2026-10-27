@@ -550,6 +550,18 @@ describe('$batch conformance (e2e)', () => {
       expect(single(unknown).status).toBe(404)
       expect(single(unknown).json.error.code).toBeDefined()
     })
+
+    it('refuses operations outside the service root (other application routes)', async () => {
+      const parts = await postBatch(app, [
+        op({ method: 'GET', url: '/status' }),
+        op({ method: 'GET', url: '../status' }),
+        op({ method: 'GET', url: 'http://other.example/odata/../status' }),
+      ])
+      for (const part of parts) {
+        expect(single(part).status).toBe(400)
+        expect(single(part).json.error.message).toMatch(/outside the service/)
+      }
+    })
   })
 })
 

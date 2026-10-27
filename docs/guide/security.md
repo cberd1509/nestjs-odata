@@ -275,6 +275,10 @@ batch; inside a changeset, the denial fails and rolls back the whole changeset.
   `Prefer` headers are never inherited.
 - An operation can only reach routes a standalone request can reach: entity sets or methods
   without a route answer `404`.
+- Operations are confined to the service root: a URL that resolves outside it (`/auth/login`,
+  `../admin`, an absolute URL to another path) answers `400` without reaching any route, so
+  `$batch` can't be used to call other application routes behind path-based controls. A nested
+  `$batch` operation answers `400` too.
 - `getODataBatchPart()` (from `@nestjs-odata/core`) is defined while a batch operation runs, so a
   guard can apply a batch-specific policy (for example refuse deletes inside `$batch`).
 - `ODataTypeOrmModule.forRoot({ batch: { enabled: false } })` turns the endpoint off (404);

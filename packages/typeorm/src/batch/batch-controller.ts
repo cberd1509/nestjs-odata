@@ -398,6 +398,18 @@ export class BatchController {
       return this.errorPart(400, `Cannot parse the operation URL: ${part.url}`, part)
     }
     const segments = pathSegments(url.split('?')[0] ?? '')
+    // Only resources of this service: never other application routes (`../admin`,
+    // `http://host/auth/login`), which would bypass path-based controls in front of the app.
+    const serviceSegments = pathSegments(new URL(batchUrl, 'http://batch.invalid').pathname).slice(
+      0,
+      -1,
+    )
+    if (
+      segments.length < serviceSegments.length ||
+      !serviceSegments.every((s, i) => segments[i] === s)
+    ) {
+      return this.errorPart(400, `The operation URL is outside the service: ${part.url}`, part)
+    }
     if (segments.at(-1) === '$batch') {
       return this.errorPart(400, 'A $batch request cannot contain a $batch request', part)
     }
