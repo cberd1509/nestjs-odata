@@ -3,7 +3,6 @@ import type { ODataQuery, ODataQueryResult, EdmEntityType, IETagProvider } from 
 import {
   EdmRegistry,
   ETAG_PROVIDER,
-  getODataRequestContext,
   navigationTargetTypeName,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
@@ -14,13 +13,14 @@ import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 import { entityLocation } from '../utils/entity-key.js'
 import type { ODataWriteRegistry } from '../write/write-registry.js'
-import type {
-  ODataWriteContext,
-  ODataWriteHandlers,
-  ODataWriteOperation,
-} from '../write/write.types.js'
-import { etagMatches, resolveEntityETag } from '../write/etag.js'
-import { assertHandlerEntity, createHandlerFor, writeNotAllowed } from '../write/handlers.js'
+import type { ODataWriteHandlers } from '../write/write.types.js'
+import { etagMatches, hasEntityETag, resolveEntityETag } from '../write/etag.js'
+import {
+  assertHandlerEntity,
+  buildWriteContext,
+  createHandlerFor,
+  writeNotAllowed,
+} from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
 
 /**
@@ -56,24 +56,6 @@ export class TypeOrmAutoHandler {
     return this.writes?.getHandlers(entitySetName)
   }
 
-  /** Build the context handed to a write handler. */
-  private writeContext(
-    entitySetName: string,
-    entityType: EdmEntityType,
-    operation: ODataWriteOperation,
-    extra: Partial<ODataWriteContext> = {},
-  ): ODataWriteContext {
-    const request = getODataRequestContext()
-    return {
-      entitySetName,
-      entityType,
-      operation,
-      executionContext: request?.executionContext,
-      request: request?.request,
-      ...extra,
-    }
-  }
-
   /** The entity's ETag (`etag` option, else @ODataETag / @UpdateDateColumn). */
   private etagOf(entitySetName: string, entity: ObjectLiteral): string | undefined {
     return resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
@@ -83,14 +65,6 @@ export class TypeOrmAutoHandler {
   private withETag(entitySetName: string, entity: ObjectLiteral): ObjectLiteral {
     const etag = this.etagOf(entitySetName, entity)
     return etag ? { ...entity, __etag: etag } : entity
-  }
-
-  /** True when the entity set has an ETag (an `etag` option or a provider column). */
-  private hasETag(entitySetName: string): boolean {
-    return (
-      this.writes?.getETag(entitySetName) !== undefined ||
-      this.etagProvider?.getETagColumn(entitySetName) !== undefined
-    )
   }
 
   /**
@@ -128,7 +102,7 @@ export class TypeOrmAutoHandler {
     const result = await handler.call(
       handlers,
       body,
-      this.writeContext(entitySetName, entityType, operation, { manager }),
+      buildWriteContext(entitySetName, entityType, operation, { manager }),
     )
     const entity = assertHandlerEntity(result, entitySetName, operation)
     return {
@@ -737,7 +711,10 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
     // Only load the row when the scope or an If-Match needs it; otherwise delete directly.
-    if (this.scopes?.isScoped(entitySetName) || (ifMatchHeader && this.hasETag(entitySetName))) {
+    if (
+      this.scopes?.isScoped(entitySetName) ||
+      (ifMatchHeader && hasEntityETag(entitySetName, this.writes, this.etagProvider))
+    ) {
       const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
       this.assertIfMatch(entitySetName, ifMatchHeader, current)
     }
@@ -766,7 +743,7 @@ export class TypeOrmAutoHandler {
     if (this.scopes?.isScoped(entitySetName)) {
       await this.findForWrite(entitySetName, keyStr, where, this.resolveRepo(entitySetName))
     }
-    const ctx = this.writeContext(entitySetName, entityType, operation, {
+    const ctx = buildWriteContext(entitySetName, entityType, operation, {
       rawKey: keyStr,
       ifMatch: ifMatchHeader,
     })

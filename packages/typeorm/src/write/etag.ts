@@ -24,15 +24,34 @@ export function computeETagFromSource(
  * entity, otherwise any listed ETag must equal the current one (weak comparison).
  */
 export function etagMatches(ifMatch: string, currentETag: string | undefined): boolean {
-  const normalize = (s: string): string =>
-    s
-      .trim()
-      .replace(/^W\//, '')
-      .replace(/^"(.*)"$/, '$1')
   const candidates = ifMatch.split(',').map((s) => s.trim())
   if (candidates.includes('*')) return true
   if (currentETag === undefined) return false
-  return candidates.some((c) => normalize(c) === normalize(currentETag))
+  const current = normalizeETag(currentETag)
+  return candidates.some((c) => normalizeETag(c) === current)
+}
+
+/** An ETag's opaque value: without `W/` and the quotes (weak comparison). */
+function normalizeETag(etag: string): string {
+  return etag
+    .trim()
+    .replace(/^W\//, '')
+    .replace(/^"(.*)"$/, '$1')
+}
+
+/**
+ * Whether an entity set has an ETag: an `etag` option, else an `@ODataETag` /
+ * `@UpdateDateColumn` column known to the ETag provider.
+ */
+export function hasEntityETag(
+  entitySetName: string,
+  writes: ODataWriteRegistry | undefined,
+  etagProvider: IETagProvider | undefined,
+): boolean {
+  return (
+    writes?.getETag(entitySetName) !== undefined ||
+    etagProvider?.getETagColumn(entitySetName) !== undefined
+  )
 }
 
 /**

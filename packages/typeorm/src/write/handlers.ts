@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, InternalServerErrorException } from '@nestjs/common'
-import type { EdmEntityType } from '@nestjs-odata/core'
-import type { ODataWriteHandlers, ODataWriteOperation } from './write.types.js'
+import { getODataRequestContext, type EdmEntityType } from '@nestjs-odata/core'
+import type { ODataWriteContext, ODataWriteHandlers, ODataWriteOperation } from './write.types.js'
 
 /**
  * True when a POST body is a deep insert: it carries a collection navigation property as an
@@ -68,4 +68,22 @@ export function createHandlerFor(
   const handler = deep ? handlers.deepInsert : handlers.create
   if (!handler) throw writeNotAllowed(entitySetName, operation)
   return { operation, handler }
+}
+
+/** The context handed to a write handler, with the current request's execution context. */
+export function buildWriteContext(
+  entitySetName: string,
+  entityType: EdmEntityType,
+  operation: ODataWriteOperation,
+  extra: Partial<ODataWriteContext> = {},
+): ODataWriteContext {
+  const request = getODataRequestContext()
+  return {
+    entitySetName,
+    entityType,
+    operation,
+    executionContext: request?.executionContext,
+    request: request?.request,
+    ...extra,
+  }
 }

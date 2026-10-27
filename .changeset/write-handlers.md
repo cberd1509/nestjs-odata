@@ -16,3 +16,4 @@ Custom write handlers.
   - `$batch` keeps the status of an `HttpException` found in an error's `cause` chain.
   - Scoped writes only take a row lock inside a transaction (PostgreSQL refuses `FOR UPDATE` outside one).
 - **`@nestjs-odata/core`:** POST responses whose entity carries an adapter-provided ETag get the `ETag` header and `@odata.etag`.
+  - `TypeOrmETagProvider.validateIfMatch()` now uses the same comparison as the write paths (`*`, lists), and `computeETag()` the same format as `formatWeakETag()`. New `hasEntityETag()` helper.

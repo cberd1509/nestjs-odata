@@ -67,13 +67,14 @@ import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 import { entityLocation } from '../utils/entity-key.js'
 import { ODataWriteRegistry } from '../write/write-registry.js'
 import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
-import type {
-  ODataChangesetRunner,
-  ODataWriteContext,
-  ODataWriteHandlers,
-} from '../write/write.types.js'
+import type { ODataChangesetRunner, ODataWriteHandlers } from '../write/write.types.js'
 import { resolveEntityETag } from '../write/etag.js'
-import { assertHandlerEntity, createHandlerFor, writeNotAllowed } from '../write/handlers.js'
+import {
+  assertHandlerEntity,
+  buildWriteContext,
+  createHandlerFor,
+  writeNotAllowed,
+} from '../write/handlers.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -81,15 +82,15 @@ import { assertHandlerEntity, createHandlerFor, writeNotAllowed } from '../write
  * Carries the status code and serialized body from the failed operation.
  */
 class ChangesetOperationError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    public readonly body: string,
-  ) {
-    super(`Changeset operation failed with status ${statusCode}`)
+  constructor() {
+    super('Changeset operation failed')
     this.name = 'ChangesetOperationError'
     Object.setPrototypeOf(this, new.target.prototype)
   }
 }
+
+/** HTTP methods a write handler serves. */
+const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE'])
 
 /**
  * Build an OData error response body (T-05-05).
@@ -114,7 +115,9 @@ function statusToCode(status: number): string {
     401: 'Unauthorized',
     403: 'Forbidden',
     404: 'NotFound',
+    405: 'MethodNotAllowed',
     409: 'Conflict',
+    412: 'PreconditionFailed',
     500: 'InternalServerError',
   }
   return codes[status] ?? 'Error'
@@ -214,6 +217,7 @@ export class BatchController {
         request: request?.request,
       })
     }
+    // Kept as an explicit QueryRunner (the pre-existing changeset mechanism).
     const queryRunner = this.dataSource.createQueryRunner()
     await queryRunner.connect()
     await queryRunner.startTransaction()
@@ -258,29 +262,24 @@ export class BatchController {
   private async dispatchToHandlers(
     handlers: ODataWriteHandlers<any>,
     part: BatchRequestPart,
-    method: string,
     entitySetName: string,
     entityType: EdmEntityType,
     entityClass: EntityClass,
     key: string | undefined,
     manager: EntityManager,
-    inChangeset: boolean,
+    changesetManager: EntityManager | undefined,
   ): Promise<BatchResponsePart> {
-    const request = getODataRequestContext()
+    const method = part.method.toUpperCase()
     const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const base = {
-      entitySetName,
-      entityType,
-      executionContext: request?.executionContext,
-      request: request?.request,
-      manager: inChangeset ? manager : undefined,
-      batch: { contentId: part.contentId, inChangeset },
+    const extra = {
+      manager: changesetManager,
+      batch: { contentId: part.contentId, inChangeset: changesetManager !== undefined },
       ifMatch: part.headers['if-match'],
     }
 
     if (method === 'POST') {
       const { operation, handler } = createHandlerFor(handlers, entitySetName, entityType, body)
-      const ctx: ODataWriteContext = { ...base, operation }
+      const ctx = buildWriteContext(entitySetName, entityType, operation, extra)
       const entity = assertHandlerEntity(
         await handler.call(handlers, body, ctx),
         entitySetName,
@@ -312,17 +311,19 @@ export class BatchController {
       return notFoundPart(part.contentId, entitySetName, key)
     }
 
+    const ctxFor = (operation: 'update' | 'replace' | 'delete') =>
+      buildWriteContext(entitySetName, entityType, operation, { ...extra, rawKey: key })
     if (method === 'PATCH' || method === 'PUT') {
       const operation = method === 'PATCH' ? 'update' : 'replace'
-      const handler = method === 'PATCH' ? handlers.update : handlers.replace
+      const handler = handlers[operation]
       if (!handler) throw writeNotAllowed(entitySetName, operation)
-      const result = await handler.call(handlers, where, body, { ...base, operation, rawKey: key })
+      const result = await handler.call(handlers, where, body, ctxFor(operation))
       const entity = assertHandlerEntity(result, entitySetName, operation)
       return this.entityPart(part.contentId, 200, entitySetName, entity)
     }
 
     if (!handlers.delete) throw writeNotAllowed(entitySetName, 'delete')
-    await handlers.delete(where, { ...base, operation: 'delete', rawKey: key })
+    await handlers.delete(where, ctxFor('delete'))
     return { contentId: part.contentId, statusCode: 204, headers: {}, body: undefined }
   }
 
@@ -501,7 +502,7 @@ export class BatchController {
           // the entire changeset — do not commit partial changes.
           if (result.statusCode >= 400) {
             failure = result
-            throw new ChangesetOperationError(result.statusCode, result.body ?? 'Operation failed')
+            throw new ChangesetOperationError()
           }
 
           // Store location URL in contentIdMap after a successful 201 with Content-ID (WRITE-03)
@@ -620,18 +621,19 @@ export class BatchController {
     const method = part.method.toUpperCase()
 
     try {
-      const handlers = method === 'GET' ? undefined : this.writes?.getHandlers(entitySetName)
-      if (handlers && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+      const handlers = WRITE_METHODS.has(method)
+        ? this.writes?.getHandlers(entitySetName)
+        : undefined
+      if (handlers) {
         return await this.dispatchToHandlers(
           handlers,
           part,
-          method,
           entitySetName,
           entityType,
           entityClass,
           key,
           manager,
-          inChangeset,
+          inChangeset ? manager : undefined,
         )
       }
       if (method === 'GET') {
