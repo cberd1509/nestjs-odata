@@ -15,7 +15,7 @@ Row-level scopes.
 - **Hardening:**
   - Options inside `$expand(...)` are validated against the related type; unknown or excluded properties give 400 instead of 500.
   - TypeORM `select: false` columns are excluded from the EDM, like `@ODataExclude`.
-  - A `PATCH` body whose key differs from the URL key is refused with 400, over HTTP and in `$batch`, as `PUT` already was.
+  - Key properties in a `PATCH` body are ignored, over HTTP and in `$batch` (OData 4.01 Part 1 §11.4.3), so a body key can no longer redirect the update to another row.
   - Scoped writes run the scope check and the write in one transaction, with a row lock where the driver supports it.
   - Scoped by-key reads load eager relations.
   - Each scope runs once per entity set and operation for a request.

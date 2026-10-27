@@ -10,7 +10,7 @@ import {
 } from '@nestjs-odata/core'
 import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
-import { bodyKeyMismatch } from '../utils/body-key.js'
+import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
 
 /**
@@ -542,8 +542,6 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    // The URL key wins: a different key in the body would update another row.
-    this.assertBodyKeyMatches(entityType, body, where)
     const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
     // ETag If-Match validation before update
@@ -571,7 +569,9 @@ export class TypeOrmAutoHandler {
     }
 
     // Merge-patch onto the entity just loaded (no second SELECT, unlike preload()).
-    return repo.save(repo.merge(current, body as ObjectLiteral))
+    // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
+    const patch = withoutKeyProperties(entityType.keyProperties, body)
+    return repo.save(repo.merge(current, patch as ObjectLiteral))
   }
 
   /**

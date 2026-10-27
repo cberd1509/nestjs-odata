@@ -51,7 +51,7 @@ import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
 import type { EntityClass } from '@nestjs-odata/core'
 import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
-import { bodyKeyMismatch } from '../utils/body-key.js'
+import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -647,17 +647,10 @@ export class BatchController {
         ),
       }
     }
-    // The URL key wins: a different key in the body would update another row.
-    if (bodyKeyMismatch(keyProperties, body, where)) {
-      return {
-        contentId: part.contentId,
-        statusCode: 400,
-        headers: {},
-        body: buildODataError('BadRequest', 'Key in body does not match URL key'),
-      }
-    }
-    // Merge patch fields onto the existing entity, then save
-    const merged = manager.merge(EntityCls, existing, body as ObjectLiteral)
+    // Merge patch fields onto the existing entity, then save. Key properties in the body are
+    // ignored (OData §11.4.3): the URL key identifies the row.
+    const patch = withoutKeyProperties(keyProperties, body)
+    const merged = manager.merge(EntityCls, existing, patch as ObjectLiteral)
     const saved = await manager.save(EntityCls, merged)
     return {
       contentId: part.contentId,

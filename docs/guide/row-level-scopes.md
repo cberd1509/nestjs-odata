@@ -177,8 +177,8 @@ builders.
 
 ## Limits
 
-- A `PATCH` body may not carry a key different from the URL key (400), so it can't redirect the
-  write to another row. `PUT` already refused that.
+- A key in a `PATCH` body is ignored (OData §11.4.3), so it can't redirect the write to another
+  row. `PUT` refuses a body key that differs from the URL key (400).
 - Scopes restrict reads and the existence check before writes. They do **not** check the data of
   a write: a `POST`, or a `PATCH` that changes the scoped column, can still create or move a row
   outside the caller's scope. Validate writes in your controller, or route them through your own

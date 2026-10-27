@@ -480,23 +480,27 @@ describe('Row-level scopes (e2e)', () => {
     expect(res.body.value.map((p: { id: number }) => p.id)).toEqual([1])
   })
 
-  it('refuses a PATCH whose body key points at another row (HTTP and $batch)', async () => {
-    await http
+  it('ignores a PATCH body key that points at another row (OData §11.4.3, HTTP and $batch)', async () => {
+    const before = await dataSource.getRepository(ScopedProject).findOneByOrFail({ id: 2 })
+    const res = await http
       .patch('/odata/ScopedProjects/1')
       .set('x-owner', 'A')
-      .send({ id: 2, title: 'hijacked' })
-      .expect(400)
+      .send({ id: 2, title: 'renamed over HTTP' })
+      .expect(200)
+    expect(res.body).toMatchObject({ id: 1, title: 'renamed over HTTP' })
     const text = await postBatch(
       'A',
       batchBody([
         batchChangeset([
-          batchRequest('PATCH', '/odata/ScopedProjects(1)', '{"id":2,"title":"hijacked"}'),
+          batchRequest('PATCH', '/odata/ScopedProjects(1)', '{"id":2,"title":"renamed in batch"}'),
         ]),
       ]),
     )
-    expect(text).toContain('HTTP/1.1 400')
+    expect(text).toContain('HTTP/1.1 200')
     const rows = await dataSource.getRepository(ScopedProject).find({ order: { id: 'ASC' } })
-    expect(rows.map((r) => r.title)).not.toContain('hijacked')
+    expect(rows.find((r) => r.id === 1)?.title).toBe('renamed in batch')
+    // The row the body key named (another owner's) is untouched.
+    expect(rows.find((r) => r.id === 2)).toEqual(before)
   })
 
   it('hands the scope its context: entity set, metadata, alias, operation, path and request', async () => {

@@ -351,12 +351,13 @@ describe('TypeOrmScopeService', () => {
     spy.mockRestore()
   })
 
-  it('refuses a PATCH whose body key differs from the URL key', async () => {
+  it('ignores a PATCH body key that differs from the URL key (OData §11.4.3)', async () => {
     const { handler } = makeService({ Folders: ownerScope })
-    const err = await asOwner('a', () =>
+    const updated = await asOwner('a', () =>
       handler.handleUpdate('1', { id: 2, owner: 'a' }, 'Folders'),
-    ).catch((e: unknown) => e)
-    expect((err as { getStatus(): number }).getStatus()).toBe(400)
+    )
+    expect(updated).toMatchObject({ id: 1, owner: 'a' })
+    // The row the body key named is untouched.
     expect(await dataSource.getRepository(Folder).findOneByOrFail({ id: 2 })).toMatchObject({
       owner: 'b',
     })

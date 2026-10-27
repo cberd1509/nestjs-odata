@@ -89,7 +89,7 @@ Location: http://localhost:3000/odata/Products/3
 
 `PATCH /odata/{EntitySet}/{key}`
 
-Updates an entity using merge-patch semantics — only the fields included in the request body are updated. Returns `200 OK` with the updated entity. Returns `404 Not Found` if the key does not exist. A key property in the body must match the URL key, otherwise the request is refused with `400 Bad Request` (the same rule as PUT).
+Updates an entity using merge-patch semantics — only the fields included in the request body are updated. Returns `200 OK` with the updated entity. Returns `404 Not Found` if the key does not exist. Key properties in the body are ignored (OData 4.01 Part 1 §11.4.3): the URL key always identifies the entity, so a body key can't redirect the update to another row. (PUT still refuses a body key that differs from the URL key with `400 Bad Request`.)
 
 ```bash
 curl -X PATCH http://localhost:3000/odata/Products/3 \
