@@ -309,6 +309,14 @@ per request from the entity-set name. Older releases routed everything to
 - **404**: there is no route for that method and entity set (for example the controller has no
   `@ODataDelete`, or the entity set has no controller at all), or the key does not exist.
 
+## A `$batch` operation answers 504 Gateway Timeout
+
+The operation did not answer within `batch.operationTimeout` (default 30 s). Inside a changeset
+the changeset is rolled back. Common causes: a route that never ends its response, or a query
+that waits for a row lock held by the changeset's own transaction because it does not use the
+changeset's entity manager (`getODataChangesetManager()`). Raise the limit with
+`ODataTypeOrmModule.forRoot({ batch: { operationTimeout } })` only for genuinely slow operations.
+
 ## A `$batch` changeset is answered with a single error part
 
 That is the OData 4.01 format (Part 1 §11.7.7.5): when an operation of a changeset fails, the

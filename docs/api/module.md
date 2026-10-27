@@ -166,7 +166,7 @@ The TypeORM adapter module. Derives OData EDM from TypeORM entity metadata.
 ```typescript
 ODataTypeOrmModule.forRoot(options?: {
   changesetRunner?: ODataChangesetRunner
-  batch?: ODataBatchOptions // { enabled?: boolean; entitySets?: readonly string[] }
+  batch?: ODataBatchOptions // { enabled?, entitySets?, operationTimeout? }
 }): DynamicModule
 ```
 
@@ -178,7 +178,8 @@ Optional, imported once in the root module (global). Application-wide adapter se
   For a runner with injected dependencies, provide the `ODATA_CHANGESET_RUNNER` token from a
   `@Global()` module instead.
 - `batch` controls the `$batch` endpoint: `enabled: false` answers 404, `entitySets` allow-lists
-  the entity sets operations may target (others answer 403). Provided under the
+  the entity sets operations may reach (resource path, navigation and `$expand` targets; others
+  answer 403), `operationTimeout` limits each operation (ms, default 30 000; then 504). Provided under the
   `ODATA_BATCH_OPTIONS` token. See [$batch](../guide/batch#turning-batch-off-or-restricting-it).
 
 ### ODataTypeOrmModule.forFeature()
@@ -296,12 +297,21 @@ interface ODataBatchPartContext {
   batchRequest: unknown // the platform request of the enclosing $batch request
 }
 
-getODataBatchPart() // ODataBatchPartContext | undefined (not in a $batch)
+getODataBatchPart(request?) // ODataBatchPartContext | undefined (not in a $batch)
 ```
 
+The operation is attached to its request (`request[ODATA_BATCH_PART]`, also read from
+`request.raw`) and kept in an `AsyncLocalStorage`. `getODataBatchPart(request?)` reads `request`
+(else the request of the OData request context) first, then the async context: pass the request
+from guards and middleware. `getODataBatchRequestValue(key, request?)` reads any value the batch
+controller attached (`null` means "explicitly none").
+
 Lower-level helpers used by the adapter's `BatchController`, exported for other adapters:
-`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress? })` (runs one
-operation through the Express application or Fastify's `inject()`, in process),
+`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress?, attach?, timeoutMs? })`
+(runs one operation through the Express application or Fastify's `inject()`, in process; `attach`
+sets symbol properties on the injected request; rejects with `BatchOperationTimeoutError` after
+`timeoutMs`; the response's headers keep multi-valued headers as arrays and a binary body as a
+`Buffer`),
 `batchOperationHeaders(batchHeaders, partHeaders, hasBody)` (the headers an operation inherits),
 `resolveBatchOperationUrl(operationUrl, batchUrl)` and `runWithODataBatchPart(part, fn)`.
 

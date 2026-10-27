@@ -49,7 +49,8 @@ Accept: application/json
 - An operation URL can be an absolute path (`/odata/Products(1)`), a path relative to the service
   root (`Products(1)`), or an absolute URI (only its path and query are used). Percent-encode
   spaces in the request line (`$filter=price%20gt%2010`).
-- A `$batch` operation cannot itself be a `$batch` request (`400`).
+- A `$batch` operation cannot itself be a `$batch` request (`400`), however its URL is spelled
+  (`$BATCH`, `%24batch`); a `$batch` request reached from inside a batch operation is refused too.
 
 ## Response format
 
@@ -79,9 +80,13 @@ Content-Type: application/json; charset=utf-8
 --batch_xyz789--
 ```
 
-Each operation's response carries the headers its route set (`Location`, `ETag`,
-`Preference-Applied`, `Content-Language`, `Content-Type`, your own headers); connection-level
-headers (`Content-Length` of the original response, `Date`, `X-Powered-By`, ...) are dropped.
+Each operation's response carries the status, headers and body its route sent (`Location`,
+`ETag`, `Preference-Applied`, `Content-Language`, `Content-Type`, `WWW-Authenticate`,
+`Retry-After`, your own headers), unchanged — errors included. Multi-valued headers such as
+`Set-Cookie` keep one line per value; binary bodies are kept byte for byte. Connection-level
+headers (`Content-Length` of the original response, `Content-Encoding`, `Date`, `X-Powered-By`,
+...) are dropped: operations are always asked for an unencoded body (`Accept-Encoding: identity`).
+Only an operation that matched no route gets a library-made OData error (`404`).
 
 A **successful changeset** is answered with a nested `multipart/mixed` part (its own boundary)
 holding one response per changeset request, each with its request's `Content-ID`. A **failed
@@ -124,9 +129,11 @@ TypeORM `QueryRunner` transaction, or your `changesetRunner`). If one fails (4xx
 transaction is rolled back and the remaining operations do not run. Operations outside
 changesets are independent — a failure in one does not affect others.
 
-The changeset's `EntityManager` is propagated to every operation of the changeset through
-`AsyncLocalStorage`: `TypeOrmAutoHandler`, row-level scopes and write handlers (`ctx.manager`)
-use it automatically. **Code of your own that writes to the database from an OData route** (a
+The changeset's `EntityManager` is propagated to every operation of the changeset: it is
+attached to the operation's request object, and kept in an `AsyncLocalStorage` as a fallback
+(the request is read first, so middleware that resumes `next()` from another async context — a
+session store, a callback-based auth library — cannot detach an operation from its changeset).
+`TypeOrmAutoHandler`, row-level scopes and write handlers (`ctx.manager`) use it automatically. **Code of your own that writes to the database from an OData route** (a
 custom controller method, a service it calls) must use it too, or its writes are not part of the
 changeset:
 
@@ -153,8 +160,11 @@ async create(@Body() body: Record<string, unknown>) {
 ### Content-ID references
 
 Use `Content-ID` to reference the entity created by a previous operation of the same changeset.
-`$<Content-ID>` in a later operation's URL (or body) is replaced by the created entity's URL (its
-`Location`, e.g. `/odata/Orders(42)`):
+A `$<Content-ID>` reference is replaced by the created entity's URL (its `Location`, e.g.
+`/odata/Orders(42)`) where it stands for a whole URL: as the operation URL or its first segment
+(`$1`, `$1/Items`), and as a JSON string value of the body that is `$1` or starts with `$1/`
+(for example `"Customer@odata.bind": "$1"`). IDs match exactly (`$1` is not part of `$10`), and
+text such as `"costs $1"` is left alone:
 
 ```
 --changeset_def456
@@ -241,14 +251,16 @@ ODataTypeOrmModule.forRoot({
   batch: {
     // enabled: false,             // POST /odata/$batch answers 404
     entitySets: ['Products', 'Orders'], // other targets answer 403 without reaching their route
+    operationTimeout: 10_000, // ms per operation (default 30 000); then 504
   },
 })
 ```
 
-| Option       | Default          | Effect                                                                                                                                                                             |
-| ------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`    | `true`           | `false` answers `404 Not Found` for `POST {serviceRoot}/$batch`.                                                                                                                   |
-| `entitySets` | every entity set | Allow-list of entity sets operations may target. Any other target (another entity set, `$metadata`, a non-OData route) answers `403`; inside a changeset that fails the changeset. |
+| Option             | Default          | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`          | `true`           | `false` answers `404 Not Found` for `POST {serviceRoot}/$batch`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `entitySets`       | every entity set | Allow-list of entity sets operations may target. Every entity set the operation reaches must be listed: the resource path's (`Products(1)`), navigation targets (`Products(1)/Supplier` needs `Suppliers`) and `$expand` targets, nested ones too. Any other target (another entity set, `$metadata`, an unknown segment) answers `403`; inside a changeset that fails the changeset. Navigation paths inside `$filter`/`$orderby` are not checked (row-level scopes still apply). |
+| `operationTimeout` | `30000`          | Milliseconds one operation may take. Then it answers `504 Gateway Timeout`; inside a changeset that fails and rolls back the changeset, so a stuck route (or a query blocked behind the changeset's own row locks) cannot hold the transaction. The route itself is not cancelled. `0` disables the limit.                                                                                                                                                                         |
 
 ## How operations are evaluated
 
@@ -258,10 +270,12 @@ Fastify's `inject()`), inside the `$batch` request's async context, without open
 - **Headers**: the operation inherits the `$batch` request's headers — credentials
   (`Authorization`, `Cookie`; OData forbids authentication headers on parts, §11.7.7.1),
   `Accept-Language`, `OData-MaxVersion`, your custom headers (`X-Tenant`) — and its own headers
-  win. Not inherited: `Content-*`, `Transfer-Encoding`, `Accept`, `Prefer` (batch-level, e.g.
+  win. Not inherited: `Content-*`, `Transfer-Encoding`, `Accept`, `Accept-Encoding` (operations
+  always send `Accept-Encoding: identity`), `Prefer` (batch-level, e.g.
   `odata.continue-on-error`), `If-Match` / `If-None-Match` / `If-(Un)Modified-Since`, `Range`,
-  `Expect` and connection headers. A part with a body and no `Content-Type` is sent as
-  `application/json`. The client address is the `$batch` request's.
+  `Expect`, connection headers and HTTP/2 pseudo-headers (`:path`, ...). A part with a body and
+  no `Content-Type` is sent as `application/json`; `Content-Length` is always recomputed. The
+  client address is the `$batch` request's.
 - **Routing**: the operation goes through global middleware (including the canonical
   `Products(1)` → `Products/1` rewrite), then the matching route. An operation with no matching
   route answers `404` as an OData error.
@@ -275,21 +289,27 @@ Fastify's `inject()`), inside the `$batch` request's async context, without open
   the error mapper) sees the operation's own request and execution context. The `$batch` request
   is available as `getODataBatchPart()?.batchRequest`.
 
-`getODataBatchPart()` (from `@nestjs-odata/core`) describes the operation being handled —
-`{ method, url, contentId, inChangeset, batchRequest }` — and is `undefined` for requests that
-are not part of a batch. Use it for a batch-specific policy:
+`getODataBatchPart(request?)` (from `@nestjs-odata/core`) describes the operation being
+handled — `{ method, url, contentId, inChangeset, batchRequest }` — and is `undefined` for
+requests that are not part of a batch. The description is attached to the operation's request
+(`request[ODATA_BATCH_PART]`) and kept in an `AsyncLocalStorage`; pass the request from guards
+and middleware (they run before the OData request context is set). Use it for a batch-specific
+policy:
 
 ```typescript
 import { getODataBatchPart } from '@nestjs-odata/core'
 
 @Injectable()
 export class NoBulkDeleteGuard implements CanActivate {
-  canActivate(): boolean {
+  canActivate(context: ExecutionContext): boolean {
     // Deletes are allowed one at a time, not inside $batch.
-    return getODataBatchPart() === undefined
+    return getODataBatchPart(context.switchToHttp().getRequest()) === undefined
   }
 }
 ```
+
+On Fastify, operations are injected with `fastify.inject()`, which cannot carry these request
+properties: there they rely on the `AsyncLocalStorage` alone.
 
 Each operation counts as a request for global guards such as rate limiters.
 
@@ -322,8 +342,11 @@ of the default `QueryRunner` transaction, pass a `changesetRunner` to
 
 ## Error handling
 
-**Individual request failure** (outside changeset): the failed operation returns its error
-status and OData error body in its response part. Other operations continue normally.
+**Individual request failure** (outside changeset): the failed operation returns its route's
+error response (status, headers, body) in its response part. Other operations continue normally.
+
+**Timeout**: an operation that does not answer within `batch.operationTimeout` (default 30 s)
+answers `504 Gateway Timeout`.
 
 **Changeset failure**: the changeset is rolled back and answered with a **single**
 `application/http` error response in place of the changeset (OData 4.01 Part 1 §11.7.7.5): the

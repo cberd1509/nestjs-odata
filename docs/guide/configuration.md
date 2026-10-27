@@ -198,11 +198,12 @@ would be inconsistent with the actual route paths.
 
 Optional, imported once in the root module.
 
-| Option             | Type                    | Default               | Description                                                                                                                                                                 |
-| ------------------ | ----------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `changesetRunner`  | `ODataChangesetRunner?` | TypeORM `QueryRunner` | Runs every `$batch` changeset inside your own unit of work. See [$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).                         |
-| `batch.enabled`    | `boolean?`              | `true`                | `false` turns `POST {serviceRoot}/$batch` off (404).                                                                                                                        |
-| `batch.entitySets` | `string[]?`             | every entity set      | Allow-list of entity sets `$batch` operations may target; other targets answer 403 without reaching their route. See [$batch](./batch#turning-batch-off-or-restricting-it). |
+| Option                   | Type                    | Default               | Description                                                                                                                                                                                                                  |
+| ------------------------ | ----------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `changesetRunner`        | `ODataChangesetRunner?` | TypeORM `QueryRunner` | Runs every `$batch` changeset inside your own unit of work. See [$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).                                                                          |
+| `batch.enabled`          | `boolean?`              | `true`                | `false` turns `POST {serviceRoot}/$batch` off (404).                                                                                                                                                                         |
+| `batch.entitySets`       | `string[]?`             | every entity set      | Allow-list of entity sets `$batch` operations may reach (resource path, navigation and `$expand` targets); other targets answer 403 without reaching their route. See [$batch](./batch#turning-batch-off-or-restricting-it). |
+| `batch.operationTimeout` | `number?`               | `30000`               | Milliseconds one `$batch` operation may take; then 504, and its changeset fails and rolls back. `0` disables the limit.                                                                                                      |
 
 ```typescript
 ODataTypeOrmModule.forRoot({

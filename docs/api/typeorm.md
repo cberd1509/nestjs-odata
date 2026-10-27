@@ -382,22 +382,28 @@ See [$batch](../guide/batch).
 // The entity manager of the $batch changeset being executed (undefined outside one).
 // TypeOrmAutoHandler, scopes and write handlers (ctx.manager) use it automatically; use it in
 // your own route code that writes, so the writes commit or roll back with the changeset.
-function getODataChangesetManager(): EntityManager | undefined
+// Read from the operation's request (`request`, else the OData request context's) first:
+// the manager is attached as request[ODATA_CHANGESET_MANAGER]; then from AsyncLocalStorage.
+function getODataChangesetManager(request?: unknown): EntityManager | undefined
 function runInODataChangeset<T>(manager: EntityManager, fn: () => T): T
+const ODATA_CHANGESET_MANAGER: unique symbol
 
 interface ODataBatchOptions {
   enabled?: boolean // default true; false answers 404
-  entitySets?: readonly string[] // allow-list; other targets answer 403
+  entitySets?: readonly string[] // allow-list (path, navigation, $expand); others answer 403
+  operationTimeout?: number // ms per operation, default DEFAULT_BATCH_OPERATION_TIMEOUT (30 000)
 }
+const DEFAULT_BATCH_OPERATION_TIMEOUT: number
 const ODATA_BATCH_OPTIONS: symbol // DI token set by ODataTypeOrmModule.forRoot({ batch })
 
 // Declares BatchController once; imported by every forFeature().
 class ODataBatchModule {}
 class BatchController {} // POST {serviceRoot}/$batch
 
+// The body is a Buffer: binary operation bodies are kept byte for byte.
 function buildBatchResponse(parts: readonly BatchResponseItem[]): {
   contentType: string
-  body: string
+  body: Buffer
 }
 ```
 

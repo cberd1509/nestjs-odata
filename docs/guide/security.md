@@ -284,6 +284,16 @@ batch; inside a changeset, the denial fails and rolls back the whole changeset.
 - `ODataTypeOrmModule.forRoot({ batch: { enabled: false } })` turns the endpoint off (404);
   `batch: { entitySets: [...] }` allow-lists the entity sets operations may target (other
   targets answer 403 without reaching their route). See [$batch](./batch#turning-batch-off-or-restricting-it).
+- `batch.entitySets` checks every entity set an operation reaches: the resource path,
+  navigation segments (`Products(1)/Supplier`) and `$expand` targets. Navigation paths inside
+  `$filter` are not checked — rely on row-level scopes for row access.
+- A `$batch` cannot be nested, however its URL is spelled (`$BATCH`), nor be reached from inside a
+  batch operation, so the 100-operation limit cannot be multiplied.
+- Each operation has a time limit (`batch.operationTimeout`, default 30 s; then 504): a stuck
+  route cannot hold a changeset's transaction and row locks indefinitely.
+- The batch operation and the changeset's entity manager travel on the operation's request
+  object, not only in `AsyncLocalStorage`, so middleware that resumes `next()` from a foreign
+  async context cannot make a changeset write commit outside its transaction (Express adapter).
 - Each operation counts as a request for rate limiters such as `@nestjs/throttler`; the batch is
   limited to 100 operations.
 
