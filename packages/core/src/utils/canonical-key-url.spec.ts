@@ -55,4 +55,12 @@ describe('rewriteCanonicalKeyUrl (OData-URL 4.01 §4.3.1)', () => {
   it('only rewrites the segment right after the service root', () => {
     expect(rewrite('/odata/Products(1)/OrderItems(2)')).toBe('/odata/Products/1/OrderItems(2)')
   })
+
+  it('stays linear on adversarial input (many slashes, parentheses and root repetitions)', () => {
+    const started = performance.now()
+    rewriteCanonicalKeyUrl('/'.repeat(50_000) + 'odata', '/'.repeat(50_000) + 'odata', () => true)
+    rewrite('/odata'.repeat(10_000) + '/Products(' + '('.repeat(50_000))
+    rewrite('/odata/Products(' + ')'.repeat(50_000) + '/'.repeat(50_000))
+    expect(performance.now() - started).toBeLessThan(500)
+  })
 })

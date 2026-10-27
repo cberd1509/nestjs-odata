@@ -17,15 +17,36 @@ export function rewriteCanonicalKeyUrl(
   serviceRoot: string,
   isEntitySet: (name: string) => boolean,
 ): string | undefined {
-  const root = serviceRoot.replace(/^\/+|\/+$/g, '')
+  const root = trimSlashes(serviceRoot)
   if (!root || !url.includes('(')) return undefined
   const q = url.indexOf('?')
   const path = q === -1 ? url : url.slice(0, q)
   const query = q === -1 ? '' : url.slice(q)
-  const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = new RegExp(`^(.*/${escapedRoot})/([^/()]+)\\(([^/]+)\\)(/.*)?$`).exec(path)
-  if (!match) return undefined
-  const [, prefix, entitySet, key, rest] = match
-  if (!entitySet || !key || !isEntitySet(entitySet)) return undefined
-  return `${prefix}/${entitySet}/${key}${rest ?? ''}${query}`
+  // Plain string scanning (no regular expressions): the URL is untrusted input.
+  const marker = `/${root}/`
+  for (
+    let at = path.lastIndexOf(marker);
+    at !== -1;
+    at = at === 0 ? -1 : path.lastIndexOf(marker, at - 1)
+  ) {
+    const prefix = path.slice(0, at + marker.length - 1)
+    const tail = path.slice(at + marker.length)
+    const slash = tail.indexOf('/')
+    const segment = slash === -1 ? tail : tail.slice(0, slash)
+    const rest = slash === -1 ? '' : tail.slice(slash)
+    const open = segment.indexOf('(')
+    if (open <= 0 || !segment.endsWith(')') || segment.length - open < 3) continue
+    const entitySet = segment.slice(0, open)
+    if (entitySet.includes(')') || !isEntitySet(entitySet)) continue
+    return `${prefix}/${entitySet}/${segment.slice(open + 1, -1)}${rest}${query}`
+  }
+  return undefined
+}
+
+function trimSlashes(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && value[start] === '/') start++
+  while (end > start && value[end - 1] === '/') end--
+  return value.slice(start, end)
 }
