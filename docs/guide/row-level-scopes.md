@@ -10,12 +10,12 @@ row outside the scope never appears, however it is reached.
 | `GET /Set` (with `$filter`, `$orderby`, `$top`, `$search`) | restricts the root rows                                             |
 | `GET /Set?$count=true`, `GET /Set/$count`                  | counts only rows inside the scope                                   |
 | `GET /Set?$apply=...`                                      | aggregates only rows inside the scope                               |
-| `GET /Set/:key`                                            | 404 when the row is outside the scope                               |
+| `GET /Set(key)`                                            | 404 when the row is outside the scope                               |
 | `$expand=nav`, at any depth                                | the target set's own scope restricts the related rows; parents stay |
 | `$expand=nav($count=true)`, `nav/$count`, nested `$top`    | counts and pages only related rows inside the target set's scope    |
 | `$filter=nav/any(...)`, `nav/all(...)` (also many-to-many) | the lambda ranges over rows inside the target set's scope           |
 | `$filter=nav/name eq ...` (navigation path)                | a related row outside its scope reads as `null`                     |
-| `PATCH`, `PUT`, `DELETE /Set/:key`                         | 404 (and no write) when the row is outside the scope                |
+| `PATCH`, `PUT`, `DELETE /Set(key)`                         | 404 (and no write) when the row is outside the scope                |
 | `$batch` reads and changeset writes                        | same as above                                                       |
 
 ## Registering a scope

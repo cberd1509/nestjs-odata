@@ -65,6 +65,7 @@ interface ODataErrorMapping {
   target?: string
   details?: { code: string; message: string; target?: string }[]
   innererror?: Record<string, unknown>
+  language?: string // RFC 5646 tag of `message`, sent as Content-Language
 }
 
 interface ODataErrorMapperContext {
@@ -77,9 +78,37 @@ interface ODataErrorMapperContext {
 ```
 
 The result is sent as `{ "error": { code, message, target?, details, innererror? } }` with HTTP
-status `status`. `buildODataErrorResponse(exception, mapper?, context?)` and
-`httpStatusToODataCode(status)` and `odataErrorBody(code, message, details?)` are exported, for
-custom routes that write errors themselves.
+status `status`. `buildODataErrorResponse(exception, mapper?, context?, defaultLanguage?)` (which
+returns `{ status, body, language }`), `httpStatusToODataCode(status)` and
+`odataErrorBody(code, message, details?)` are exported, for custom routes that write errors
+themselves.
+
+An `HttpException` whose body is OData-shaped (`{ error: { message, details } }`) keeps its
+message and, for a 4xx, its valid `details` under the default mapping.
+
+## Content-Language
+
+OData 4.01 Part 1 §9.4 requires the language of `message` in the `Content-Language` header.
+Every error response of an OData route, and every `$batch` error part, carries it:
+
+1. the mapping's `language`, when the `errorMapper` returned one;
+2. else the `errorLanguage` module option;
+3. else `en`, the language of the library's own messages.
+
+```typescript
+ODataModule.forRoot({
+  serviceRoot: '/odata',
+  errorLanguage: 'es-CO', // your exceptions' messages are in Spanish
+  errorMapper: (err) =>
+    err instanceof GermanPartnerError
+      ? { status: 422, code: 'Partner', message: err.message, language: 'de' }
+      : undefined,
+})
+```
+
+Set `errorLanguage` only when the messages you throw are localized: it labels the library's own
+(English) messages too. A `language` that is not a well-formed RFC 5646 tag makes the mapping
+invalid (default mapping, with a warning), and an invalid `errorLanguage` fails at startup.
 
 ## Where it applies
 

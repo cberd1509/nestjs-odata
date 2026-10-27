@@ -196,6 +196,38 @@ To query by composite key, use the OData multi-key syntax:
 curl 'http://localhost:3000/odata/OrderItems(orderId=1,productId=42)'
 ```
 
+The key routes receive `orderId=1,productId=42` as their `key` parameter, which
+`handleGetByKey` and the write handlers parse. `/odata/OrderItems/orderId=1,productId=42` reaches
+the same route. `Location` and `@odata.id` use the parenthesized form.
+
+## `Products(1)` answers `Cannot GET /odata/Products(1)`
+
+The canonical `Set(key)` URL is routed by a URL rewrite that `ODataModule.forRoot()` installs on
+the **Express** adapter. Check that `ODataModule.forRoot()` is imported (not only `forFeature`),
+that the entity set is registered (it appears in `$metadata`), and that the app runs on
+`@nestjs/platform-express`. Other adapters only route `/odata/Products/1`.
+
+## Writes answer 412 although the client sent the ETag it received
+
+Express adds its own hash `ETag` (`W/"<len>-<hash>"`) to every response, including collections and
+errors. A client that echoes that one in `If-Match` always gets `412 Precondition Failed`. Call
+`app.set('etag', false)` in `main.ts` (the library warns about it at startup), and use the
+OData ETag: the `ETag` header of a by-key read or write, or `@odata.etag` in the body.
+
+## A write answers 400 "Entity type '…' has no property '…'"
+
+The body carries a property that is not in the entity type (a typo, a property hidden with
+`@ODataExclude` or `select: false`, or a client-only field). OData requires the service to fail
+when it cannot persist a value (Part 1 §11.4.2). Fix the client, or set
+`ignoreUnknownProperties: true` in `ODataModule.forRoot()` to drop such properties instead.
+Computed properties (timestamps, version) and instance annotations (`@odata.type`) are ignored
+rather than refused.
+
+## Writes answer 428 Precondition Required
+
+The entity set has `requireIfMatch: true`: send `If-Match` with the entity's current ETag (or
+`*`) on PATCH, PUT and DELETE.
+
 ## TypeORM synchronize warning in production
 
 **Symptoms:** Console warning about `synchronize: true` in production.

@@ -27,7 +27,7 @@ Accept: application/json
 Content-Type: application/http
 Content-Transfer-Encoding: binary
 
-GET /odata/Products/1 HTTP/1.1
+GET /odata/Products(1) HTTP/1.1
 Accept: application/json
 
 --batch_abc123--
@@ -89,7 +89,7 @@ Content-Type: application/http
 Content-Transfer-Encoding: binary
 Content-ID: 2
 
-PATCH /odata/Products/5 HTTP/1.1
+PATCH /odata/Products(5) HTTP/1.1
 Content-Type: application/json
 
 {"price":9.99}
@@ -191,13 +191,30 @@ ETag (an `etag` option, `@ODataETag` or `@UpdateDateColumn`), the `ETag` header 
 `@odata.etag` in the body, on GET by key and on writes. When a changeset fails, every part gets
 the failing operation's status, even if your `changesetRunner` wraps the error.
 
+### Per-part headers
+
+Each part follows the same protocol rules as a standalone request:
+
+- `If-Match` that doesn't match, or `If-None-Match` that does (`*` matches any existing entity),
+  answers `412` for PATCH, PUT and DELETE, with no change.
+- On an entity set with `requireIfMatch`, PATCH, PUT and DELETE without `If-Match` answer `428`.
+- `Prefer: return=minimal` on a POST, PATCH or PUT part answers `204` with
+  `Preference-Applied: return=minimal` (a created entity keeps its `Location` and gets
+  `OData-EntityId`, and `$N` references to it keep working); `Prefer: return=representation`
+  is confirmed with `Preference-Applied`. A `Prefer` header on the `$batch` request itself is
+  not applied to its parts.
+- POST, PATCH and PUT bodies ignore computed properties (and, on PATCH/PUT, key properties: a
+  PUT body key that differs from the URL key is ignored), and refuse unknown properties with
+  `400` (see [CRUD: request bodies](./crud#request-bodies)).
+- Error parts carry `Content-Language` (see [Error mapping](./error-mapping#content-language)).
+
 ## Error handling
 
 **Individual request failure** (outside changeset): The failed operation returns its error status in the response. Other operations continue normally.
 
 **Changeset failure**: The entire changeset is rolled back. The response part for the failing operation contains the error. All changeset parts return a `400`/`500` status indicating rollback.
 
-**Malformed batch body**: Returns `400 Bad Request` with an OData error response:
+**Malformed batch body**: Returns `400 Bad Request` (with `Content-Language`) and an OData error response:
 
 ```json
 {

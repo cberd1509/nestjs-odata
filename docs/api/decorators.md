@@ -84,7 +84,7 @@ async getProducts(
 @ODataGetByKey(entitySetName: string, options?: ODataGetByKeyOptions)
 ```
 
-Registers a `GET /{entitySet}/:key` handler for a single entity.
+Registers a `GET /{entitySet}/:key` handler for a single entity. With `ODataModule` on Express, the canonical URL `/{entitySet}({key})` (composite: `/{entitySet}(a=1,b=2)`) reaches the same route, with the same `key` parameter; see [Entity URLs](../guide/crud#entity-urls). The same holds for `@ODataPatch`, `@ODataPut` and `@ODataDelete`.
 
 **Example:**
 
@@ -118,7 +118,7 @@ async createProduct(@Body() body: Record<string, unknown>) {
 @ODataPatch(entitySetName: string, options?: ODataPatchOptions)
 ```
 
-Registers a `PATCH /{entitySet}/:key` handler for updating entities with merge-patch semantics.
+Registers a `PATCH /{entitySet}/:key` (and `/{entitySet}({key})`) handler for updating entities with merge-patch semantics.
 
 **Example:**
 
@@ -138,7 +138,7 @@ async updateProduct(
 @ODataPut(entitySetName: string, options?: ODataPutOptions)
 ```
 
-Registers a `PUT /{entitySet}/:key` handler for full entity replacement. Unlike `PATCH` (merge-patch), `PUT` resets all unspecified fields to their column defaults.
+Registers a `PUT /{entitySet}/:key` (and `/{entitySet}({key})`) handler for full entity replacement. Unlike `PATCH` (merge-patch), `PUT` resets all unspecified fields to their column defaults.
 
 **Example:**
 
@@ -159,7 +159,7 @@ async replaceProduct(
 @ODataDelete(entitySetName: string, options?: ODataDeleteOptions)
 ```
 
-Registers a `DELETE /{entitySet}/:key` handler for deleting entities. Returns `204 No Content`.
+Registers a `DELETE /{entitySet}/:key` (and `/{entitySet}({key})`) handler for deleting entities. Returns `204 No Content`.
 
 **Example:**
 
@@ -342,9 +342,10 @@ export class ProductSummary {
 
 Marks a property as the ETag source for optimistic concurrency control. When an entity has an `@ODataETag` property:
 
-- `GET` single entity responses include an `ETag` response header and `@odata.etag` annotation
-- `PATCH`, `PUT`, and `DELETE` enforce `If-Match` header validation (returns `412 Precondition Failed` on mismatch)
+- `GET` single entity responses include an `ETag` response header and `@odata.etag` annotation; collection responses include `@odata.etag` on each entity
+- `PATCH`, `PUT`, and `DELETE` enforce `If-Match` header validation (returns `412 Precondition Failed` on mismatch) and `If-None-Match` (`412` when it matches; `*` matches any existing entity)
 - `GET` supports `If-None-Match` (returns `304 Not Modified` when unchanged)
+- with `requireIfMatch: true` on the `forFeature()` item, writes without `If-Match` return `428 Precondition Required`
 
 ```typescript
 @Entity()

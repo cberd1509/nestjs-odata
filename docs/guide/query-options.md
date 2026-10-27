@@ -367,7 +367,7 @@ All entity responses include OData v4 annotations:
 - `@odata.id` — canonical URL of the entity (e.g. `Products(1)`)
 - `@odata.type` — fully qualified type name (e.g. `#Default.Product`)
 - `{navigationProperty}@odata.navigationLink` — URL to navigate to related entities
-- `@odata.etag` — ETag value (only on entities with `@ODataETag()`)
+- `@odata.etag` — ETag value, on single entities and on each entity of a collection (only for entity sets with an ETag: `@ODataETag()`, `@UpdateDateColumn` or an `etag` option; omitted when `$select` leaves the ETag property out)
 
 ## Combining query options
 
