@@ -214,6 +214,17 @@ export function tokenize(input: string): Token[] {
       continue
     }
 
+    // `$`-prefixed identifier (`$it`, `$root`, ...): the parser decides which ones it supports.
+    if (ch === '$' && pos + 1 < input.length && isAlpha(input[pos + 1])) {
+      pos++ // consume '$'
+      let word = '$'
+      while (pos < input.length && isAlphaNum(input[pos])) {
+        word += input[pos++]
+      }
+      tokens.push({ kind: TokenKind.IDENTIFIER, value: word, position: start })
+      continue
+    }
+
     // Identifier or keyword: starts with alpha or underscore
     if (isAlpha(ch)) {
       let word = ''

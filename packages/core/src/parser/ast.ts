@@ -152,6 +152,20 @@ export interface ExpandItem {
   readonly top?: number
   readonly skip?: number
   readonly expand?: ExpandNode // recursive nested expand
+  /** Nested `$count=true`: annotate the expanded collection with `nav@odata.count`. */
+  readonly count?: boolean
+  /** Nested `$search`: only related entities matching the search are expanded. */
+  readonly search?: SearchNode
+  /**
+   * Nested `$levels` (a positive integer or `max`). `ODataQueryPipe` replaces it by the
+   * equivalent nested `$expand`s, so query translators never see it.
+   */
+  readonly levels?: number | 'max'
+  /**
+   * `$expand=nav/$count`: only `nav@odata.count` is returned, not the related entities. Only
+   * `filter` and `search` may be set alongside it.
+   */
+  readonly countOnly?: boolean
 }
 
 /** Parsed $expand value — list of expand items */

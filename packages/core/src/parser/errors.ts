@@ -56,3 +56,19 @@ export class ODataParseError extends Error {
     return new ODataParseError(enrichedMessage, position, token, snippet)
   }
 }
+
+/**
+ * Thrown for valid OData syntax the service does not implement (for example `$root`, or a
+ * nested `$compute` inside `$expand`). Answered with `501 Not Implemented` (OData 4.01 Part 1
+ * §9.3.1) instead of being silently ignored.
+ *
+ * The message only describes the unsupported part of the caller's own request, so it is sent
+ * to the client as is.
+ */
+export class ODataNotImplementedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ODataNotImplementedError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}

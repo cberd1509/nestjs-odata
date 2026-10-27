@@ -10,6 +10,7 @@ import type { ArgumentsHost } from '@nestjs/common'
 import { buildODataErrorResponse, httpStatusToODataCode } from './odata-error.js'
 import type { ODataErrorMapper } from './odata-error.js'
 import { ODataExceptionFilter } from './odata-exception.filter.js'
+import { ODataNotImplementedError } from '../parser/errors.js'
 
 class DomainProblem extends Error {
   constructor(
@@ -235,5 +236,18 @@ describe('default mapping of wrapped errors', () => {
     // A wrapped 5xx stays a redacted 500.
     const internal = new Error('outer', { cause: new Error('db password') })
     expect(buildODataErrorResponse(internal).status).toBe(500)
+  })
+})
+
+describe('default mapping of unsupported query features', () => {
+  it('answers 501 NotImplemented and keeps the message (P1 §9.3.1)', () => {
+    expect(
+      buildODataErrorResponse(new ODataNotImplementedError("'$root' is not supported")),
+    ).toEqual({
+      status: 501,
+      body: {
+        error: { code: 'NotImplemented', message: "'$root' is not supported", details: [] },
+      },
+    })
   })
 })
