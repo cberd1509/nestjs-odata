@@ -2,10 +2,10 @@
 
 ## Development Setup
 
-Prerequisites: Node.js 22.22.1 or later (CI uses the version in `.node-version`, currently 24) and
+Prerequisites: Node.js 24 or later (the version CI uses is pinned in `.node-version`) and
 pnpm 10 (the exact version is pinned in the root `package.json` `packageManager` field; run
-`corepack enable` to use it). The contributor tooling (lint-staged, commitlint, Vitest) needs
-Node.js 22 or later; the published packages themselves do not declare an engines constraint.
+`corepack enable` to use it). This applies to working on the repository only; the published
+packages themselves do not declare an engines constraint.
 
 ```bash
 git clone https://github.com/cberd1509/nestjs-odata.git
