@@ -129,9 +129,7 @@ import { HealthModule } from './health/health.module'
 
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      /* ... */
-    }),
+    TypeOrmModule.forRoot({/* ... */}),
     ODataModule.forRoot({
       serviceRoot: '/odata',
       namespace: 'Default',

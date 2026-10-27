@@ -222,8 +222,7 @@ function defaultErrorResponse(exception: unknown, depth = 0): UnlocalizedErrorRe
     // HttpExceptions built with an OData-shaped body ({ error: { message, details? } }) keep
     // its message and its valid details (4xx only: 5xx bodies are never sent).
     const response = exception.getResponse() as
-      | { error?: { message?: unknown; details?: unknown } }
-      | string
+      { error?: { message?: unknown; details?: unknown } } | string
     const error = typeof response === 'object' ? response?.error : undefined
     const odataMessage = typeof error?.message === 'string' ? error.message : undefined
     const result = statusResponse(exception.getStatus(), odataMessage ?? exception.message)

@@ -83,8 +83,7 @@ export interface ODataWriteHandlers<TEntity extends object = Record<string, unkn
  * as a provider of the feature module (so it can inject your services).
  */
 export type ODataWriteHandlersDefinition =
-  | ODataWriteHandlers<any>
-  | (new (...args: any[]) => ODataWriteHandlers<any>)
+  ODataWriteHandlers<any> | (new (...args: any[]) => ODataWriteHandlers<any>)
 
 /**
  * Where an entity set's ETag comes from: a property name, or a function of the entity. The
@@ -92,8 +91,7 @@ export type ODataWriteHandlersDefinition =
  * ETag (`W/"..."` or `"..."`), used as is. Return `undefined`/`null` for no ETag.
  */
 export type ODataETagSource =
-  | string
-  | ((entity: Record<string, unknown>) => string | number | Date | null | undefined)
+  string | ((entity: Record<string, unknown>) => string | number | Date | null | undefined)
 
 /**
  * Runs the operations of one `$batch` changeset atomically. `work` executes every operation

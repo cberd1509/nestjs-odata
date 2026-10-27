@@ -874,8 +874,7 @@ export class TypeOrmAutoHandler {
 /** A header of the current OData request (`undefined` outside a request, or when absent). */
 function requestHeader(name: string): string | undefined {
   const request = getODataRequestContext()?.request as
-    | { headers?: Record<string, string | string[] | undefined> }
-    | undefined
+    { headers?: Record<string, string | string[] | undefined> } | undefined
   const value = request?.headers?.[name]
   return Array.isArray(value) ? value.join(', ') : value || undefined
 }
