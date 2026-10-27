@@ -147,6 +147,11 @@ Entities decorated with `@ODataETag()` get automatic optimistic concurrency cont
 
 This prevents lost-update scenarios in concurrent environments without pessimistic locking.
 
+`If-Match: *` matches any existing entity, and a comma-separated list matches when any entry
+does. The `etag` option of `ODataTypeOrmModule.forFeature()` items sets the ETag source per
+entity set (a version column, a function); with [write handlers](./write-handlers), the handler
+receives `If-Match` and must check it in the same transaction as its write.
+
 ```typescript
 import { ODataETag } from '@nestjs-odata/core'
 
@@ -219,6 +224,10 @@ Guards decide whether a request may call a route. To restrict _which rows_ it se
 [row-level scope](./row-level-scopes) per entity set. Scopes apply to collections, `$count`,
 by-key reads, every `$expand` path, lambdas in `$filter`, `$apply`, `$batch` and the existence
 checks of writes. Set `requireScope: true` so an entity set without a scope fails closed.
+
+[Write handlers](./write-handlers) receive the raw parsed body: there is no repository column
+whitelist, so validate it there. Deep inserts never write nested entities of a handler-backed
+entity set through the repository (400).
 
 ## Recommended production configuration
 

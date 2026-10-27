@@ -363,7 +363,7 @@ describe('TypeOrmScopeService', () => {
     })
   })
 
-  it('locks the checked row on drivers with row locks', async () => {
+  it('locks the checked row on drivers with row locks, inside a transaction only', async () => {
     const calls: string[] = []
     const qb: Record<string, unknown> = {}
     for (const m of ['setFindOptions', 'andWhere']) qb[m] = () => qb
@@ -375,12 +375,17 @@ describe('TypeOrmScopeService', () => {
     const manager = {
       connection: { options: { type: 'postgres' } },
       createQueryBuilder: () => qb,
+      queryRunner: { isTransactionActive: true },
     }
     const { service } = makeService({})
     await service.findOne('Folders', { id: 1 }, 'write', manager as never, { lock: true })
     expect(calls).toEqual(['pessimistic_write'])
     calls.length = 0
     await service.findOne('Folders', { id: 1 }, 'write', manager as never)
+    expect(calls).toEqual([])
+    // PostgreSQL refuses FOR UPDATE outside a transaction: no lock there.
+    const outside = { ...manager, queryRunner: undefined }
+    await service.findOne('Folders', { id: 1 }, 'write', outside as never, { lock: true })
     expect(calls).toEqual([])
   })
 

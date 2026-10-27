@@ -3,6 +3,7 @@ import type { ODataQuery, ODataQueryResult, EdmEntityType, IETagProvider } from 
 import {
   EdmRegistry,
   ETAG_PROVIDER,
+  getODataRequestContext,
   navigationTargetTypeName,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
@@ -11,6 +12,15 @@ import {
 import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
+import { entityLocation } from '../utils/entity-key.js'
+import type { ODataWriteRegistry } from '../write/write-registry.js'
+import type {
+  ODataWriteContext,
+  ODataWriteHandlers,
+  ODataWriteOperation,
+} from '../write/write.types.js'
+import { etagMatches, resolveEntityETag } from '../write/etag.js'
+import { assertHandlerEntity, isDeepInsertBody, writeNotAllowed } from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
 
 /**
@@ -38,7 +48,102 @@ export class TypeOrmAutoHandler {
     @Optional() @Inject(ETAG_PROVIDER) private readonly etagProvider?: IETagProvider,
     private readonly dataSource?: DataSource,
     private readonly scopes?: TypeOrmScopeService,
+    private readonly writes?: ODataWriteRegistry,
   ) {}
+
+  /** The write handlers registered for an entity set, if any. */
+  private handlersFor(entitySetName: string): ODataWriteHandlers<any> | undefined {
+    return this.writes?.getHandlers(entitySetName)
+  }
+
+  /** Build the context handed to a write handler. */
+  private writeContext(
+    entitySetName: string,
+    entityType: EdmEntityType,
+    operation: ODataWriteOperation,
+    extra: Partial<ODataWriteContext> = {},
+  ): ODataWriteContext {
+    const request = getODataRequestContext()
+    return {
+      entitySetName,
+      entityType,
+      operation,
+      executionContext: request?.executionContext,
+      request: request?.request,
+      ...extra,
+    }
+  }
+
+  /** The entity's ETag (`etag` option, else @ODataETag / @UpdateDateColumn). */
+  private etagOf(entitySetName: string, entity: ObjectLiteral): string | undefined {
+    return resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
+  }
+
+  /** Attach `__etag` (read by ODataResponseInterceptor) when the entity has an ETag. */
+  private withETag(entitySetName: string, entity: ObjectLiteral): ObjectLiteral {
+    const etag = this.etagOf(entitySetName, entity)
+    return etag ? { ...entity, __etag: etag } : entity
+  }
+
+  /** True when the entity set has an ETag (an `etag` option or a provider column). */
+  private hasETag(entitySetName: string): boolean {
+    return (
+      this.writes?.getETag(entitySetName) !== undefined ||
+      this.etagProvider?.getETagColumn(entitySetName) !== undefined
+    )
+  }
+
+  /**
+   * 412 unless `If-Match` is satisfied by the current entity: `*`, or a list containing its
+   * ETag. A no-op when the entity set has no ETag.
+   */
+  private assertIfMatch(
+    entitySetName: string,
+    ifMatch: string | undefined,
+    current: ObjectLiteral,
+  ): void {
+    if (!ifMatch) return
+    const etag = this.etagOf(entitySetName, current)
+    if (etag === undefined || etagMatches(ifMatch, etag)) return
+    throw new HttpException(
+      {
+        error: {
+          code: '412',
+          message: 'The ETag value does not match the current version of the entity',
+        },
+      },
+      412,
+    )
+  }
+
+  /** Run a POST through the entity set's write handlers. */
+  private async createWithHandlers(
+    handlers: ODataWriteHandlers<any>,
+    body: Record<string, unknown>,
+    entitySetName: string,
+    entityType: EdmEntityType,
+    manager?: EntityManager,
+  ): Promise<{ entity: unknown; locationUrl: string }> {
+    const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
+    const operation: ODataWriteOperation = deep ? 'deepInsert' : 'create'
+    const handler = deep ? handlers.deepInsert : handlers.create
+    if (!handler) throw writeNotAllowed(entitySetName, operation)
+    const result = await handler.call(
+      handlers,
+      body,
+      this.writeContext(entitySetName, entityType, operation, { manager }),
+    )
+    const entity = assertHandlerEntity(result, entitySetName, operation)
+    return {
+      entity: this.withETag(entitySetName, entity),
+      locationUrl: entityLocation(
+        this.options.serviceRoot,
+        entitySetName,
+        entityType.keyProperties,
+        entity,
+      ),
+    }
+  }
 
   /**
    * Load the entity an update, replace or delete targets, through its row-level scope (rows
@@ -303,33 +408,14 @@ export class TypeOrmAutoHandler {
     }
 
     // ETag support: check If-None-Match for cache validation
-    if (this.etagProvider) {
-      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
-      if (etagColumn) {
-        const currentEtag = this.etagProvider.computeETag(
-          entity as Record<string, unknown>,
-          etagColumn,
-        )
-        // Attach ETag to entity for interceptor to pick up
-        const entityWithEtag = { ...(entity as Record<string, unknown>), __etag: currentEtag }
-
-        // If-None-Match: return 304 signal when ETag matches (resource not modified)
-        if (
-          ifNoneMatchHeader &&
-          this.etagProvider.validateIfMatch(
-            ifNoneMatchHeader,
-            entity as Record<string, unknown>,
-            etagColumn,
-          )
-        ) {
-          return { __notModified: true, etag: currentEtag }
-        }
-
-        return entityWithEtag
-      }
+    const currentEtag = this.etagOf(entitySetName, entity)
+    if (!currentEtag) return entity
+    // If-None-Match: return 304 signal when ETag matches (resource not modified)
+    if (ifNoneMatchHeader && etagMatches(ifNoneMatchHeader, currentEtag)) {
+      return { __notModified: true, etag: currentEtag }
     }
-
-    return entity
+    // Attach ETag to entity for interceptor to pick up
+    return { ...entity, __etag: currentEtag }
   }
 
   /**
@@ -345,18 +431,16 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
   ): Promise<{ entity: unknown; locationUrl: string }> {
     const entityType = this.resolveEntityType(entitySetName)
+    const handlers = this.handlersFor(entitySetName)
+    if (handlers) return this.createWithHandlers(handlers, body, entitySetName, entityType)
     const repo = this.resolveRepo(entitySetName)
-    const created = repo.create(body as ObjectLiteral)
-    const saved = await repo.save(created)
-
-    // Build key string for Location URL
-    const keyParts = entityType.keyProperties.map((kp) => {
-      const val = (saved as Record<string, unknown>)[kp]
-      return entityType.keyProperties.length === 1 ? String(val) : `${kp}=${String(val)}`
-    })
-    const keyStr = keyParts.join(',')
-    const locationUrl = `${this.options.serviceRoot}/${entitySetName}(${keyStr})`
-
+    const saved = await repo.save(repo.create(body as ObjectLiteral))
+    const locationUrl = entityLocation(
+      this.options.serviceRoot,
+      entitySetName,
+      entityType.keyProperties,
+      saved,
+    )
     return { entity: saved, locationUrl }
   }
 
@@ -394,6 +478,10 @@ export class TypeOrmAutoHandler {
     }
 
     const entityType = this.resolveEntityType(entitySetName)
+    const handlers = depth === 0 ? this.handlersFor(entitySetName) : undefined
+    if (handlers) {
+      return this.createWithHandlers(handlers, body, entitySetName, entityType, manager)
+    }
     const handlerRepo = this.resolveRepo(entitySetName)
 
     // Separate scalar props from navigation props
@@ -432,6 +520,20 @@ export class TypeOrmAutoHandler {
             error: {
               code: '400',
               message: `Deep insert: cannot resolve entity set for navigation property '${navPropName}' (type '${childTypeName}')`,
+            },
+          },
+          400,
+        )
+      }
+      // Children whose entity set writes through handlers can't be saved with the repository.
+      if (this.handlersFor(childEntitySet.name)) {
+        throw new HttpException(
+          {
+            error: {
+              code: '400',
+              message:
+                `Deep insert into '${childEntitySet.name}' is not supported: its writes go through ` +
+                `write handlers. Give '${entitySetName}' a deepInsert handler instead.`,
             },
           },
           400,
@@ -499,14 +601,12 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    // Build location URL from saved parent's key
-    const keyParts = entityType.keyProperties.map((kp) => {
-      const val = savedParent[kp]
-      return entityType.keyProperties.length === 1 ? String(val) : `${kp}=${String(val)}`
-    })
-    const keyStr = keyParts.join(',')
-    const locationUrl = `${this.options.serviceRoot}/${entitySetName}(${keyStr})`
-
+    const locationUrl = entityLocation(
+      this.options.serviceRoot,
+      entitySetName,
+      entityType.keyProperties,
+      savedParent,
+    )
     return { entity: savedParent, locationUrl }
   }
 
@@ -545,33 +645,12 @@ export class TypeOrmAutoHandler {
     const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
     // ETag If-Match validation before update
-    if (this.etagProvider && ifMatchHeader) {
-      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
-      if (etagColumn) {
-        if (
-          !this.etagProvider.validateIfMatch(
-            ifMatchHeader,
-            current as Record<string, unknown>,
-            etagColumn,
-          )
-        ) {
-          throw new HttpException(
-            {
-              error: {
-                code: '412',
-                message: 'The ETag value does not match the current version of the entity',
-              },
-            },
-            412,
-          )
-        }
-      }
-    }
+    this.assertIfMatch(entitySetName, ifMatchHeader, current)
 
     // Merge-patch onto the entity just loaded (no second SELECT, unlike preload()).
     // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
     const patch = withoutKeyProperties(entityType.keyProperties, body)
-    return repo.save(repo.merge(current, patch as ObjectLiteral))
+    return this.withETag(entitySetName, await repo.save(repo.merge(current, patch as ObjectLiteral)))
   }
 
   /**
@@ -614,28 +693,7 @@ export class TypeOrmAutoHandler {
     const existing = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
     // ETag If-Match validation (identical block to handleUpdate — T-10-04)
-    if (this.etagProvider && ifMatchHeader) {
-      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
-      if (etagColumn) {
-        if (
-          !this.etagProvider.validateIfMatch(
-            ifMatchHeader,
-            existing as Record<string, unknown>,
-            etagColumn,
-          )
-        ) {
-          throw new HttpException(
-            {
-              error: {
-                code: '412',
-                message: 'The ETag value does not match the current version of the entity',
-              },
-            },
-            412,
-          )
-        }
-      }
-    }
+    this.assertIfMatch(entitySetName, ifMatchHeader, existing)
 
     // Build full replacement entity using column metadata (Pattern 1 from RESEARCH)
     // repo.metadata.columns gives us all column metadata without needing DataSource injection
@@ -662,7 +720,7 @@ export class TypeOrmAutoHandler {
     }
 
     const entity = repo.create(replacement as ObjectLiteral)
-    return repo.save(entity)
+    return this.withETag(entitySetName, await repo.save(entity))
   }
 
   /**
@@ -682,34 +740,48 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
     // Only load the row when the scope or an If-Match needs it; otherwise delete directly.
-    const etagColumn = ifMatchHeader ? this.etagProvider?.getETagColumn(entitySetName) : undefined
-    if (this.scopes?.isScoped(entitySetName) || etagColumn) {
+    if (this.scopes?.isScoped(entitySetName) || (ifMatchHeader && this.hasETag(entitySetName))) {
       const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
-      if (etagColumn && this.etagProvider && ifMatchHeader) {
-        if (
-          !this.etagProvider.validateIfMatch(
-            ifMatchHeader,
-            current as Record<string, unknown>,
-            etagColumn,
-          )
-        ) {
-          throw new HttpException(
-            {
-              error: {
-                code: '412',
-                message: 'The ETag value does not match the current version of the entity',
-              },
-            },
-            412,
-          )
-        }
-      }
+      this.assertIfMatch(entitySetName, ifMatchHeader, current)
     }
 
     const result = await repo.delete(where)
     if (result.affected === 0) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
+  }
+
+  /**
+   * Run a PATCH, PUT or DELETE through the entity set's write handlers. Rows outside the row-level
+   * scope answer 404 before the handler runs. The handler owns its transaction and If-Match
+   * check, so no lock is held while it runs.
+   */
+  private async writeWithHandlers(
+    handlers: ODataWriteHandlers<any>,
+    operation: 'update' | 'replace' | 'delete',
+    keyStr: string,
+    body: Record<string, unknown>,
+    entitySetName: string,
+    ifMatchHeader: string | undefined,
+  ): Promise<unknown> {
+    const entityType = this.resolveEntityType(entitySetName)
+    const where = parseODataKey(keyStr, entityType.keyProperties)
+    if (this.scopes?.isScoped(entitySetName)) {
+      await this.findForWrite(entitySetName, keyStr, where, this.resolveRepo(entitySetName))
+    }
+    const ctx = this.writeContext(entitySetName, entityType, operation, {
+      rawKey: keyStr,
+      ifMatch: ifMatchHeader,
+    })
+    if (operation === 'delete') {
+      if (!handlers.delete) throw writeNotAllowed(entitySetName, operation)
+      await handlers.delete(where, ctx)
+      return undefined
+    }
+    const handler = handlers[operation]
+    if (!handler) throw writeNotAllowed(entitySetName, operation)
+    const result = await handler.call(handlers, where, body, ctx)
+    return this.withETag(entitySetName, assertHandlerEntity(result, entitySetName, operation))
   }
 
   /**
@@ -722,6 +794,10 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
     ifMatchHeader?: string,
   ): Promise<unknown> {
+    const handlers = this.handlersFor(entitySetName)
+    if (handlers) {
+      return this.writeWithHandlers(handlers, 'update', keyStr, body, entitySetName, ifMatchHeader)
+    }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.update(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
     )
@@ -734,6 +810,10 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
     ifMatchHeader?: string,
   ): Promise<unknown> {
+    const handlers = this.handlersFor(entitySetName)
+    if (handlers) {
+      return this.writeWithHandlers(handlers, 'replace', keyStr, body, entitySetName, ifMatchHeader)
+    }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.replace(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
     )
@@ -741,6 +821,11 @@ export class TypeOrmAutoHandler {
 
   /** Handle OData DELETE — remove entity. See {@link delete}. */
   async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
+    const handlers = this.handlersFor(entitySetName)
+    if (handlers) {
+      await this.writeWithHandlers(handlers, 'delete', keyStr, {}, entitySetName, ifMatchHeader)
+      return
+    }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.delete(keyStr, entitySetName, ifMatchHeader, repo, manager),
     )

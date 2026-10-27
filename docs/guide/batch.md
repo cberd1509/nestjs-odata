@@ -178,6 +178,19 @@ curl -X POST http://localhost:3000/odata/$batch \
 export class AppModule {}
 ```
 
+### Write handlers and custom transactions
+
+Entity sets with [custom write handlers](./write-handlers) dispatch their changeset operations to
+those handlers, with the changeset transaction's `EntityManager` as `ctx.manager`. To run
+changesets inside your own unit of work instead of the default `QueryRunner` transaction, pass a
+`changesetRunner` to `ODataTypeOrmModule.forRoot()`. See
+[$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).
+
+Response parts carry the `Location` header of created entities and, for entity sets with an
+ETag (an `etag` option, `@ODataETag` or `@UpdateDateColumn`), the `ETag` header and
+`@odata.etag` in the body, on GET by key and on writes. When a changeset fails, every part gets
+the failing operation's status, even if your `changesetRunner` wraps the error.
+
 ## Error handling
 
 **Individual request failure** (outside changeset): The failed operation returns its error status in the response. Other operations continue normally.

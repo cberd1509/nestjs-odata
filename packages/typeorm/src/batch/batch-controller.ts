@@ -13,7 +13,16 @@
  *   T-05-05: Error responses use OData error format, no stack traces.
  */
 
-import { Controller, Post, Req, Res, Inject, HttpStatus, Optional } from '@nestjs/common'
+import {
+  Controller,
+  HttpException,
+  Post,
+  Req,
+  Res,
+  Inject,
+  HttpStatus,
+  Optional,
+} from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import { DataSource, type EntityManager, type ObjectLiteral } from 'typeorm'
 
@@ -38,6 +47,8 @@ export interface BatchResponse {
 }
 import {
   EdmRegistry,
+  ETAG_PROVIDER,
+  getODataRequestContext,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
   parseBatchBody,
@@ -46,12 +57,23 @@ import {
   type BatchResponsePart,
   type BatchRequestPart,
   type EdmEntityType,
+  type IETagProvider,
 } from '@nestjs-odata/core'
 import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
 import type { EntityClass } from '@nestjs-odata/core'
 import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
 import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
+import { entityLocation } from '../utils/entity-key.js'
+import { ODataWriteRegistry } from '../write/write-registry.js'
+import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
+import type {
+  ODataChangesetRunner,
+  ODataWriteContext,
+  ODataWriteHandlers,
+} from '../write/write.types.js'
+import { resolveEntityETag } from '../write/etag.js'
+import { assertHandlerEntity, isDeepInsertBody, writeNotAllowed } from '../write/handlers.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -96,6 +118,30 @@ function statusToCode(status: number): string {
     500: 'InternalServerError',
   }
   return codes[status] ?? 'Error'
+}
+
+/** 404 part for an entity that does not exist or is outside its row-level scope. */
+function notFoundPart(
+  contentId: string | undefined,
+  entitySetName: string,
+  keyStr: string,
+): BatchResponsePart {
+  return {
+    contentId,
+    statusCode: 404,
+    headers: {},
+    body: buildODataError('NotFound', `Entity '${entitySetName}' with key '${keyStr}' not found`),
+  }
+}
+
+/** The first HttpException in an error's `cause` chain (depth-limited). */
+function findHttpException(err: unknown): HttpException | undefined {
+  let current = err
+  for (let depth = 0; depth < 5 && current; depth++) {
+    if (current instanceof HttpException) return current
+    current = (current as { cause?: unknown }).cause
+  }
+  return undefined
 }
 
 /**
@@ -145,7 +191,143 @@ export class BatchController {
     @Optional()
     @Inject(TypeOrmScopeService)
     private readonly scopes?: TypeOrmScopeService,
+    @Optional()
+    @Inject(ODataWriteRegistry)
+    private readonly writes?: ODataWriteRegistry,
+    @Optional()
+    @Inject(ODATA_CHANGESET_RUNNER)
+    private readonly changesetRunner?: ODataChangesetRunner,
+    @Optional()
+    @Inject(ETAG_PROVIDER)
+    private readonly etagProvider?: IETagProvider,
   ) {}
+
+  /**
+   * Run a changeset's operations atomically: through the app's `changesetRunner` when one is
+   * registered, else in a TypeORM QueryRunner transaction. `work` throws to roll back.
+   */
+  private async runChangeset<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
+    if (this.changesetRunner) {
+      const request = getODataRequestContext()
+      return this.changesetRunner(work, {
+        executionContext: request?.executionContext,
+        request: request?.request,
+      })
+    }
+    const queryRunner = this.dataSource.createQueryRunner()
+    await queryRunner.connect()
+    await queryRunner.startTransaction()
+    try {
+      const result = await work(queryRunner.manager)
+      await queryRunner.commitTransaction()
+      return result
+    } catch (err) {
+      await queryRunner.rollbackTransaction()
+      throw err
+    } finally {
+      await queryRunner.release()
+    }
+  }
+
+  /**
+   * A response part carrying an entity: the body gets `@odata.etag` and the part an `ETag`
+   * header when the entity set has an ETag (same rules as the HTTP routes).
+   */
+  private entityPart(
+    contentId: string | undefined,
+    statusCode: number,
+    entitySetName: string,
+    entity: Record<string, unknown>,
+    headers: Record<string, string> = {},
+  ): BatchResponsePart {
+    const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
+    return {
+      contentId,
+      statusCode,
+      headers: etag ? { ...headers, etag } : headers,
+      body: JSON.stringify(etag ? { '@odata.etag': etag, ...entity } : entity),
+    }
+  }
+
+  /**
+   * Dispatch a POST/PATCH/PUT/DELETE batch part to the entity set's write handlers.
+   * Rows outside the entity set's row-level scope answer 404 before the handler runs (without
+   * a row lock outside a changeset, like the HTTP routes).
+   * `ctx.manager` is set only inside a changeset (the changeset's transaction).
+   */
+  private async dispatchToHandlers(
+    handlers: ODataWriteHandlers<any>,
+    part: BatchRequestPart,
+    method: string,
+    entitySetName: string,
+    entityType: EdmEntityType,
+    entityClass: EntityClass,
+    key: string | undefined,
+    manager: EntityManager,
+    inChangeset: boolean,
+  ): Promise<BatchResponsePart> {
+    const request = getODataRequestContext()
+    const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
+    const base = {
+      entitySetName,
+      entityType,
+      executionContext: request?.executionContext,
+      request: request?.request,
+      manager: inChangeset ? manager : undefined,
+      batch: { contentId: part.contentId, inChangeset },
+      ifMatch: part.headers['if-match'],
+    }
+
+    if (method === 'POST') {
+      const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
+      const operation = deep ? 'deepInsert' : 'create'
+      const handler = deep ? handlers.deepInsert : handlers.create
+      if (!handler) throw writeNotAllowed(entitySetName, operation)
+      const ctx: ODataWriteContext = { ...base, operation }
+      const entity = assertHandlerEntity(
+        await handler.call(handlers, body, ctx),
+        entitySetName,
+        operation,
+      )
+      return this.entityPart(part.contentId, 201, entitySetName, entity, {
+        location: entityLocation(
+          this.options.serviceRoot,
+          entitySetName,
+          entityType.keyProperties,
+          entity,
+        ),
+      })
+    }
+
+    if (key === undefined) {
+      return {
+        contentId: part.contentId,
+        statusCode: 400,
+        headers: {},
+        body: buildODataError('BadRequest', `${method} requires a key: ${part.url}`),
+      }
+    }
+    const where = parseODataKey(key, entityType.keyProperties)
+    if (
+      this.scopes?.isScoped(entitySetName) &&
+      !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
+    ) {
+      return notFoundPart(part.contentId, entitySetName, key)
+    }
+
+    if (method === 'PATCH' || method === 'PUT') {
+      const operation = method === 'PATCH' ? 'update' : 'replace'
+      const handler = method === 'PATCH' ? handlers.update : handlers.replace
+      if (!handler) throw writeNotAllowed(entitySetName, operation)
+      const result = await handler.call(handlers, where, body, { ...base, operation, rawKey: key })
+      const entity = assertHandlerEntity(result, entitySetName, operation)
+      return this.entityPart(part.contentId, 200, entitySetName, entity)
+    }
+
+    if (!handlers.delete) throw writeNotAllowed(entitySetName, 'delete')
+    await handlers.delete(where, { ...base, operation: 'delete', rawKey: key })
+    return { contentId: part.contentId, statusCode: 204, headers: {}, body: undefined }
+  }
 
   /**
    * Load an entity by key for a batch part, through the entity set's row-level scope when it
@@ -276,11 +458,14 @@ export class BatchController {
     try {
       // A write outside a changeset still runs its scope check and the write in one
       // transaction, so the row cannot leave the scope in between.
+      // Not for entity sets with write handlers: they own their transaction, and a row lock
+      // held here while the handler writes on another connection would deadlock.
       const entitySetName = parseEntityUrl(part.url)?.entitySetName
       if (
         part.method.toUpperCase() !== 'GET' &&
         entitySetName &&
-        this.scopes?.isScoped(entitySetName)
+        this.scopes?.isScoped(entitySetName) &&
+        !this.writes?.getHandlers(entitySetName)
       ) {
         return await this.dataSource.transaction((manager) =>
           this.dispatchWithManager(part, manager),
@@ -300,52 +485,42 @@ export class BatchController {
    * Per WRITE-03 / T-10-08: contentIdMap is local to each changeset call — never leaks across changesets.
    */
   private async executeChangeset(parts: readonly BatchRequestPart[]): Promise<BatchResponsePart[]> {
-    const queryRunner = this.dataSource.createQueryRunner()
-    await queryRunner.connect()
-    await queryRunner.startTransaction()
-
-    // Per T-10-08: declared inside executeChangeset() so each changeset gets a fresh Map.
-    const contentIdMap = new Map<string, string>()
-
+    // The failing part's response, recorded outside the thrown error: a changesetRunner may
+    // wrap or replace the error it sees, and the client must still get the part's own status.
+    let failure: BatchResponsePart | undefined
     try {
-      const results: BatchResponsePart[] = []
+      return await this.runChangeset(async (manager) => {
+        // Per T-10-08: declared inside the changeset so each changeset gets a fresh Map.
+        const contentIdMap = new Map<string, string>()
+        const results: BatchResponsePart[] = []
 
-      for (const part of parts) {
-        // Resolve any $N references in URL and body before dispatching (WRITE-03)
-        const resolvedPart = this.resolveContentIdReferences(part, contentIdMap)
-        const result = await this.dispatchWithManager(resolvedPart, queryRunner.manager)
-        results.push(result)
+        for (const part of parts) {
+          // Resolve any $N references in URL and body before dispatching (WRITE-03)
+          const resolvedPart = this.resolveContentIdReferences(part, contentIdMap)
+          const result = await this.dispatchWithManager(resolvedPart, manager, true)
+          results.push(result)
 
-        // Per D-02: if any changeset operation fails (status >= 400), roll back
-        // the entire changeset — do not commit partial changes.
-        if (result.statusCode >= 400) {
-          throw new ChangesetOperationError(result.statusCode, result.body ?? 'Operation failed')
+          // Per D-02: if any changeset operation fails (status >= 400), roll back
+          // the entire changeset — do not commit partial changes.
+          if (result.statusCode >= 400) {
+            failure = result
+            throw new ChangesetOperationError(result.statusCode, result.body ?? 'Operation failed')
+          }
+
+          // Store location URL in contentIdMap after a successful 201 with Content-ID (WRITE-03)
+          const location = result.headers['location']
+          if (result.statusCode === 201 && location && part.contentId !== undefined) {
+            contentIdMap.set(part.contentId, location)
+          }
         }
-
-        // Store location URL in contentIdMap after a successful 201 with Content-ID (WRITE-03)
-        const location = result.headers['location']
-        if (result.statusCode === 201 && location && part.contentId !== undefined) {
-          contentIdMap.set(part.contentId, location)
-        }
-      }
-
-      await queryRunner.commitTransaction()
-      return results
+        return results
+      })
     } catch (err) {
-      await queryRunner.rollbackTransaction()
-
       // All changeset parts get the same error response (BATCH-02 atomicity)
-      const errorResponse =
-        err instanceof ChangesetOperationError
-          ? {
-              statusCode: err.statusCode,
-              headers: {} as Record<string, string>,
-              body: err.body,
-            }
-          : this.buildErrorResponse(err)
+      const errorResponse = failure
+        ? { statusCode: failure.statusCode, headers: {}, body: failure.body }
+        : this.buildErrorResponse(err)
       return parts.map((p) => ({ ...errorResponse, contentId: p.contentId }))
-    } finally {
-      await queryRunner.release()
     }
   }
 
@@ -396,6 +571,7 @@ export class BatchController {
   private async dispatchWithManager(
     part: BatchRequestPart,
     manager: EntityManager,
+    inChangeset = false,
   ): Promise<BatchResponsePart> {
     const parsed = parseEntityUrl(part.url)
     if (!parsed) {
@@ -447,6 +623,20 @@ export class BatchController {
     const method = part.method.toUpperCase()
 
     try {
+      const handlers = method === 'GET' ? undefined : this.writes?.getHandlers(entitySetName)
+      if (handlers && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+        return await this.dispatchToHandlers(
+          handlers,
+          part,
+          method,
+          entitySetName,
+          entityType,
+          entityClass,
+          key,
+          manager,
+          inChangeset,
+        )
+      }
       if (method === 'GET') {
         if (key !== undefined) {
           return await this.dispatchGetByKey(
@@ -543,23 +733,8 @@ export class BatchController {
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
     const entity = await this.findScoped(entitySetName, entityClass, where, manager, 'entity')
-    if (!entity) {
-      return {
-        contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError(
-          'NotFound',
-          `Entity '${entitySetName}' with key '${keyStr}' not found`,
-        ),
-      }
-    }
-    return {
-      contentId,
-      statusCode: 200,
-      headers: {},
-      body: JSON.stringify(entity),
-    }
+    if (!entity) return notFoundPart(contentId, entitySetName, keyStr)
+    return this.entityPart(contentId, 200, entitySetName, entity)
   }
 
   /** GET /EntitySet (collection — basic support) */
@@ -606,21 +781,9 @@ export class BatchController {
     const repo = manager.getRepository(entityClass as new () => ObjectLiteral)
     const created = repo.create(body as ObjectLiteral)
     const saved = (await repo.save(created)) as Record<string, unknown>
-
-    // Build Location URL
-    const keyParts = keyProperties.map((kp) => {
-      const val = saved[kp]
-      return keyProperties.length === 1 ? String(val) : `${kp}=${String(val)}`
+    return this.entityPart(part.contentId, 201, entitySetName, saved, {
+      location: entityLocation(this.options.serviceRoot, entitySetName, keyProperties, saved),
     })
-    const keyStr = keyParts.join(',')
-    const locationUrl = `${this.options.serviceRoot}/${entitySetName}(${keyStr})`
-
-    return {
-      contentId: part.contentId,
-      statusCode: 201,
-      headers: { location: locationUrl },
-      body: JSON.stringify(saved),
-    }
   }
 
   /** PATCH /EntitySet(key) */
@@ -636,28 +799,13 @@ export class BatchController {
     const where = parseODataKey(keyStr, keyProperties)
     const EntityCls = entityClass as new () => ObjectLiteral
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) {
-      return {
-        contentId: part.contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError(
-          'NotFound',
-          `Entity '${entitySetName}' with key '${keyStr}' not found`,
-        ),
-      }
-    }
+    if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
     // Merge patch fields onto the existing entity, then save. Key properties in the body are
     // ignored (OData §11.4.3): the URL key identifies the row.
     const patch = withoutKeyProperties(keyProperties, body)
     const merged = manager.merge(EntityCls, existing, patch as ObjectLiteral)
     const saved = await manager.save(EntityCls, merged)
-    return {
-      contentId: part.contentId,
-      statusCode: 200,
-      headers: {},
-      body: JSON.stringify(saved),
-    }
+    return this.entityPart(part.contentId, 200, entitySetName, saved)
   }
 
   /**
@@ -692,17 +840,7 @@ export class BatchController {
     }
 
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) {
-      return {
-        contentId: part.contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError(
-          'NotFound',
-          `Entity '${entitySetName}' with key '${keyStr}' not found`,
-        ),
-      }
-    }
+    if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
 
     // Build full replacement using column metadata — same logic as handleReplace()
     const meta = this.dataSource.getMetadata(entityClass)
@@ -730,13 +868,7 @@ export class BatchController {
     const repo = manager.getRepository(EntityCls)
     const entity = repo.create(replacement as ObjectLiteral)
     const saved = await manager.save(EntityCls, entity)
-
-    return {
-      contentId: part.contentId,
-      statusCode: 200,
-      headers: {},
-      body: JSON.stringify(saved),
-    }
+    return this.entityPart(part.contentId, 200, entitySetName, saved)
   }
 
   /** DELETE /EntitySet(key) */
@@ -749,12 +881,7 @@ export class BatchController {
     contentId?: string,
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
-    const notFound = (): BatchResponsePart => ({
-      contentId,
-      statusCode: 404,
-      headers: {},
-      body: buildODataError('NotFound', `Entity '${entitySetName}' with key '${keyStr}' not found`),
-    })
+    const notFound = () => notFoundPart(contentId, entitySetName, keyStr)
     if (
       this.scopes?.isScoped(entitySetName) &&
       !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
@@ -776,6 +903,21 @@ export class BatchController {
    * Never exposes stack traces (T-05-05).
    */
   private buildErrorResponse(err: unknown, contentId?: string): BatchResponsePart {
+    // An HttpException carrying an OData error envelope (405 from write handlers, 412, …) keeps
+    // its code and message. Errors wrapped by application code are followed through `cause`.
+    const http = findHttpException(err)
+    if (http && http.getStatus() < 500) {
+      const response = http.getResponse() as { error?: { code?: unknown; message?: unknown } }
+      if (typeof response?.error?.message === 'string') {
+        return {
+          contentId,
+          statusCode: http.getStatus(),
+          headers: {},
+          body: JSON.stringify({ error: response.error }),
+        }
+      }
+    }
+    if (http) err = http
     if (err instanceof Error) {
       // Check for NestJS NotFoundException
       if (

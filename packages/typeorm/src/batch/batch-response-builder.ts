@@ -35,6 +35,7 @@ const STATUS_TEXTS: Record<number, string> = {
   404: 'Not Found',
   405: 'Method Not Allowed',
   409: 'Conflict',
+  412: 'Precondition Failed',
   422: 'Unprocessable Entity',
   429: 'Too Many Requests',
   500: 'Internal Server Error',
@@ -48,6 +49,9 @@ const STATUS_TEXTS: Record<number, string> = {
  * @param parts - Array of per-operation response descriptors
  * @returns Object with `contentType` (for Content-Type header) and `body` (response body string)
  */
+/** Canonical casing for the response headers batch parts carry (`location`, `etag`). */
+const HEADER_NAMES: Record<string, string> = { location: 'Location', etag: 'ETag' }
+
 export function buildBatchResponse(parts: BatchResponsePart[]): {
   contentType: string
   body: string
@@ -65,6 +69,9 @@ export function buildBatchResponse(parts: BatchResponsePart[]): {
     }
     lines.push('')
     lines.push(`HTTP/1.1 ${part.statusCode} ${statusText}`)
+    for (const [name, value] of Object.entries(part.headers)) {
+      lines.push(`${HEADER_NAMES[name.toLowerCase()] ?? name}: ${value}`)
+    }
 
     if (part.body !== undefined) {
       lines.push('Content-Type: application/json')

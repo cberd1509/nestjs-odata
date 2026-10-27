@@ -252,6 +252,46 @@ Related exports: `ODataScopeFn`, `ODataScope`, `ODataScopeDefinition`, `ODataSco
 `scopeInCondition`, `lookupScope`. `navigationTargetTypeName` (strip `Collection()` and the
 namespace from a navigation type) is exported by `@nestjs-odata/core`.
 
+## Write handlers
+
+See [Custom write handlers](../guide/write-handlers).
+
+```typescript
+interface ODataWriteHandlers<TEntity> {
+  create?: (body, ctx: ODataWriteContext) => TEntity | Promise<TEntity>
+  deepInsert?(body, ctx): TEntity | Promise<TEntity>
+  update?(key: ODataEntityKey, body, ctx): TEntity | Promise<TEntity>
+  replace?(key: ODataEntityKey, body, ctx): TEntity | Promise<TEntity>
+  delete?(key: ODataEntityKey, ctx): void | Promise<void>
+}
+type ODataETagSource =
+  | string
+  | ((entity: Record<string, unknown>) => string | number | Date | null | undefined)
+type ODataChangesetRunner = <T>(
+  work: (manager: EntityManager) => Promise<T>,
+  ctx: { executionContext?; request? },
+) => Promise<T>
+
+function etagMatches(ifMatch: string, currentETag: string | undefined): boolean
+function formatWeakETag(value: unknown): string
+function computeETagFromSource(
+  source: ODataETagSource,
+  entity: Record<string, unknown>,
+): string | undefined
+// The ETag the library sends: the `etag` option, else the ETag provider's column.
+function resolveEntityETag(
+  entitySetName: string,
+  entity: Record<string, unknown>,
+  writes: ODataWriteRegistry | undefined,
+  etagProvider: IETagProvider | undefined,
+): string | undefined
+const ODATA_CHANGESET_RUNNER: symbol // DI token set by ODataTypeOrmModule.forRoot()
+```
+
+`TypeOrmAutoHandler.handleCreate`, `handleDeepCreate`, `handleUpdate`, `handleReplace` and
+`handleDelete` dispatch to the entity set's handlers when it has any (405 for a missing one,
+500 when a handler that must return an entity returns nothing).
+
 ## TypeOrmEdmDeriver
 
 Derives OData v4 `EdmEntityConfig[]` from TypeORM `EntityMetadata`. Used internally by `TypeOrmEdmInitializer` at module init time.

@@ -143,6 +143,22 @@ Registers EDM entity configurations from a feature module. Typically used direct
 
 The TypeORM adapter module. Derives OData EDM from TypeORM entity metadata.
 
+### ODataTypeOrmModule.forRoot()
+
+```typescript
+ODataTypeOrmModule.forRoot(options?: {
+  changesetRunner?: ODataChangesetRunner
+}): DynamicModule
+```
+
+Optional, imported once in the root module (global). Application-wide adapter settings:
+
+- `changesetRunner` runs each `$batch` changeset atomically in your own unit of work (default: a
+  TypeORM `QueryRunner` transaction). See
+  [$batch changesets and atomicity](../guide/write-handlers#batch-changesets-and-atomicity).
+  For a runner with injected dependencies, provide the `ODATA_CHANGESET_RUNNER` token from a
+  `@Global()` module instead.
+
 ### ODataTypeOrmModule.forFeature()
 
 ```typescript
@@ -174,6 +190,10 @@ type ODataTypeOrmFeatureConfig = {
   readonly name?: string
   /** Row-level scope: a function `(qb, ctx) => void | Promise<void>` or an injectable `ODataScope` class */
   readonly scope?: ODataScopeDefinition
+  /** Route writes through application code: an `ODataWriteHandlers` object or injectable class */
+  readonly writeHandlers?: ODataWriteHandlersDefinition
+  /** ETag source: a property name or `(entity) => value`. Overrides @ODataETag / @UpdateDateColumn */
+  readonly etag?: ODataETagSource
 }
 type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
 ```

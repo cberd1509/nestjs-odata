@@ -39,6 +39,14 @@ import { BatchController } from './batch/batch-controller.js'
 import { ODataScopeRegistry } from './scope/scope-registry.js'
 import { TypeOrmScopeService } from './scope/typeorm-scope.service.js'
 import type { ODataScope, ODataScopeDefinition, ODataScopeFn } from './scope/scope.types.js'
+import { ODataWriteRegistry } from './write/write-registry.js'
+import { ODATA_CHANGESET_RUNNER } from './write/changeset-runner.js'
+import type {
+  ODataChangesetRunner,
+  ODataETagSource,
+  ODataWriteHandlers,
+  ODataWriteHandlersDefinition,
+} from './write/write.types.js'
 
 /**
  * DI injection token for the array of TypeORM entity classes
@@ -59,6 +67,28 @@ export const TYPEORM_ODATA_SET_NAME_OVERRIDES = Symbol('TYPEORM_ODATA_SET_NAME_O
  * `{ byEntity, defaultScope }`, keyed by entity class.
  */
 export const TYPEORM_ODATA_SCOPES = Symbol('TYPEORM_ODATA_SCOPES')
+
+/**
+ * DI injection token for the write handlers and ETag sources passed to
+ * ODataTypeOrmModule.forFeature().
+ */
+export const TYPEORM_ODATA_WRITES = Symbol('TYPEORM_ODATA_WRITES')
+
+/** Value provided under {@link TYPEORM_ODATA_WRITES}. */
+export interface TypeOrmODataWrites {
+  readonly handlers: ReadonlyMap<unknown, ODataWriteHandlersDefinition>
+  readonly etags: ReadonlyMap<unknown, ODataETagSource>
+}
+
+/** Options of ODataTypeOrmModule.forRoot(): application-wide TypeORM adapter settings. */
+export interface ODataTypeOrmRootOptions {
+  /**
+   * Runs each `$batch` changeset atomically. Default: a TypeORM `QueryRunner` transaction whose
+   * entity manager is handed to write handlers as `ctx.manager`. Provide your own to run
+   * changesets inside your application's unit of work. See {@link ODataChangesetRunner}.
+   */
+  readonly changesetRunner?: ODataChangesetRunner
+}
 
 /** Value provided under {@link TYPEORM_ODATA_SCOPES}. */
 export interface TypeOrmODataScopes {
@@ -114,6 +144,17 @@ export interface ODataTypeOrmFeatureConfig {
    * `$expand` or a lambda in `$filter`. See the "Row-level scopes" guide.
    */
   readonly scope?: ODataScopeDefinition
+  /**
+   * Route POST, PATCH, PUT, DELETE and deep insert of this entity set (also inside `$batch`)
+   * through application code instead of the TypeORM repository: an object or an injectable
+   * class implementing `ODataWriteHandlers`. See the "Custom write handlers" guide.
+   */
+  readonly writeHandlers?: ODataWriteHandlersDefinition
+  /**
+   * Where this entity set's ETag comes from: a property name or a function of the entity.
+   * Takes precedence over `@ODataETag` and `@UpdateDateColumn`.
+   */
+  readonly etag?: ODataETagSource
 }
 
 /** Anything accepted by ODataTypeOrmModule.forFeature() — bare entity class or config object. */
@@ -129,20 +170,33 @@ function normalizeFeatureItems(items: ODataTypeOrmFeatureItem[]): {
   entities: EntityClassOrSchema[]
   nameOverrides: Map<EntityClassOrSchema, string>
   scopes: Map<EntityClassOrSchema, ODataScopeDefinition>
+  writeHandlers: Map<EntityClassOrSchema, ODataWriteHandlersDefinition>
+  etags: Map<EntityClassOrSchema, ODataETagSource>
 } {
   const entities: EntityClassOrSchema[] = []
   const nameOverrides = new Map<EntityClassOrSchema, string>()
   const scopes = new Map<EntityClassOrSchema, ODataScopeDefinition>()
+  const writeHandlers = new Map<EntityClassOrSchema, ODataWriteHandlersDefinition>()
+  const etags = new Map<EntityClassOrSchema, ODataETagSource>()
   for (const item of items) {
     if (isFeatureConfig(item)) {
       entities.push(item.entity)
       if (item.name) nameOverrides.set(item.entity, item.name)
       if (item.scope) scopes.set(item.entity, item.scope)
+      if (item.writeHandlers) writeHandlers.set(item.entity, item.writeHandlers)
+      if (item.etag) etags.set(item.entity, item.etag)
     } else {
       entities.push(item)
     }
   }
-  return { entities, nameOverrides, scopes }
+  return { entities, nameOverrides, scopes, writeHandlers, etags }
+}
+
+/** True for an injectable class (as opposed to a handlers object). */
+function isHandlersClass(
+  def: ODataWriteHandlersDefinition,
+): def is new (...args: any[]) => ODataWriteHandlers<any> {
+  return typeof def === 'function'
 }
 
 /** True for a class implementing `ODataScope` (as opposed to a scope function). */
@@ -176,6 +230,8 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
     @Inject(TYPEORM_ODATA_SCOPES) private readonly scopes?: TypeOrmODataScopes,
     @Inject(ODataScopeRegistry) private readonly scopeRegistry?: ODataScopeRegistry,
     @Inject(ModuleRef) private readonly moduleRef?: ModuleRef,
+    @Inject(TYPEORM_ODATA_WRITES) private readonly writes?: TypeOrmODataWrites,
+    @Inject(ODataWriteRegistry) private readonly writeRegistry?: ODataWriteRegistry,
   ) {}
 
   /** Fail at startup when `requireScope` is on and an entity set of this feature has no scope. */
@@ -248,6 +304,18 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
       if (scopeDef && this.scopeRegistry) {
         this.scopeRegistry.register(registeredSet, this.toScopeFn(scopeDef), scopeDef)
       }
+
+      const handlersDef = this.writes?.handlers.get(entityClass)
+      if (handlersDef && this.writeRegistry) {
+        const handlers = isHandlersClass(handlersDef)
+          ? this.moduleRef!.get(handlersDef, { strict: true })
+          : handlersDef
+        this.writeRegistry.registerHandlers(registeredSet, handlers, handlersDef)
+      }
+      const etagSource = this.writes?.etags.get(entityClass)
+      if (etagSource && this.writeRegistry) {
+        this.writeRegistry.registerETag(registeredSet, etagSource)
+      }
     }
   }
 }
@@ -268,6 +336,19 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
 @Module({})
 export class ODataTypeOrmModule {
   /**
+   * Application-wide adapter settings, imported once in the root module (optional). Today it
+   * sets the `$batch` changeset runner, which applies to every entity set of the app.
+   */
+  static forRoot(options: ODataTypeOrmRootOptions = {}): DynamicModule {
+    return {
+      module: ODataTypeOrmModule,
+      global: true,
+      providers: [{ provide: ODATA_CHANGESET_RUNNER, useValue: options.changesetRunner }],
+      exports: [ODATA_CHANGESET_RUNNER],
+    }
+  }
+
+  /**
    * Register TypeORM entity classes for OData auto-derivation.
    *
    * @param entities - Array of TypeORM entity classes (decorated with @Entity())
@@ -281,7 +362,10 @@ export class ODataTypeOrmModule {
     // Normalize: accept either plain entity classes or { entity, name } config
     // objects in the same array. The name override is applied at EDM-registration
     // time in TypeOrmEdmInitializer.
-    const { entities, nameOverrides, scopes } = normalizeFeatureItems(items)
+    const { entities, nameOverrides, scopes, writeHandlers, etags } = normalizeFeatureItems(items)
+    const handlerClassProviders: Provider[] = [
+      ...new Set([...writeHandlers.values()].filter(isHandlersClass)),
+    ]
     const scopeClassProviders: Provider[] = [
       ...new Set(
         [...scopes.values(), ...(options?.defaultScope ? [options.defaultScope] : [])].filter(
@@ -331,6 +415,20 @@ export class ODataTypeOrmModule {
           } satisfies TypeOrmODataScopes,
         },
         ...scopeClassProviders,
+        ...handlerClassProviders,
+        {
+          provide: TYPEORM_ODATA_WRITES,
+          useValue: {
+            handlers: writeHandlers,
+            etags,
+          } satisfies TypeOrmODataWrites,
+        },
+        {
+          // One registry per application, shared by every forFeature() import.
+          provide: ODataWriteRegistry,
+          useFactory: (edmRegistry: EdmRegistry) => ODataWriteRegistry.for(edmRegistry),
+          inject: [EdmRegistry],
+        },
         {
           // One registry per application, shared by every forFeature() import.
           provide: ODataScopeRegistry,
@@ -395,6 +493,7 @@ export class ODataTypeOrmModule {
             dataSource: DataSource,
             etagProvider: TypeOrmETagProvider,
             scopeService: TypeOrmScopeService,
+            writeRegistry: ODataWriteRegistry,
           ): TypeOrmAutoHandler => {
             const firstEntity = entities[0]
             if (!firstEntity) {
@@ -409,6 +508,7 @@ export class ODataTypeOrmModule {
               etagProvider,
               dataSource,
               scopeService,
+              writeRegistry,
             )
           },
           inject: [
@@ -418,6 +518,7 @@ export class ODataTypeOrmModule {
             DataSource,
             TypeOrmETagProvider,
             TypeOrmScopeService,
+            ODataWriteRegistry,
           ],
         },
       ],
@@ -431,6 +532,7 @@ export class ODataTypeOrmModule {
         SEARCH_PROVIDER,
         TypeOrmScopeService,
         ODataScopeRegistry,
+        ODataWriteRegistry,
       ],
     }
   }

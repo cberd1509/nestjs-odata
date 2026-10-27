@@ -228,7 +228,10 @@ export class TypeOrmScopeService {
     // Find options make getOne() join `eager: true` relations like Repository.findOne().
     qb.setFindOptions({ where: where as never, loadEagerRelations: true })
     applyScopeToQuery(qb, alias, await this.subqueryFor(entitySetName, operation, [], em))
-    if (options.lock && supportsRowLocks(em)) qb.setLock('pessimistic_write')
+    // A row lock only means something inside a transaction (and PostgreSQL refuses one outside).
+    if (options.lock && supportsRowLocks(em) && em.queryRunner?.isTransactionActive) {
+      qb.setLock('pessimistic_write')
+    }
     return (await qb.getOne()) ?? undefined
   }
 
