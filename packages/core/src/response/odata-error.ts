@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Logger } from '@nestjs/common'
 import type { ArgumentsHost } from '@nestjs/common'
-import { ODataParseError } from '../parser/errors.js'
+import { ODataNotImplementedError, ODataParseError } from '../parser/errors.js'
 import { ODataValidationError } from '../query/odata-validation.error.js'
 
 /** One entry of an OData error's `details` array (OData v4 JSON format §21). */
@@ -163,6 +163,14 @@ function defaultErrorResponse(exception: unknown, depth = 0): ODataErrorResponse
             ]
           : [],
       ),
+    }
+  }
+  if (exception instanceof ODataNotImplementedError) {
+    // P1 §9.3.1: valid syntax the service does not implement. The message only describes the
+    // caller's own query, so unlike other 5xx errors it is sent.
+    return {
+      status: HttpStatus.NOT_IMPLEMENTED,
+      body: odataErrorBody('NotImplemented', exception.message),
     }
   }
   if (exception instanceof ODataValidationError) {

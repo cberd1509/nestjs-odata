@@ -9,7 +9,7 @@ TypeORM adapter for [@nestjs-odata/core](https://www.npmjs.com/package/@nestjs-o
 ## Features
 
 - Auto-derives OData EDM from TypeORM `@Entity` / `@Column` decorators — no separate OData schema
-- Translates OData `$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip` to TypeORM QueryBuilder
+- Translates OData `$filter` (navigation paths, one-to-many and many-to-many lambdas), `$select`, `$expand` (nested counts, search and SQL paging), `$orderby`, `$top`, `$skip` to TypeORM QueryBuilder
 - Built-in CRUD operations via `TypeOrmODataController`
 - Works alongside regular NestJS/TypeORM routes — no lock-in
 

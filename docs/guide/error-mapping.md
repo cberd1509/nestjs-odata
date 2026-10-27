@@ -12,10 +12,13 @@ Every OData route answers errors in the OData v4 JSON format:
 }
 ```
 
-By default, the library maps OData parse and validation errors to 400, an `HttpException` to its
-own status, an error carrying a numeric `status` or `statusCode` (400–599, http-errors style) to
-that status, and anything else to a generic 500. The message of any 5xx error is replaced by
-`An unexpected error occurred.`, since it may carry internal details. The **`errorMapper`**
+By default, the library maps OData parse and validation errors to 400, an
+`ODataNotImplementedError` (valid OData the service does not implement, such as `$root`) to 501
+`NotImplemented`, an `HttpException` to its own status, an error carrying a numeric `status` or
+`statusCode` (400–599, http-errors style) to that status, and anything else to a generic 500.
+The message of any other 5xx error is replaced by `An unexpected error occurred.`, since it may
+carry internal details; a 501's message only describes the unsupported part of the request and
+is kept. The **`errorMapper`**
 option lets you map any exception, including your application's own error types and errors
 thrown by the database, to the OData error to send.
 

@@ -8,7 +8,7 @@ Core OData v4 library for NestJS — parser, EDM, decorators, interceptors, and 
 
 ## Features
 
-- OData v4 query parser (`$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip`, `$count`)
+- OData v4 query parser (`$filter`, `$select`, `$expand` with nested `$count`/`$search`/`$levels`, `$orderby`, `$top`, `$skip`, `$count`); unsupported OData answers 501
 - EDM (Entity Data Model) auto-derivation via decorators
 - `ODataModule` — drop-in NestJS module with zero boilerplate
 - Request/response interceptors for spec-compliant OData envelopes

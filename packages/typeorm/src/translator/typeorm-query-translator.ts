@@ -17,18 +17,22 @@ import { TypeOrmPaginationVisitor } from './pagination-visitor.js'
 import { TypeOrmExpandVisitor } from './expand-visitor.js'
 import { TypeOrmApplyVisitor } from './apply-visitor.js'
 import { applyExpandPagination } from './expand-pagination.js'
+import { applyExpandCounts, type ExpandCountQuery } from './expand-count.js'
 import type { TypeOrmScopePlan } from '../scope/scope.types.js'
 import { applyScopeToQuery, lookupScope } from '../scope/typeorm-scope.service.js'
 
 /**
- * Translation result from translate() — includes the QueryBuilder and the
- * expandPaginationMap needed for post-JOIN in-memory slicing (D-13).
+ * Translation result from translate() — includes the QueryBuilder, the expandPaginationMap
+ * needed for post-JOIN in-memory slicing (D-13, keyed by expand path) and the count queries of
+ * nested `$count=true` / `nav/$count` expand items, both applied by execute().
  * When $apply is present, applyProperties contains the projected column names.
  */
 export interface TranslateResult {
   readonly qb: SelectQueryBuilder<ObjectLiteral>
   readonly expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }>
   readonly applyProperties?: string[]
+  /** Count queries of nested `$count=true` / `nav/$count` expand items. */
+  readonly expandCounts?: readonly ExpandCountQuery[]
 }
 
 /**
@@ -151,18 +155,27 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
 
     // 6. Expand (JOINs — skip when $apply present)
     let expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }> = new Map()
+    let expandCounts: readonly ExpandCountQuery[] = []
     if (!query.apply && query.expand) {
       const expandVisitor = new TypeOrmExpandVisitor(
         qb,
         this.edmRegistry,
         this.options.maxExpandDepth,
-        { scopes, manager: repo.manager, maxFilterDepth: this.options.maxFilterDepth, dialect },
+        {
+          scopes,
+          manager: repo.manager,
+          maxFilterDepth: this.options.maxFilterDepth,
+          dialect,
+          searchProvider: this.searchProvider,
+          driverType: String(repo.manager.dataSource.options.type),
+        },
       )
       expandVisitor.apply(query.expand, alias, entityType, 0)
       expandPaginationMap = expandVisitor.expandPaginationMap
+      expandCounts = expandVisitor.expandCounts
     }
 
-    return { qb, expandPaginationMap, applyProperties }
+    return { qb, expandPaginationMap, applyProperties, expandCounts }
   }
 
   /**
@@ -181,11 +194,13 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     let qb: SelectQueryBuilder<ObjectLiteral>
     let expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }>
     let applyProperties: string[] | undefined
+    let expandCounts: readonly ExpandCountQuery[] = []
 
     if ('qb' in translateResult && 'expandPaginationMap' in translateResult) {
       qb = translateResult.qb
       expandPaginationMap = translateResult.expandPaginationMap
       applyProperties = translateResult.applyProperties
+      expandCounts = translateResult.expandCounts ?? []
     } else {
       qb = translateResult
       expandPaginationMap = new Map()
@@ -207,10 +222,12 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     if (includeCount) {
       const [items, count] = await qb.getManyAndCount()
       applyExpandPagination(items, expandPaginationMap)
+      await applyExpandCounts(items, expandCounts)
       return { items, count }
     }
     const items = await qb.getMany()
     applyExpandPagination(items, expandPaginationMap)
+    await applyExpandCounts(items, expandCounts)
     return { items }
   }
 }

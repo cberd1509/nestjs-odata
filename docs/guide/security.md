@@ -62,6 +62,10 @@ HTTP/1.1 400 Bad Request
 }
 ```
 
+`$levels` counts against the same limit: each level is one more level of `$expand`, a
+`$levels` value that goes past `maxExpandDepth` is rejected with 400 before any query is built,
+and `$levels=max` stops at `maxExpandDepth`.
+
 ### maxFilterDepth — $filter expression nesting limit
 
 Limits the depth of nested logical expressions in `$filter`. Deeply nested filters can cause exponential parse tree growth.

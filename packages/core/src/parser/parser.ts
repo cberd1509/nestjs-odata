@@ -33,8 +33,9 @@ import type {
   SelectNode,
   UnaryExprNode,
 } from './ast.js'
-import { ODataParseError } from './errors.js'
+import { ODataNotImplementedError, ODataParseError } from './errors.js'
 import { tokenize, Token, TokenKind } from './lexer.js'
+import { parseSearch } from './search-parser.js'
 
 /** Maximum nesting depth for parenthesized expressions (DoS protection, T-01-09) */
 const MAX_NESTING_DEPTH = 50
@@ -122,8 +123,11 @@ const KNOWN_FUNCTIONS = new Set([
   'geo.length',
 ])
 
-/** Lambda operators */
+/** Lambda operators (matched case-insensitively) */
 const LAMBDA_OPS = new Set(['any', 'all'])
+
+/** `$`-identifiers of the expression grammar that the parser recognizes but does not implement. */
+const DOLLAR_SEGMENTS = new Set(['$it', '$root', '$this', '$count'])
 
 // ---------------------------------------------------------------------------
 // Parser class
@@ -134,7 +138,14 @@ class Parser {
   private pos: number = 0
   private nestingDepth: number = 0
 
-  constructor(tokens: Token[]) {
+  constructor(
+    tokens: Token[],
+    /**
+     * Whether `$it` may be used. Inside `$expand` options `$it` refers to the entity of the
+     * resource path, not the expanded one (P2 §5.1.1.14.4); that is not implemented.
+     */
+    private readonly allowIt: boolean = true,
+  ) {
     this.tokens = tokens
   }
 
@@ -311,6 +322,10 @@ class Parser {
     const firstToken = this.advance() // consume first identifier
     const firstName = firstToken.value as string
 
+    if (firstName.startsWith('$')) {
+      return this.parseDollarPrefixedExpression(firstToken)
+    }
+
     // Check for function call: identifier(
     if (this.peek().kind === TokenKind.OPEN_PAREN) {
       return this.parseFunctionCall(firstName, firstToken.position)
@@ -331,13 +346,15 @@ class Parser {
 
       const secondName = nextToken.value as string
 
-      // Peek ahead: if next after identifier is '(' and it's a lambda op → lambda
-      if (LAMBDA_OPS.has(secondName)) {
+      // Peek ahead: if next after identifier is '(' and it's a lambda op → lambda.
+      // 4.01 services MUST accept lambda operator names case-insensitively (P2 §5.1.1.13).
+      const lambdaOp = secondName.toLowerCase()
+      if (LAMBDA_OPS.has(lambdaOp)) {
         // Check if this is lambda: secondName(
         const savedPos = this.pos
         this.advance() // consume secondName
         if (this.peek().kind === TokenKind.OPEN_PAREN) {
-          return this.parseLambdaExpr(firstName, secondName, firstToken.position)
+          return this.parseLambdaExpr(firstName, lambdaOp, firstToken.position)
         }
         // Not lambda — restore and treat as navigation
         this.pos = savedPos
@@ -361,6 +378,20 @@ class Parser {
         this.advance()
       }
 
+      // `$`-segments after a property (`items/$count`, `tags/$this`) are not supported.
+      const dollarSegment = path.find((segment) => segment.startsWith('$'))
+      if (dollarSegment !== undefined) {
+        if (DOLLAR_SEGMENTS.has(dollarSegment)) {
+          throw new ODataNotImplementedError(
+            `'${path.join('/')}' is not supported in $filter and $orderby expressions`,
+          )
+        }
+        throw new ODataParseError(
+          `Unexpected path segment '${dollarSegment}' at position ${firstToken.position}`,
+          firstToken.position,
+        )
+      }
+
       const node: PropertyAccessNode = { kind: 'PropertyAccess', path }
       return node
     }
@@ -368,6 +399,47 @@ class Parser {
     // Plain single-segment property access
     const node: PropertyAccessNode = { kind: 'PropertyAccess', path: [firstName] }
     return node
+  }
+
+  /**
+   * Parse an expression starting with a `$`-identifier (already consumed).
+   *
+   * `$it/<path>` refers to the entity of the resource path (P2 §5.1.1.14.4). In `$filter`,
+   * `$orderby` and `$apply` that is the entity being filtered (also inside a lambda predicate,
+   * where unprefixed paths already bind to it), so `$it/<path>` is the same as `<path>` and the
+   * prefix is dropped. Inside `$expand` options (`allowIt: false`) it would be the parent of the
+   * expanded entities, which is not implemented (501), like `$root`, a bare `$it` and the other
+   * `$`-segments.
+   */
+  private parseDollarPrefixedExpression(token: Token): FilterNode {
+    const name = token.value as string
+    if (name === '$it' && !this.allowIt) {
+      throw new ODataNotImplementedError(
+        "'$it' inside $expand options (referring to the entity of the resource path) is not supported",
+      )
+    }
+    if (name === '$it' && this.peek().kind === TokenKind.SLASH) {
+      this.advance() // consume /
+      const next = this.peek()
+      if (next.kind !== TokenKind.IDENTIFIER || (next.value as string).startsWith('$')) {
+        throw new ODataParseError(
+          `Expected a property name after '$it/' at position ${next.position}`,
+          next.position,
+          next,
+        )
+      }
+      return this.parseIdentifierExpression()
+    }
+    if (DOLLAR_SEGMENTS.has(name)) {
+      throw new ODataNotImplementedError(
+        `'${name}' is not supported in $filter and $orderby expressions${name === '$it' ? ' without a property path' : ''}`,
+      )
+    }
+    throw new ODataParseError(
+      `Unexpected identifier '${name}' at position ${token.position}`,
+      token.position,
+      token,
+    )
   }
 
   /**
@@ -470,12 +542,12 @@ class Parser {
  * @returns Root FilterNode of the parsed expression
  * @throws ODataParseError on syntax errors
  */
-export function parseFilter(input: string): FilterNode {
+export function parseFilter(input: string, options: { allowIt?: boolean } = {}): FilterNode {
   if (!input.trim()) {
     throw new ODataParseError('Filter expression must not be empty', 0)
   }
   const tokens = tokenize(input)
-  const parser = new Parser(tokens)
+  const parser = new Parser(tokens, options.allowIt ?? true)
   const node = parser.parseExpression(0)
   parser.expectEOF()
   return node
@@ -536,7 +608,7 @@ export function parseQuery(queryString: string): QueryOptions {
  * Parse the value of a $orderby query option.
  * Format: expr [asc|desc] (, expr [asc|desc])*
  */
-function parseOrderBy(value: string): OrderByItem[] {
+function parseOrderBy(value: string, allowIt = true): OrderByItem[] {
   if (!value.trim()) return []
 
   const items = value.split(',')
@@ -558,7 +630,7 @@ function parseOrderBy(value: string): OrderByItem[] {
     }
 
     const tokens = tokenize(exprStr)
-    const parser = new Parser(tokens)
+    const parser = new Parser(tokens, allowIt)
     const expression = parser.parseExpression(0)
     parser.expectEOF()
 
@@ -585,21 +657,28 @@ function parseSelect(value: string): SelectNode {
 }
 
 /**
- * Split an $expand value string by top-level commas only (not commas inside parentheses).
- * Tracks parenthesis depth to avoid splitting nested options like Items($filter=x),Customer.
+ * Split a string on `separator` at parenthesis depth 0, outside string literals. Used for the
+ * items of `$expand` (`,`) and the nested options of an expand item (`;`), so
+ * `Items($expand=Product($select=Name;$top=1);$top=2)` keeps its nested options together.
  */
-function splitTopLevelCommas(value: string): string[] {
+function splitTopLevel(value: string, separator: ',' | ';'): string[] {
   const segments: string[] = []
   let depth = 0
   let start = 0
+  let inString = false
 
   for (let i = 0; i < value.length; i++) {
     const ch = value[i]
-    if (ch === '(') {
+    if (ch === "'") {
+      // A doubled quote inside a literal is an escaped quote: toggling twice keeps the state.
+      inString = !inString
+    } else if (inString) {
+      continue
+    } else if (ch === '(') {
       depth++
     } else if (ch === ')') {
       depth--
-    } else if (ch === ',' && depth === 0) {
+    } else if (ch === separator && depth === 0) {
       segments.push(value.slice(start, i))
       start = i + 1
     }
@@ -609,14 +688,24 @@ function splitTopLevelCommas(value: string): string[] {
   return segments
 }
 
+/** Nested options allowed after `nav/$count` (ABNF `expandCountOption`). */
+const EXPAND_COUNT_OPTIONS = new Set(['$filter', '$search'])
+
+/** Nested `$expand` options that are valid OData but not implemented (answered with 501). */
+const UNSUPPORTED_EXPAND_OPTIONS = new Set(['$compute', '$apply'])
+
 /**
  * Parse the value of a $expand query option into an ExpandNode.
  * Handles simple (Customer), multi (Customer,Items), nested options (Items($filter=...)),
- * and recursive nested expand (Items($expand=Product)).
+ * recursive nested expand (Items($expand=Product)) and `Items/$count`.
+ *
+ * Nested options (P2 §5.1.3): `$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count`,
+ * `$search`, `$levels` and `$expand`, separated by semicolons. Valid options that are not
+ * implemented (`$compute`, `$apply`, `/$ref`) are answered with 501 instead of being ignored;
+ * unknown ones are a 400.
  *
  * Per D-07: Full nested $expand support.
  * Per D-08: Nested query options use semicolons as separators.
- * Per T-04-01: Inherits max nesting depth from recursive parseQuery calls.
  */
 function parseExpand(value: string): ExpandNode {
   const trimmed = value.trim()
@@ -624,41 +713,135 @@ function parseExpand(value: string): ExpandNode {
     return { items: [] }
   }
 
-  const segments = splitTopLevelCommas(trimmed)
+  const segments = splitTopLevel(trimmed, ',')
   const items: ExpandItem[] = segments
     .map((seg) => seg.trim())
     .filter((seg) => seg.length > 0)
     .map((seg) => {
       const parenIdx = seg.indexOf('(')
+      const path = (parenIdx === -1 ? seg : seg.slice(0, parenIdx)).trim()
+      const { navigationProperty, countOnly } = parseExpandPath(path)
+
       if (parenIdx === -1) {
-        // Simple: just a navigation property name
-        return { navigationProperty: seg.trim() } satisfies ExpandItem
+        return countOnly ? { navigationProperty, countOnly } : { navigationProperty }
       }
 
       // Has nested options: NavProp(options)
-      const navigationProperty = seg.slice(0, parenIdx).trim()
-      // Extract content between outer parens — last char should be ')'
-      const innerContent = seg.slice(parenIdx + 1, seg.length - 1)
-
-      // Replace semicolons with & to convert nested OData options to query string format
-      const nestedQuery = innerContent.replace(/;/g, '&')
-
-      // Recursively parse nested query options
-      const nested = parseQuery(nestedQuery)
-
-      const item: ExpandItem = {
-        navigationProperty,
-        ...(nested.filter !== undefined && { filter: nested.filter }),
-        ...(nested.select !== undefined && { select: nested.select }),
-        ...(nested.orderBy !== undefined && { orderBy: nested.orderBy }),
-        ...(nested.top !== undefined && { top: nested.top }),
-        ...(nested.skip !== undefined && { skip: nested.skip }),
-        ...(nested.expand !== undefined && { expand: nested.expand }),
+      if (!seg.endsWith(')')) {
+        throw new ODataParseError(`Unbalanced parentheses in $expand item '${seg}'`, 0)
       }
-      return item
+      const innerContent = seg.slice(parenIdx + 1, seg.length - 1)
+      return {
+        navigationProperty,
+        ...(countOnly && { countOnly }),
+        ...parseExpandOptions(innerContent, navigationProperty, countOnly),
+      } satisfies ExpandItem
     })
 
   return { items }
+}
+
+/** Split an expand path into the navigation property and the `/$count` suffix. */
+function parseExpandPath(path: string): { navigationProperty: string; countOnly: boolean } {
+  const segments = path.split('/')
+  const last = segments[segments.length - 1]
+  if (segments.length > 1 && last === '$count') {
+    return { navigationProperty: segments.slice(0, -1).join('/'), countOnly: true }
+  }
+  if (segments.length > 1 && last === '$ref') {
+    throw new ODataNotImplementedError(`$expand with '/$ref' ('${path}') is not supported`)
+  }
+  return { navigationProperty: path, countOnly: false }
+}
+
+/** Parse the semicolon-separated nested options of one expand item. */
+function parseExpandOptions(
+  content: string,
+  navigationProperty: string,
+  countOnly: boolean,
+): Omit<ExpandItem, 'navigationProperty' | 'countOnly'> {
+  const options: {
+    -readonly [K in keyof Omit<ExpandItem, 'navigationProperty' | 'countOnly'>]: ExpandItem[K]
+  } = {}
+
+  for (const raw of splitTopLevel(content, ';')) {
+    const option = raw.trim()
+    if (!option) continue
+    const eq = option.indexOf('=')
+    const name = (eq === -1 ? option : option.slice(0, eq)).trim().toLowerCase()
+    const val = eq === -1 ? '' : option.slice(eq + 1)
+
+    if (countOnly && !EXPAND_COUNT_OPTIONS.has(name)) {
+      throw new ODataParseError(
+        `Only $filter and $search are allowed in '${navigationProperty}/$count(...)', got '${name}'`,
+        0,
+      )
+    }
+    if (UNSUPPORTED_EXPAND_OPTIONS.has(name)) {
+      throw new ODataNotImplementedError(
+        `The nested $expand option '${name}' is not supported (in '${navigationProperty}')`,
+      )
+    }
+
+    switch (name) {
+      case '$filter':
+        options.filter = parseFilter(val, { allowIt: false })
+        break
+      case '$select':
+        options.select = parseSelect(val)
+        break
+      case '$orderby':
+        options.orderBy = parseOrderBy(val, false)
+        break
+      case '$top':
+        options.top = parseNonNegativeInt(val, '$top', 0)
+        break
+      case '$skip':
+        options.skip = parseNonNegativeInt(val, '$skip', 0)
+        break
+      case '$expand':
+        options.expand = parseExpand(val)
+        break
+      case '$count': {
+        const flag = val.trim().toLowerCase()
+        if (flag !== 'true' && flag !== 'false') {
+          throw new ODataParseError(`$count must be true or false, got '${val.trim()}'`, 0)
+        }
+        if (flag === 'true') options.count = true
+        break
+      }
+      case '$search':
+        options.search = parseSearch(val)
+        break
+      case '$levels':
+        options.levels = parseLevels(val)
+        break
+      default:
+        if (name.startsWith('@')) {
+          throw new ODataNotImplementedError(
+            `Parameter aliases ('${name}') are not supported in $expand options`,
+          )
+        }
+        throw new ODataParseError(
+          `Unknown $expand option '${name}' in '${navigationProperty}'. Allowed: $filter, ` +
+            '$select, $orderby, $top, $skip, $count, $search, $levels, $expand',
+          0,
+        )
+    }
+  }
+
+  return options
+}
+
+/** Parse `$levels`: a positive integer or `max`. */
+function parseLevels(value: string): number | 'max' {
+  const trimmed = value.trim()
+  if (trimmed.toLowerCase() === 'max') return 'max'
+  const levels = parseNonNegativeInt(trimmed, '$levels', 0)
+  if (levels < 1) {
+    throw new ODataParseError(`$levels must be a positive integer or max, got '${trimmed}'`, 0)
+  }
+  return levels
 }
 
 /**

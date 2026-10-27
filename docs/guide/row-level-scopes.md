@@ -12,7 +12,9 @@ row outside the scope never appears, however it is reached.
 | `GET /Set?$apply=...`                                      | aggregates only rows inside the scope                               |
 | `GET /Set/:key`                                            | 404 when the row is outside the scope                               |
 | `$expand=nav`, at any depth                                | the target set's own scope restricts the related rows; parents stay |
-| `$filter=nav/any(...)`, `nav/all(...)`                     | the lambda ranges over rows inside the target set's scope           |
+| `$expand=nav($count=true)`, `nav/$count`, nested `$top`    | counts and pages only related rows inside the target set's scope    |
+| `$filter=nav/any(...)`, `nav/all(...)` (also many-to-many) | the lambda ranges over rows inside the target set's scope           |
+| `$filter=nav/name eq ...` (navigation path)                | a related row outside its scope reads as `null`                     |
 | `PATCH`, `PUT`, `DELETE /Set/:key`                         | 404 (and no write) when the row is outside the scope                |
 | `$batch` reads and changeset writes                        | same as above                                                       |
 
@@ -85,12 +87,13 @@ have only one scope. Registering two different ones throws at startup.
 
 ```typescript
 interface ODataScopeContext {
-  entitySetName: string // the entity set being scoped (the target, for $expand and lambdas)
+  entitySetName: string // the entity set being scoped (the target, for $expand and $filter paths)
   entityType: EdmEntityType
   metadata: EntityMetadata // TypeORM metadata of its entity
   alias: string // alias of the entity in `qb`
   operation: 'collection' | 'count' | 'entity' | 'expand' | 'filter' | 'write'
   navigationPath: readonly string[] // [] for the root, ['tasks', 'notes'] for $expand=tasks($expand=notes)
+  //                                   ['project', 'owner'] for $filter=project/owner/name eq 'x'
   executionContext: ExecutionContext | undefined
   request: unknown // the Express/Fastify request
 }
@@ -119,7 +122,9 @@ conditions and joins to that query, and the library uses the result as
 - in the `WHERE` of the root query,
 - in the `JOIN ... ON` of each `$expand`, so it limits the related rows and never removes
   parents,
-- inside the `EXISTS` subquery of each lambda,
+- inside the `EXISTS` subquery of each lambda (through the junction table for many-to-many),
+- in each join of a `$filter` navigation path (`project/owner/name`),
+- in the `COUNT` of nested `$count` and in the `ROW_NUMBER()` ranking of nested `$top`/`$skip`,
 - in the lookup that runs before an update, replace or delete.
 
 Some consequences:
@@ -152,11 +157,11 @@ ODataModule.forRoot({ serviceRoot: '/odata', requireScope: true })
 With `requireScope: true`:
 
 - **any path without a prepared scope fails** instead of running unscoped (for example a plan
-  built by hand that misses an `$expand` or lambda path);
+  built by hand that misses an `$expand`, lambda or navigation path);
 - the application **refuses to start** when an entity set registered with
   `ODataTypeOrmModule.forFeature()` has neither a `scope` nor a `defaultScope`;
-- at request time, reading or writing an entity set without a scope, or following `$expand` or a
-  lambda to an entity type that is not an OData entity set, fails with HTTP 500 and a message
+- at request time, reading or writing an entity set without a scope, or following `$expand`, a
+  lambda or a navigation path to an entity type that is not an OData entity set, fails with HTTP 500 and a message
   naming the entity set;
 - `TypeOrmQueryTranslator.translate()` throws if it is called without a scope plan (see below).
 

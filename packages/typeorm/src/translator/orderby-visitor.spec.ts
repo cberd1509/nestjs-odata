@@ -58,4 +58,14 @@ describe('TypeOrmOrderByVisitor', () => {
     expect(qb.orderBy).not.toHaveBeenCalled()
     expect(qb.addOrderBy).not.toHaveBeenCalled()
   })
+
+  it('appends every item with addOrderBy for a nested $expand $orderby (keeps the parent order)', () => {
+    const visitor = new TypeOrmOrderByVisitor(qb, 'entity_items')
+    visitor.apply(
+      [{ expression: { kind: 'PropertyAccess', path: ['qty'] }, direction: 'desc' }],
+      true,
+    )
+    expect(qb.orderBy).not.toHaveBeenCalled()
+    expect(qb.addOrderBy).toHaveBeenCalledWith('entity_items.qty', 'DESC')
+  })
 })

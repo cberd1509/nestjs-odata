@@ -36,21 +36,50 @@ WHERE EXISTS (SELECT 1 FROM "order_item" i WHERE i.orderId = order.id)
 
 **Requirements:**
 
-- The navigation property must be registered as a TypeORM relation (`@OneToMany`, `@ManyToOne`)
-- Many-to-many relations are not supported — use a junction entity with two `@OneToMany` relations instead
+- The collection must be a collection-valued navigation property: a TypeORM `@OneToMany` or
+  `@ManyToMany` relation. Anything else (a single-valued navigation, an unknown name) answers 400.
 - The variable name (e.g. `i`) is used as the SQL subquery alias
+- The operator name is case-insensitive (`Items/ANY(...)`, `Items/All(...)`), as OData 4.01
+  requires; the range variable is case-sensitive.
+- When the target entity set has a [row-level scope](./row-level-scopes), only the rows inside it
+  are considered.
+
+### Many-to-many relations
+
+Lambdas over a `@ManyToMany` navigation property range over the junction table joined to the
+target, from either side of the relation:
+
+```
+# Products tagged 'sale'
+GET /odata/Products?$filter=tags/any(t: t/name eq 'sale')
+
+# Tags used by at least one product over $100 (inverse side)
+GET /odata/Tags?$filter=products/any(p: p/price gt 100)
+```
+
+```sql
+WHERE EXISTS (
+  SELECT 1 FROM "product_tags_tag" t_j
+  INNER JOIN "tag" t ON t."id" = t_j."tagId"
+  WHERE t_j."productId" = "product"."id" AND t.name = 'sale'
+)
 
 **More examples:**
 
 ```
+
 # Orders with any item from supplier 'Acme'
+
 GET /odata/Orders?$filter=Items/any(item: item/Supplier eq 'Acme')
 
 # Products that have at least one review
+
 GET /odata/Products?$filter=Reviews/any()
 
 # Categories that have at least one in-stock product
+
 GET /odata/Categories?$filter=Products/any(p: p/InStock eq true)
+
 ```
 
 ### all()
@@ -58,8 +87,10 @@ GET /odata/Categories?$filter=Products/any(p: p/InStock eq true)
 Returns entities where **every** element in a related collection matches the predicate.
 
 ```
+
 GET /odata/Orders?$filter=Items/all(i: i/Shipped eq true)
-```
+
+````
 
 This translates to a SQL `NOT EXISTS` with the negated predicate:
 
@@ -67,7 +98,7 @@ This translates to a SQL `NOT EXISTS` with the negated predicate:
 WHERE NOT EXISTS (
   SELECT 1 FROM "order_item" i WHERE i.orderId = order.id AND NOT (i.Shipped = true)
 )
-```
+````
 
 **Vacuous truth** — `all()` with an empty collection returns true (per OData spec). This is consistent with standard logical quantification.
 
@@ -87,13 +118,21 @@ GET /odata/Products?$filter=Reviews/all(r: r/Rating ge 4)
 ### Properties inside a lambda
 
 Inside the predicate, a path that starts with the range variable (`i/Shipping`) is a property of
-the collection's entity. A path without it (`Total`) is a property of the entity being filtered,
-as in OData's `$it`. Predicates can combine conditions with `and`, `or` and `not`:
+the collection's entity. A path without it (`Total`), or prefixed with `$it` (`$it/Total`), is a
+property of the entity being filtered. Predicates can combine conditions with `and`, `or` and
+`not`, and compare properties of both:
 
 ```
 # Orders with an express item, where the order itself is over $500
 GET /odata/Orders?$filter=Items/any(i: i/Shipping eq 'express' and Total gt 500)
+
+# Orders with an item whose quantity exceeds the order's total
+GET /odata/Orders?$filter=Items/any(i: i/Quantity gt $it/Total)
 ```
+
+[Navigation paths](./query-options#navigation-paths) work on both sides:
+`Items/any(i: i/Product/Name eq 'Saw')` follows the item's product,
+`Items/any(i: i/Quantity gt 10 and Customer/Country eq 'NL')` the order's customer.
 
 ### Combining lambda with other filters
 
@@ -340,6 +379,8 @@ curl 'http://localhost:3000/odata/Orders?$filter=year(OrderDate) eq 2024 and Ite
 | ---------------------------------- | ------------------------------------------------------------------------------------------- |
 | `Items/any(i: i/Price gt 100)`     | `EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND i.Price > 100)`              |
 | `Items/all(i: i/Shipped eq true)`  | `NOT EXISTS (SELECT 1 FROM "item" i WHERE i.orderId = order.id AND NOT (i.Shipped = true))` |
+| `Category/Name eq 'Tools'`         | `(SELECT n.name FROM "category" n WHERE n.id = product.categoryId) = 'Tools'`               |
+| `Description eq null`              | `Description IS NULL`                                                                       |
 | `Price add Tax gt 50`              | `(Price + Tax) > 50`                                                                        |
 | `year(CreatedAt) eq 2024`          | `EXTRACT(YEAR FROM CreatedAt) = 2024`                                                       |
 | `indexof(Name, 'Pro') ge 0`        | `STRPOS(Name, 'Pro') - 1 >= 0`                                                              |

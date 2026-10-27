@@ -57,6 +57,41 @@ $filter=description eq null
 $filter=deletedAt ne null
 ```
 
+`eq null` and `ne null` translate to `IS NULL` and `IS NOT NULL`.
+
+### Navigation paths
+
+Properties of a related entity are reachable through single-valued navigation properties
+(`@ManyToOne`, `@OneToOne`), with a `/` between segments (OData 4.01 Part 2 §5.1.1.15):
+
+```
+$filter=category/name eq 'Tools'
+$filter=store/region/name eq 'North'
+$filter=startswith(category/name, 'Elec') or price gt 100
+$filter=category/name eq null
+```
+
+Each path renders as a correlated subquery on the related table. When the related entity is
+missing, or outside the [row-level scope](./row-level-scopes) of its entity set, the path is
+`null`, as with a `LEFT JOIN`. Navigation paths also work after a lambda variable
+(`items/any(i: i/product/name eq 'Saw')`) and in nested `$expand` filters.
+
+A collection-valued navigation property (`@OneToMany`, `@ManyToMany`) cannot be used in a path:
+filter on it with a [lambda](./filter-functions#lambda-expressions) (`orderItems/any(i: i/quantity gt 1)`).
+Otherwise the request answers 400.
+
+### `$it`
+
+`$it` refers to the entity being filtered: `$it/price gt 10` is the same as `price gt 10`. It is
+mostly useful inside a lambda predicate, to reach the outer entity explicitly:
+
+```
+$filter=items/any(d: d/quantity gt $it/minQuantity)
+```
+
+`$root` and `$it` inside `$expand` options (where it would mean the parent entity) are not
+implemented and answer 501.
+
 ### Examples
 
 ```bash
@@ -113,6 +148,8 @@ curl 'http://localhost:3000/odata/Products?$orderby=price desc'
 # Multiple sort fields
 curl 'http://localhost:3000/odata/Products?$orderby=inStock desc,price asc'
 ```
+
+Navigation paths in `$orderby` (`$orderby=category/name`) are not implemented and answer 501.
 
 ## $top and $skip
 
@@ -301,6 +338,27 @@ curl 'http://localhost:3000/odata/Products?$apply=filter(active eq true)/groupby
 ## Advanced filter functions
 
 For lambda expressions (`any`/`all`), arithmetic operators, date/time extraction functions, and additional string functions (`indexof`, `substring`, `concat`) — see the [Filter Functions guide](./filter-functions.md).
+
+## Unsupported features: 501 Not Implemented
+
+Valid OData syntax that the library does not implement is answered with
+`501 Not Implemented` (OData 4.01 Part 1 §9.3.1), never silently ignored:
+
+```json
+{
+  "error": {
+    "code": "NotImplemented",
+    "message": "'$root' is not supported in $filter and $orderby expressions",
+    "details": []
+  }
+}
+```
+
+This covers `$root`, `$it` inside `$expand` options, `$count`/`$this` path segments in `$filter`,
+navigation paths in `$orderby`, and the nested `$expand` options listed in
+[Unsupported nested options](./expand#unsupported-nested-options). Malformed or unknown syntax
+is still a 400. The `ODataNotImplementedError` class is exported from `@nestjs-odata/core` for
+custom code that wants the same response.
 
 ## Response annotations
 

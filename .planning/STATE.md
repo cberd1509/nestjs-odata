@@ -90,10 +90,11 @@ None yet.
 
 ### Quick Tasks Completed
 
-| #          | Description                                                                              | Date       | Commit  | Directory                                                                  |
-| ---------- | ---------------------------------------------------------------------------------------- | ---------- | ------- | -------------------------------------------------------------------------- |
-| 260408-ox4 | Fix npm publish metadata: version 1.0.0, repository, keywords, READMEs, changeset config | 2026-04-08 | 3848e04 | [260408-ox4](./quick/260408-ox4-fix-npm-publish-metadata-for-both-packag/) |
-| 261027-dsr | Dependency security refresh: clear Dependabot alerts, Vitest 4, Actions v7               | 2026-10-27 | facb1c7 | [261027-dsr](./quick/261027-dsr-deps-security-refresh/)                    |
+| #          | Description                                                                                    | Date       | Commit  | Directory                                                                  |
+| ---------- | ---------------------------------------------------------------------------------------------- | ---------- | ------- | -------------------------------------------------------------------------- |
+| 260408-ox4 | Fix npm publish metadata: version 1.0.0, repository, keywords, READMEs, changeset config       | 2026-04-08 | 3848e04 | [260408-ox4](./quick/260408-ox4-fix-npm-publish-metadata-for-both-packag/) |
+| 261027-dsr | Dependency security refresh: clear Dependabot alerts, Vitest 4, Actions v7                     | 2026-10-27 | facb1c7 | [261027-dsr](./quick/261027-dsr-deps-security-refresh/)                    |
+| 261027-oqc | OData 4.01 query conformance: nav paths, lambdas, nested $expand options (#66 #68 #69 #72 #74) | 2026-10-27 | f262090 | [261027-oqc](./quick/261027-oqc-odata-query-conformance/)                  |
 
 ## Session Continuity
 

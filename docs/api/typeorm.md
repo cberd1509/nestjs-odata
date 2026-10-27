@@ -183,14 +183,25 @@ Visitor application order:
 4. **pagination** -- take/skip
 5. **expand** -- JOINs for navigation properties
 
-**Returns:** A `TranslateResult` containing the `SelectQueryBuilder` and an `expandPaginationMap` for post-JOIN in-memory slicing.
+**Returns:** A `TranslateResult` containing the `SelectQueryBuilder`, the `expandPaginationMap`
+of the nested `$top`/`$skip` that could not be paged in SQL, and the count queries of nested
+`$count=true` / `nav/$count` expand items.
 
 ```typescript
 interface TranslateResult {
   readonly qb: SelectQueryBuilder<ObjectLiteral>
+  /** Keyed by expand path: `items`, `store/items`. */
   readonly expandPaginationMap: ReadonlyMap<string, { skip?: number; top?: number }>
+  readonly applyProperties?: string[]
+  readonly expandCounts?: readonly ExpandCountQuery[]
 }
 ```
+
+Nested `$top`/`$skip` on one-to-many navigation properties are paged in SQL
+(`ROW_NUMBER() OVER (PARTITION BY <foreign key> ...)` in the JOIN condition) on SQLite,
+PostgreSQL, CockroachDB, SQL Server and Oracle, and are then absent from `expandPaginationMap`.
+Many-to-many navigations, composite keys and other drivers are sliced in memory by `execute()`
+(or by `applyExpandPagination(items, expandPaginationMap)` when you execute `qb` yourself).
 
 ### execute()
 
@@ -201,7 +212,9 @@ async execute(
 ): Promise<ODataQueryResult>
 ```
 
-Execute the translated query builder and return structured results. Applies post-JOIN in-memory expand pagination after fetching.
+Execute the translated query builder and return structured results. After fetching, it slices
+the expanded collections listed in `expandPaginationMap` and runs the `expandCounts` queries,
+which set `<navigation>@odata.count` on the parent entities.
 
 **Parameters:**
 
@@ -265,8 +278,7 @@ interface ODataWriteHandlers<TEntity> {
   delete?(key: ODataEntityKey, ctx): void | Promise<void>
 }
 type ODataETagSource =
-  | string
-  | ((entity: Record<string, unknown>) => string | number | Date | null | undefined)
+  string | ((entity: Record<string, unknown>) => string | number | Date | null | undefined)
 type ODataChangesetRunner = <T>(
   work: (manager: EntityManager) => Promise<T>,
   ctx: { executionContext?; request? },
