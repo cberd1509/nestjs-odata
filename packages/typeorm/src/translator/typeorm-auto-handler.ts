@@ -200,7 +200,7 @@ export class TypeOrmAutoHandler {
     if (!entitySet) return this.repo
     for (const meta of this.dataSource.entityMetadatas) {
       if (meta.name === entitySet.entityTypeName) {
-        return this.dataSource.getRepository(meta.target as new () => ObjectLiteral)
+        return this.dataSource.getRepository(meta.target)
       }
     }
     return this.repo
@@ -477,7 +477,7 @@ export class TypeOrmAutoHandler {
     }
 
     // Save parent entity using the per-entity-set repo (resolved via DataSource).
-    const parentRepo = manager.getRepository(handlerRepo.target as new () => ObjectLiteral)
+    const parentRepo = manager.getRepository(handlerRepo.target)
     const parentCreated = parentRepo.create(scalarBody as ObjectLiteral)
     const savedParent = (await parentRepo.save(parentCreated)) as Record<string, unknown>
 
@@ -555,8 +555,8 @@ export class TypeOrmAutoHandler {
         try {
           if (childEntityClass) {
             // Use a fresh repo for the child entity class
-            const childRepo = manager.getRepository(childEntityClass as new () => ObjectLiteral)
-            const childCreated = childRepo.create(childBody as ObjectLiteral)
+            const childRepo = manager.getRepository(childEntityClass)
+            const childCreated = childRepo.create(childBody)
             await childRepo.save(childCreated)
           } else {
             // Fallback: use the child entity set name to resolve via handleDeepCreate recursion

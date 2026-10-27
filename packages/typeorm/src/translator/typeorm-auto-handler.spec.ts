@@ -4,7 +4,6 @@ import type {
   SelectQueryBuilder,
   ObjectLiteral,
   Repository,
-  DeleteResult,
   EntityManager,
   DataSource,
 } from 'typeorm'
@@ -400,7 +399,7 @@ describe('TypeOrmAutoHandler', () => {
   describe('handleDelete()', () => {
     it('Test 15: calls repo.delete with correct where clause and returns void on success', async () => {
       const { repo, deleteMethod } = makeMockRepo()
-      deleteMethod.mockResolvedValue({ affected: 1 } as DeleteResult)
+      deleteMethod.mockResolvedValue({ affected: 1 })
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
       await expect(autoHandler.handleDelete('1', 'Products')).resolves.toBeUndefined()
@@ -409,7 +408,7 @@ describe('TypeOrmAutoHandler', () => {
 
     it('Test 16: throws NotFoundException when repo.delete returns affected=0', async () => {
       const { repo, deleteMethod } = makeMockRepo()
-      deleteMethod.mockResolvedValue({ affected: 0 } as DeleteResult)
+      deleteMethod.mockResolvedValue({ affected: 0 })
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
       await expect(autoHandler.handleDelete('999', 'Products')).rejects.toThrow(NotFoundException)

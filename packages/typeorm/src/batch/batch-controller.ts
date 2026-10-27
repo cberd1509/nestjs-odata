@@ -310,7 +310,7 @@ export class BatchController {
     manager: EntityManager,
     operation: 'entity' | 'write',
   ): Promise<ObjectLiteral | null> {
-    if (!this.scopes) return manager.findOne(entityClass as new () => ObjectLiteral, { where })
+    if (!this.scopes) return manager.findOne(entityClass, { where })
     const found = await this.scopes.findOne(entitySetName, where, operation, manager, {
       lock: operation === 'write',
     })
@@ -684,7 +684,7 @@ export class BatchController {
       )
       items = await qb.getMany()
     } else {
-      items = await manager.find(entityClass as new () => ObjectLiteral, {
+      items = await manager.find(entityClass, {
         take: this.options.maxTop,
       })
     }
@@ -705,7 +705,7 @@ export class BatchController {
     manager: EntityManager,
   ): Promise<BatchResponsePart> {
     const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const repo = manager.getRepository(entityClass as new () => ObjectLiteral)
+    const repo = manager.getRepository(entityClass)
     const created = repo.create(body as ObjectLiteral)
     const saved = (await repo.save(created)) as Record<string, unknown>
     return this.entityPart(part.contentId, 201, entitySetName, saved, {
@@ -732,7 +732,7 @@ export class BatchController {
     // Merge patch fields onto the existing entity, then save. Key properties in the body are
     // ignored (OData §11.4.3): the URL key identifies the row.
     const patch = withoutKeyProperties(keyProperties, body)
-    const merged = manager.merge(EntityCls, existing, patch as ObjectLiteral)
+    const merged = manager.merge(EntityCls, existing, patch)
     const saved = await manager.save(EntityCls, merged)
     return this.entityPart(part.contentId, 200, entitySetName, saved)
   }
@@ -820,7 +820,7 @@ export class BatchController {
       const stale = this.preconditionFailed(contentId, entitySetName, existing, part)
       if (stale) return stale
     }
-    const result = await manager.delete(entityClass as new () => ObjectLiteral, where)
+    const result = await manager.delete(entityClass, where)
     if (result.affected === 0) return notFound()
     return {
       contentId,

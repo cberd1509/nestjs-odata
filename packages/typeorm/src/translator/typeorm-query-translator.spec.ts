@@ -302,7 +302,7 @@ describe('TypeOrmQueryTranslator', () => {
         repo,
         mockEdmRegistry,
         mockOptions,
-        mockSearchProvider as never,
+        mockSearchProvider,
       )
       const query: ODataQuery = {
         entitySetName: 'Products',
@@ -336,7 +336,7 @@ describe('TypeOrmQueryTranslator', () => {
         repo,
         mockEdmRegistry,
         mockOptions,
-        mockSearchProvider as never,
+        mockSearchProvider,
       )
       const query: ODataQuery = {
         entitySetName: 'Products',
@@ -403,7 +403,7 @@ describe('TypeOrmQueryTranslator', () => {
     })
 
     it('supports legacy raw SelectQueryBuilder input', async () => {
-      const result = await translator.execute(qb as never, false)
+      const result = await translator.execute(qb, false)
       expect(qb.getMany).toHaveBeenCalled()
       expect(result.items).toEqual([{ id: 1 }, { id: 2 }])
     })

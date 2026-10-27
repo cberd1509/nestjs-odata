@@ -280,7 +280,7 @@ describe('TypeOrmScopeService', () => {
             },
           ],
         },
-      } as ODataQuery,
+      },
       'collection',
     )
     expect(plan.lambda.size).toBe(0)
@@ -289,7 +289,7 @@ describe('TypeOrmScopeService', () => {
         entitySetName: 'Docs',
         expand: {
           items: [
-            { navigationProperty: 'folder', filter: lambda as never },
+            { navigationProperty: 'folder', filter: lambda },
             { navigationProperty: 'unknown' },
           ],
         },
@@ -405,7 +405,7 @@ describe('TypeOrmScopeService', () => {
     const { qb } = translator.translate(
       query,
       edm.getEntityType('Folder')!,
-      dataSource.getRepository(Folder) as never,
+      dataSource.getRepository(Folder),
       plan,
     )
     expect(qb.getQuery()).toMatch(/sub_lambda_\d+\."id" IN \(SELECT/)
