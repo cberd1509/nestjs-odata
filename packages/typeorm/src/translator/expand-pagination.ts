@@ -41,7 +41,7 @@ export function entitiesAt(
     for (const entity of current) {
       const value: unknown = entity[segment]
       if (Array.isArray(value)) next.push(...(value as ObjectLiteral[]))
-      else if (value !== null && typeof value === 'object') next.push(value as ObjectLiteral)
+      else if (value !== null && typeof value === 'object') next.push(value)
     }
     current = next
   }
