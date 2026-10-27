@@ -406,45 +406,50 @@ curl 'http://localhost:3000/odata/Products?$count=true&$top=5'
 
 ### $batch
 
-Send multiple operations in a single HTTP request. The batch endpoint is auto-registered at `POST /odata/$batch`:
+Send multiple operations in a single HTTP request. The batch endpoint is auto-registered at
+`POST /odata/$batch` and takes a `multipart/mixed` body. Each operation runs through its route
+(guards included) like a standalone request, so `OrdersController` needs `POST` and `PATCH`
+routes and `ProductsController` a `GET` route. Here a changeset creates an order and confirms it
+atomically, then a GET reads a page of products:
 
 ```bash
-curl -X POST http://localhost:3000/odata/\$batch \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "requests": [
-      {
-        "id": "1",
-        "method": "POST",
-        "url": "/odata/Orders",
-        "headers": { "Content-Type": "application/json" },
-        "body": {
-          "orderDate": "2025-06-15T10:30:00Z",
-          "totalAmount": 149.97,
-          "status": "pending",
-          "customerId": 1
-        }
-      },
-      {
-        "id": "2",
-        "method": "POST",
-        "url": "/odata/OrderItems",
-        "headers": { "Content-Type": "application/json" },
-        "body": {
-          "quantity": 3,
-          "unitPrice": 49.99,
-          "orderId": 1,
-          "productId": 1
-        }
-      },
-      {
-        "id": "3",
-        "method": "GET",
-        "url": "/odata/Products?$top=5&$select=id,name,price"
-      }
-    ]
-  }'
+BATCH_BODY='--batch_1
+Content-Type: multipart/mixed; boundary=changeset_1
+
+--changeset_1
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+Content-ID: 1
+
+POST /odata/Orders HTTP/1.1
+Content-Type: application/json
+
+{"orderDate":"2025-06-15T10:30:00Z","totalAmount":149.97,"status":"pending","customerId":1}
+--changeset_1
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+Content-ID: 2
+
+PATCH $1 HTTP/1.1
+Content-Type: application/json
+
+{"status":"confirmed"}
+--changeset_1--
+
+--batch_1
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+GET /odata/Products?$top=5&$select=id,name,price HTTP/1.1
+
+--batch_1--'
+
+curl -X POST 'http://localhost:3000/odata/$batch' \
+  -H 'Content-Type: multipart/mixed; boundary=batch_1' \
+  --data-raw "$BATCH_BODY"
 ```
+
+See [$batch](../guide/batch) for the response format and changeset rules.
 
 ## Security configuration
 

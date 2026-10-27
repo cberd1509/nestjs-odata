@@ -23,7 +23,7 @@ features:
   - title: Rich Filter Support
     details: Navigation paths, lambda any/all (incl. many-to-many), arithmetic operators, date/time and string functions — all translated to parameterized SQL.
   - title: $batch Support
-    details: Multi-operation batch requests with atomic changesets. Zero additional setup when using ODataTypeOrmModule.
+    details: Multi-operation batch requests with atomic changesets. Every operation runs through its route, guards included, like a standalone request. Zero additional setup when using ODataTypeOrmModule.
   - title: Security Built-In
     details: maxTop, maxExpandDepth, maxFilterDepth limits enforced server-side. Parameterized queries prevent SQL injection.
 ---

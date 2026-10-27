@@ -101,8 +101,10 @@ interface ODataScopeContext {
 
 `executionContext` and `request` come from the route being handled. `ODataModule.forRoot()`
 registers a global interceptor, `ODataRequestContextInterceptor`, that keeps them for the whole
-request. It runs after guards, so `request.user` is already set. In `$batch` they are the
-context and request of the `$batch` call. Outside an HTTP request (a queue worker calling
+request. It runs after guards, so `request.user` is already set. A `$batch` operation runs
+through its own route, so they are that operation's context and request (which inherits the
+`$batch` request's credentials); the `$batch` request itself is `getODataBatchPart()?.batchRequest`.
+Outside an HTTP request (a queue worker calling
 `TypeOrmAutoHandler`), provide them yourself:
 
 ```typescript
@@ -142,8 +144,8 @@ Some consequences:
   and `DELETE` look the row up through the scope and write it in the same transaction. On
   drivers with row locks (PostgreSQL, MySQL/MariaDB, SQL Server, Oracle and others) the row is
   locked (`SELECT ... FOR UPDATE`), so it can't leave the scope between the check and the write.
-  `$batch` writes outside a changeset get their own transaction. Inside a changeset, the
-  changeset's transaction is used.
+  `$batch` operations outside a changeset behave like standalone requests. Inside a changeset,
+  the check and the write run in the changeset's transaction.
 - **Scoped by-key reads load eager relations,** like `Repository.findOne()`.
 - **Rows outside the scope look absent.** By-key reads and writes return 404, not 403, so their
   existence doesn't leak.
@@ -188,5 +190,4 @@ builders.
   a write: a `POST`, or a `PATCH` that changes the scoped column, can still create or move a row
   outside the caller's scope. Validate writes in your controller, or route them through your own
   code.
-- `$batch` collection GETs ignore query options (an existing `$batch` limitation). They are still
-  scoped.
+- `$batch` operations are scoped exactly like standalone requests, query options included.

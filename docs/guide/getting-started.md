@@ -306,7 +306,7 @@ curl http://localhost:3000/odata/$metadata
 
 - **`GET /odata/$metadata`** — CSDL XML describing all entity types and sets
 - **`GET /odata/`** — OData service document listing all entity sets
-- **`POST /odata/$batch`** — Multi-operation batch endpoint (requires `ODataTypeOrmModule`)
+- **`POST /odata/$batch`** — Multi-operation batch endpoint (requires `ODataTypeOrmModule`); each operation runs through your routes and guards
 - **`GET /odata/Products/$count`** — Plain-text count of entities (automatic with `TypeOrmAutoHandler`)
 - **Query options** — `$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count`, `$expand`
 

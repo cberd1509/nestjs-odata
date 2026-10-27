@@ -166,6 +166,7 @@ The TypeORM adapter module. Derives OData EDM from TypeORM entity metadata.
 ```typescript
 ODataTypeOrmModule.forRoot(options?: {
   changesetRunner?: ODataChangesetRunner
+  batch?: ODataBatchOptions // { enabled?: boolean; entitySets?: readonly string[] }
 }): DynamicModule
 ```
 
@@ -176,6 +177,9 @@ Optional, imported once in the root module (global). Application-wide adapter se
   [$batch changesets and atomicity](../guide/write-handlers#batch-changesets-and-atomicity).
   For a runner with injected dependencies, provide the `ODATA_CHANGESET_RUNNER` token from a
   `@Global()` module instead.
+- `batch` controls the `$batch` endpoint: `enabled: false` answers 404, `entitySets` allow-lists
+  the entity sets operations may target (others answer 403). Provided under the
+  `ODATA_BATCH_OPTIONS` token. See [$batch](../guide/batch#turning-batch-off-or-restricting-it).
 
 ### ODataTypeOrmModule.forFeature()
 
@@ -236,7 +240,7 @@ type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
 3. Registers `TypeOrmQueryTranslator` for `$filter`, `$select`, `$orderby`, `$expand`, `$search`, `$apply` translation
 4. Registers `TypeOrmAutoHandler` for zero-boilerplate CRUD operation handling. Multi-entity safe: each request resolves the right Repository from its entity-set name (no need to split into per-feature modules)
 5. Registers `TypeOrmETagProvider` and `TypeOrmSearchProvider` for ETag concurrency and `$search` support
-6. Registers `BatchController` at `POST {serviceRoot}/$batch`
+6. Imports `ODataBatchModule`, which registers `BatchController` at `POST {serviceRoot}/$batch` once per application: one endpoint serves the entity sets of every `forFeature()` module
 7. (When `options.controllers` is set) Patches each controller's `PATH_METADATA` with `serviceRoot` and registers it in the dynamic module's `controllers` array
 
 **Examples:**
@@ -275,6 +279,31 @@ import { getODataRequestContext, runWithODataRequestContext } from '@nestjs-odat
 getODataRequestContext() // { executionContext?, request? } | undefined outside a request
 runWithODataRequestContext({ request }, () => handler.handleGet(query, url)) // outside HTTP
 ```
+
+### $batch operations
+
+Each `$batch` operation runs through its own route, so the request context is the operation's.
+While it runs, `getODataBatchPart()` describes it:
+
+```typescript
+import { getODataBatchPart, type ODataBatchPartContext } from '@nestjs-odata/core'
+
+interface ODataBatchPartContext {
+  method: string // as sent in the batch
+  url: string // as sent, after $<Content-ID> references are resolved
+  contentId?: string
+  inChangeset: boolean
+  batchRequest: unknown // the platform request of the enclosing $batch request
+}
+
+getODataBatchPart() // ODataBatchPartContext | undefined (not in a $batch)
+```
+
+Lower-level helpers used by the adapter's `BatchController`, exported for other adapters:
+`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress? })` (runs one
+operation through the Express application or Fastify's `inject()`, in process),
+`batchOperationHeaders(batchHeaders, partHeaders, hasBody)` (the headers an operation inherits),
+`resolveBatchOperationUrl(operationUrl, batchUrl)` and `runWithODataBatchPart(part, fn)`.
 
 ## Injection tokens
 

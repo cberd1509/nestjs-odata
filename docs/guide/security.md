@@ -221,7 +221,7 @@ is an extra, service-defined member. A parse error's detail is
 
 Unknown exceptions become a generic 500, and the message of every 5xx error (including a
 `ServiceUnavailableException`'s) is replaced by a generic one, so internal details never leak.
-This holds for `$batch` parts too. To give clients
+This holds for `$batch` operations too. To give clients
 meaningful errors for your own exception types (or for database errors such as unique
 violations), use the [`errorMapper`](./error-mapping) option. Whatever it returns is sent to the
 client as is.
@@ -261,6 +261,35 @@ async deleteProduct(@Param('key') key: string) {
   return this.handler.handleDelete(key, 'Products')
 }
 ```
+
+### $batch
+
+Operations inside `POST {serviceRoot}/$batch` are authorized **exactly like the same request sent
+on its own** (OData 4.01 Part 1 §11.7): each one is dispatched through your application's HTTP
+stack and reaches its route with the route's guards, global guards, middleware, interceptors and
+pipes. A guard that denies `DELETE /odata/Products/1` (403) also denies `DELETE Products(1)` in a
+batch; inside a changeset, the denial fails and rolls back the whole changeset.
+
+- Operations inherit the credentials of the `$batch` request (`Authorization`, `Cookie`, custom
+  headers): OData forbids authentication headers on individual parts (§11.7.7.1). Conditional and
+  `Prefer` headers are never inherited.
+- An operation can only reach routes a standalone request can reach: entity sets or methods
+  without a route answer `404`.
+- `getODataBatchPart()` (from `@nestjs-odata/core`) is defined while a batch operation runs, so a
+  guard can apply a batch-specific policy (for example refuse deletes inside `$batch`).
+- `ODataTypeOrmModule.forRoot({ batch: { enabled: false } })` turns the endpoint off (404);
+  `batch: { entitySets: [...] }` allow-lists the entity sets operations may target (other
+  targets answer 403 without reaching their route). See [$batch](./batch#turning-batch-off-or-restricting-it).
+- Each operation counts as a request for rate limiters such as `@nestjs/throttler`; the batch is
+  limited to 100 operations.
+
+::: warning Upgrading from versions before this change
+Earlier versions executed `$batch` operations directly against TypeORM: route guards,
+interceptors and pipes of `@ODataController` routes did **not** run for them (only row-level
+scopes, write handlers and guards on the `$batch` route itself applied). If you relied on a
+global guard or middleware on `$batch` to compensate, it still works; if you relied on the
+bypass, operations your route guards deny are now refused.
+:::
 
 ### Row-level access
 

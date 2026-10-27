@@ -1,6 +1,7 @@
 # Custom write handlers
 
-By default, `TypeOrmAutoHandler` and `$batch` write through the TypeORM repository. **Write
+By default, `TypeOrmAutoHandler` writes through the TypeORM repository (also for `$batch`
+operations, which run through your routes). **Write
 handlers** route an entity set's writes through your own code instead: an application service,
 a command bus, a use case with its own validation, auditing or events. Reads still use the
 OData query pipeline.
@@ -96,8 +97,8 @@ interface ODataWriteContext {
   ifMatch?: string // the If-Match header
   ifNoneMatch?: string // the If-None-Match header
   requireIfMatch?: boolean // true when the entity set has requireIfMatch
-  executionContext?: ExecutionContext // the route's (the $batch route's, in a batch)
-  request?: unknown // the Express/Fastify request (the $batch request, in a batch)
+  executionContext?: ExecutionContext // the route's (in a batch, the operation's own route)
+  request?: unknown // the Express/Fastify request (in a batch, the operation's own request)
   manager?: EntityManager // the transaction's manager: in a $batch changeset, or passed to handleDeepCreate
   batch?: { contentId?: string; inChangeset: boolean }
 }
@@ -175,13 +176,15 @@ runs (outside a changeset), so re-check what matters inside your own transaction
 
 ## `$batch` changesets and atomicity
 
-Writes inside a changeset go through the same handlers, with `ctx.batch.inChangeset === true`
-and `ctx.manager` set to the changeset's transaction. The library makes changesets atomic as
+Writes inside a changeset reach the same handlers through their routes, with
+`ctx.batch.inChangeset === true` and `ctx.manager` set to the changeset's transaction (also
+available anywhere in the operation as `getODataChangesetManager()` from
+`@nestjs-odata/typeorm`). The library makes changesets atomic as
 long as **your handlers write through the transaction the changeset runs in**:
 
 - **Default:** each changeset runs in a TypeORM `QueryRunner` transaction. Write through
   `ctx.manager` (`ctx.manager.getRepository(Account)`). If any operation fails, the library
-  rolls back and every part of the changeset gets the error.
+  rolls back and answers the changeset with that operation's error alone.
 - **Your own unit of work:** pass `changesetRunner` to `ODataTypeOrmModule.forRoot()`, once in
   the root module (it applies to every changeset of the application). It receives a `work`
   function that runs every operation of the changeset and rejects when one fails. Commit when
@@ -203,12 +206,12 @@ long as **your handlers write through the transaction the changeset runs in**:
   The `manager` you pass to `work` becomes `ctx.manager`. If your services find the current
   transaction another way (for example AsyncLocalStorage), start it in the runner: the
   handlers run inside the runner's callback. The runner may wrap or replace the error it sees:
-  the parts still get the failing operation's own status.
+  the changeset is still answered with the failing operation's own status.
 
   A runner that needs injected services: provide the `ODATA_CHANGESET_RUNNER` token yourself
   from a `@Global()` module (`useFactory` + `inject`) instead of calling `forRoot()`.
 
-Outside a changeset (single parts of a `$batch`, plain requests), the library opens no
+Outside a changeset (single operations of a `$batch`, plain requests), the library opens no
 transaction for handlers and `ctx.manager` is `undefined`. The one exception is
 `handleDeepCreate(body, set, manager)`: the `manager` your controller passes is handed to the
 `deepInsert` / `create` handler as `ctx.manager`.

@@ -296,6 +296,34 @@ per request from the entity-set name. Older releases routed everything to
 `entities[0]`. Bug #1 in the integration handoff doc; covered by
 `multi-entity-disambiguation.e2e-spec.ts`.
 
+## A `$batch` operation answers 403, 404 or 401 although the batch request is fine
+
+`$batch` operations run through their routes like standalone requests (see
+[$batch](./batch#how-operations-are-evaluated)):
+
+- **403**: a guard of the route (or a global guard) denied it — the same request sent on its own
+  is denied too. Or the target is not in the `batch.entitySets` allow-list of
+  `ODataTypeOrmModule.forRoot()`.
+- **401**: the credentials come from the `$batch` request (`Authorization`, `Cookie`): send them
+  on the `POST /odata/$batch` request, not on the individual parts.
+- **404**: there is no route for that method and entity set (for example the controller has no
+  `@ODataDelete`, or the entity set has no controller at all), or the key does not exist.
+
+## A `$batch` changeset is answered with a single error part
+
+That is the OData 4.01 format (Part 1 §11.7.7.5): when an operation of a changeset fails, the
+changeset is rolled back and answered with that operation's error alone, carrying its
+`Content-ID`, instead of one part per request. Operations after it are not executed. A
+successful changeset is a nested `multipart/mixed` part with one response per request.
+
+## Writes of my own code in a `$batch` changeset are not rolled back
+
+Each changeset runs in one transaction, propagated to its operations. `TypeOrmAutoHandler`,
+scopes and write handlers use it; code of your own that writes from an OData route must too:
+use `getODataChangesetManager() ?? dataSource.manager` (from `@nestjs-odata/typeorm`) instead of
+opening its own transaction or using an injected repository. See
+[$batch changesets](./batch#changesets-atomic-operations).
+
 ## Still stuck?
 
 - Check the [GitHub Issues](https://github.com/cberd1509/nestjs-odata/issues) for known problems
