@@ -11,6 +11,6 @@ export { ODataScopeRegistry } from './scope-registry.js'
 export {
   TypeOrmScopeService,
   applyScopeToQuery,
-  navigationTargetTypeName,
+  lookupScope,
   scopeInCondition,
 } from './typeorm-scope.service.js'

@@ -101,4 +101,9 @@ export interface TypeOrmScopePlan {
   readonly expand: ReadonlyMap<string, ScopedSubquery>
   /** Scopes of lambda (`any`/`all`) targets, keyed by navigation path (`items`). */
   readonly lambda: ReadonlyMap<string, ScopedSubquery>
+  /**
+   * True under `requireScope`: a path without an entry fails instead of running unscoped.
+   * Optional so hand-built plans stay valid; `prepare()` always sets it.
+   */
+  readonly required?: boolean
 }

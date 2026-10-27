@@ -47,6 +47,7 @@ import {
   ODataDelete,
   ODataGet,
   ODataGetByKey,
+  ODataExclude,
   ODataModule,
   ODataPatch,
   ODataPut,
@@ -89,6 +90,14 @@ class ScopedTask {
 
   @Column({ type: 'integer' })
   projectId: number
+
+  /** Not loaded by TypeORM by default: must not be reachable through OData either. */
+  @Column({ type: 'varchar', length: 50, select: false, default: 'top-secret' })
+  secret: string
+
+  @ODataExclude()
+  @Column({ type: 'varchar', length: 50, default: 'internal' })
+  internalNote: string
 
   @ManyToOne(() => ScopedProject, (project) => project.tasks)
   project: ScopedProject
@@ -444,6 +453,50 @@ describe('Row-level scopes (e2e)', () => {
 
     const task = await dataSource.getRepository(ScopedTask).findOneByOrFail({ id: 3 })
     expect(task.title).toBe('B-task')
+  })
+
+  it('validates nested $expand options and hides select:false and @ODataExclude columns', async () => {
+    for (const path of [
+      '/odata/ScopedProjects?$expand=tasks($select=secret)',
+      "/odata/ScopedProjects?$expand=tasks($filter=secret eq 'top-secret')",
+      '/odata/ScopedProjects?$expand=tasks($orderby=internalNote)',
+      '/odata/ScopedProjects?$expand=tasks($select=nope)',
+      '/odata/ScopedProjects?$expand=tasks($expand=nope)',
+      "/odata/ScopedTasks?$filter=secret eq 'top-secret'",
+    ]) {
+      const res = await asOwner('A', path)
+      expect({ path, status: res.status }).toEqual({ path, status: 400 })
+    }
+    const ok = await asOwner('A', '/odata/ScopedProjects?$expand=tasks($select=title)').expect(200)
+    expect(ok.body.value[0].tasks[0]).not.toHaveProperty('secret')
+  })
+
+  it('binds lambda properties without the range variable to the outer entity', async () => {
+    // `title` is the project's (A-project), `t/ownerId` the task's.
+    const res = await asOwner(
+      'A',
+      "/odata/ScopedProjects?$filter=tasks/any(t: t/ownerId eq 'A' and title eq 'A-project')",
+    ).expect(200)
+    expect(res.body.value.map((p: { id: number }) => p.id)).toEqual([1])
+  })
+
+  it('refuses a PATCH whose body key points at another row (HTTP and $batch)', async () => {
+    await http
+      .patch('/odata/ScopedProjects/1')
+      .set('x-owner', 'A')
+      .send({ id: 2, title: 'hijacked' })
+      .expect(400)
+    const text = await postBatch(
+      'A',
+      batchBody([
+        batchChangeset([
+          batchRequest('PATCH', '/odata/ScopedProjects(1)', '{"id":2,"title":"hijacked"}'),
+        ]),
+      ]),
+    )
+    expect(text).toContain('HTTP/1.1 400')
+    const rows = await dataSource.getRepository(ScopedProject).find({ order: { id: 'ASC' } })
+    expect(rows.map((r) => r.title)).not.toContain('hijacked')
   })
 
   it('hands the scope its context: entity set, metadata, alias, operation, path and request', async () => {

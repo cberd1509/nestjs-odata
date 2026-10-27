@@ -237,10 +237,11 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     const pkCol = this.repo.metadata.primaryColumns[0]?.databaseName ?? 'id'
 
     // Row-level scope of the target entity set: only rows inside it count for any/all.
+    const escapeColumn = (name: string): string => this.repo!.manager.connection.driver.escape(name)
     const scoped = this.lambdaScope?.(relation.propertyName)
     const scope = scoped
       ? {
-          sql: ` AND ${scopeInCondition(scoped, (c) => `${subAlias}.${c.databaseName}`)}`,
+          sql: ` AND ${scopeInCondition(scoped, (c) => `${subAlias}.${escapeColumn(c.databaseName)}`)}`,
           params: scoped.params,
         }
       : { sql: '', params: {} }
@@ -277,6 +278,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       this.paramCount,
       this.dialect,
       node.variable,
+      this.alias,
     )
     const result = builder.build(node.predicate)
     this.paramCount = result.finalCount
@@ -302,6 +304,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       this.paramCount,
       this.dialect,
       node.variable,
+      this.alias,
     )
     const result = builder.build(node.predicate!)
     this.paramCount = result.finalCount
@@ -477,6 +480,11 @@ class InnerFilterExprBuilder {
     private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
     /** Lambda range variable (`t` in `any(t: t/title eq 'x')`); `t/title` maps to `alias.title`. */
     private readonly lambdaVariable: string | null = null,
+    /**
+     * Alias of the entity the lambda is evaluated on. Inside a lambda, a path without the range
+     * variable (`ownerId` in `any(t: t/done eq true and ownerId eq 5)`) refers to that entity.
+     */
+    private readonly outerAlias?: string,
   ) {
     this.paramCount = startCount
   }
@@ -487,6 +495,13 @@ class InnerFilterExprBuilder {
   }
 
   private buildExpr(node: FilterNode): string {
+    if (node.kind === 'BinaryExpr' && (node.operator === 'and' || node.operator === 'or')) {
+      const op = node.operator === 'and' ? 'AND' : 'OR'
+      return `(${this.buildExpr(node.left)} ${op} ${this.buildExpr(node.right)})`
+    }
+    if (node.kind === 'UnaryExpr' && node.operator === 'not') {
+      return `NOT (${this.buildExpr(node.operand)})`
+    }
     if (node.kind === 'BinaryExpr') {
       const sqlArith = ARITH_OPS[node.operator]
       if (sqlArith) {
@@ -531,11 +546,11 @@ class InnerFilterExprBuilder {
       }
     }
     if (node.kind === 'PropertyAccess') {
-      const path =
-        this.lambdaVariable && node.path.length > 1 && node.path[0] === this.lambdaVariable
-          ? node.path.slice(1)
-          : node.path
-      return `${this.alias}.${path[0]}`
+      if (!this.lambdaVariable) return `${this.alias}.${node.path[0]}`
+      if (node.path.length > 1 && node.path[0] === this.lambdaVariable) {
+        return `${this.alias}.${node.path[1]}`
+      }
+      return `${this.outerAlias ?? this.alias}.${node.path[0]}`
     }
     if (node.kind === 'Literal') {
       this.paramCount++

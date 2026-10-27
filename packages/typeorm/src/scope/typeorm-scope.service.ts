@@ -2,6 +2,7 @@ import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common
 import {
   EdmRegistry,
   getODataRequestContext,
+  navigationTargetTypeName,
   ODATA_MODULE_OPTIONS,
   type EdmEntityType,
   type ExpandNode,
@@ -23,15 +24,6 @@ import type {
   ScopedSubquery,
   TypeOrmScopePlan,
 } from './scope.types.js'
-
-/** Strip `Collection(...)` and the namespace from an EDM navigation property type. */
-export function navigationTargetTypeName(navType: string): string {
-  const inner =
-    navType.startsWith('Collection(') && navType.endsWith(')')
-      ? navType.slice('Collection('.length, -1)
-      : navType
-  return inner.split('.').pop() ?? inner
-}
 
 /**
  * Build `<primary key> IN (<scoped subquery>)` for an outer reference to the scoped entity.
@@ -154,6 +146,10 @@ export class TypeOrmScopeService {
   /**
    * Resolve every scope an OData query touches: the root entity set, each `$expand` path and
    * each lambda (`any`/`all`) target in `$filter` (also inside `$expand` and `$apply` filters).
+   *
+   * Each scope runs once per entity set and operation for the request (concurrently), even
+   * when the entity set is reached through several paths; `ctx.navigationPath` is the first
+   * path it was reached through.
    */
   async prepare(
     query: ODataQuery,
@@ -161,94 +157,108 @@ export class TypeOrmScopeService {
     manager?: EntityManager,
   ): Promise<TypeOrmScopePlan> {
     const entityType = this.entityTypeOf(query.entitySetName)
+    const memo = new Map<string, Promise<ScopedSubquery | undefined>>()
+    const tasks: Promise<void>[] = []
+    const resolve = (
+      entitySetName: string,
+      op: ODataScopeOperation,
+      path: readonly string[],
+      store: (sub: ScopedSubquery | undefined) => void,
+    ): void => {
+      const key = `${entitySetName}\u0000${op}`
+      let pending = memo.get(key)
+      if (!pending) {
+        pending = this.subqueryFor(entitySetName, op, path, manager)
+        memo.set(key, pending)
+      }
+      tasks.push(pending.then(store))
+    }
+
+    let root: ScopedSubquery | undefined
     const expand = new Map<string, ScopedSubquery>()
     const lambda = new Map<string, ScopedSubquery>()
-    const root = await this.subqueryFor(query.entitySetName, operation, [], manager)
-
-    const filters: FilterNode[] = []
-    if (query.filter) filters.push(query.filter)
-    for (const step of query.apply?.steps ?? []) {
-      if (step.kind === 'ApplyFilter') filters.push(step.filter)
+    const walker: ScopeWalker = {
+      expand: (set, path) =>
+        resolve(set, 'expand', path, (sub) => sub && expand.set(path.join('/'), sub)),
+      lambda: (set, path) =>
+        resolve(set, 'filter', path, (sub) => sub && lambda.set(path.join('/'), sub)),
     }
-    for (const filter of filters) {
-      await this.collectLambdas(filter, entityType, [], lambda, manager)
+
+    resolve(query.entitySetName, operation, [], (sub) => (root = sub))
+    if (query.filter) this.collectLambdas(query.filter, entityType, [], walker)
+    for (const step of query.apply?.steps ?? []) {
+      if (step.kind === 'ApplyFilter') this.collectLambdas(step.filter, entityType, [], walker)
     }
     if (query.expand && !query.apply) {
-      await this.collectExpand(query.expand, entityType, [], expand, lambda, manager)
+      this.collectExpand(query.expand, entityType, [], walker)
     }
-    return { root, expand, lambda }
+    await Promise.all(tasks)
+    return { root, expand, lambda, required: this.options.requireScope === true }
   }
 
   /**
    * Load one entity by key through its scope; `undefined` when it does not exist or is out of
    * scope. `where` maps key property names to values (as returned by `parseODataKey`).
+   * Eager relations are loaded, as `Repository.findOne()` does.
+   *
+   * With `lock: true` (used by the write paths, inside their transaction) the row is locked for
+   * update on drivers that support it, so it cannot leave the scope before the write.
    */
   async findOne(
     entitySetName: string,
     where: Record<string, unknown>,
     operation: ODataScopeOperation,
     manager?: EntityManager,
+    options: { lock?: boolean } = {},
   ): Promise<ObjectLiteral | undefined> {
     const metadata = this.metadataOf(this.entityTypeOf(entitySetName).name)
     const em = manager ?? this.dataSource.manager
     const alias = 'entity'
     const qb = em.createQueryBuilder(metadata.target, alias)
+    // Find options make getOne() join `eager: true` relations like Repository.findOne().
+    qb.setFindOptions({ where: where as never, loadEagerRelations: true })
     applyScopeToQuery(qb, alias, await this.subqueryFor(entitySetName, operation, [], em))
-    let index = 0
-    for (const [property, value] of Object.entries(where)) {
-      const param = `odata_key_${index++}`
-      qb.andWhere(`${alias}.${property} = :${param}`, { [param]: value })
-    }
+    if (options.lock && supportsRowLocks(em)) qb.setLock('pessimistic_write')
     return (await qb.getOne()) ?? undefined
   }
 
-  private async collectExpand(
+  private collectExpand(
     node: ExpandNode,
     entityType: EdmEntityType,
     path: readonly string[],
-    expand: Map<string, ScopedSubquery>,
-    lambda: Map<string, ScopedSubquery>,
-    manager: EntityManager | undefined,
-  ): Promise<void> {
+    walker: ScopeWalker,
+  ): void {
     for (const item of node.items) {
       const navProp = entityType.navigationProperties.find(
         (np) => np.name === item.navigationProperty,
       )
-      // Unknown properties are rejected by the expand visitor with a 400.
+      // Unknown properties are rejected by the query pipe and the expand visitor with a 400.
       if (!navProp) continue
       const itemPath = [...path, navProp.name]
       const target = this.targetOf(navProp.type, itemPath)
       if (!target) continue
-      const sub = await this.subqueryFor(target.entitySetName, 'expand', itemPath, manager)
-      if (sub) expand.set(itemPath.join('/'), sub)
-      if (item.filter) {
-        await this.collectLambdas(item.filter, target.entityType, itemPath, lambda, manager)
-      }
-      if (item.expand) {
-        await this.collectExpand(item.expand, target.entityType, itemPath, expand, lambda, manager)
-      }
+      walker.expand(target.entitySetName, itemPath)
+      if (item.filter) this.collectLambdas(item.filter, target.entityType, itemPath, walker)
+      if (item.expand) this.collectExpand(item.expand, target.entityType, itemPath, walker)
     }
   }
 
-  private async collectLambdas(
+  private collectLambdas(
     node: FilterNode,
     entityType: EdmEntityType,
     path: readonly string[],
-    lambda: Map<string, ScopedSubquery>,
-    manager: EntityManager | undefined,
-  ): Promise<void> {
+    walker: ScopeWalker,
+  ): void {
     switch (node.kind) {
       case 'BinaryExpr':
-        await this.collectLambdas(node.left, entityType, path, lambda, manager)
-        await this.collectLambdas(node.right, entityType, path, lambda, manager)
+        this.collectLambdas(node.left, entityType, path, walker)
+        this.collectLambdas(node.right, entityType, path, walker)
         return
       case 'UnaryExpr':
-        await this.collectLambdas(node.operand, entityType, path, lambda, manager)
+        this.collectLambdas(node.operand, entityType, path, walker)
         return
       case 'FunctionCall':
-        for (const arg of node.args) {
-          await this.collectLambdas(arg, entityType, path, lambda, manager)
-        }
+        for (const arg of node.args) this.collectLambdas(arg, entityType, path, walker)
         return
       case 'LambdaExpr': {
         const navProp = entityType.navigationProperties.find(
@@ -257,9 +267,7 @@ export class TypeOrmScopeService {
         if (!navProp) return
         const lambdaPath = [...path, navProp.name]
         const target = this.targetOf(navProp.type, lambdaPath)
-        if (!target) return
-        const sub = await this.subqueryFor(target.entitySetName, 'filter', lambdaPath, manager)
-        if (sub) lambda.set(lambdaPath.join('/'), sub)
+        if (target) walker.lambda(target.entitySetName, lambdaPath)
         return
       }
       default:
@@ -305,6 +313,49 @@ export class TypeOrmScopeService {
     }
     return metadata
   }
+}
+
+/** Callbacks `prepare()` uses while walking `$expand` and lambdas. */
+interface ScopeWalker {
+  expand(entitySetName: string, path: readonly string[]): void
+  lambda(entitySetName: string, path: readonly string[]): void
+}
+
+/** Drivers that implement `SELECT ... FOR UPDATE` (TypeORM's `pessimistic_write`). */
+const ROW_LOCK_DRIVERS = new Set([
+  'postgres',
+  'cockroachdb',
+  'mysql',
+  'mariadb',
+  'aurora-mysql',
+  'aurora-postgres',
+  'mssql',
+  'oracle',
+  'sap',
+  'spanner',
+])
+
+function supportsRowLocks(manager: EntityManager): boolean {
+  return ROW_LOCK_DRIVERS.has(String(manager.connection.options.type))
+}
+
+/**
+ * Look up a pre-resolved scope; under `requireScope` (`plan.required`) a missing entry is a
+ * bug in the caller (a path `prepare()` did not see), so fail closed instead of running
+ * unscoped.
+ */
+export function lookupScope(
+  plan: TypeOrmScopePlan,
+  kind: 'expand' | 'lambda',
+  path: readonly string[],
+): ScopedSubquery | undefined {
+  const sub = plan[kind].get(path.join('/'))
+  if (!sub && plan.required) {
+    throw new InternalServerErrorException(
+      `No row-level scope was prepared for ${kind} path '${path.join('/')}' and requireScope is enabled`,
+    )
+  }
+  return sub
 }
 
 function missingScopeError(entitySetName: string): InternalServerErrorException {

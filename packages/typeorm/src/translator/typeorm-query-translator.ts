@@ -17,7 +17,7 @@ import { TypeOrmExpandVisitor } from './expand-visitor.js'
 import { TypeOrmApplyVisitor } from './apply-visitor.js'
 import { applyExpandPagination } from './expand-pagination.js'
 import type { TypeOrmScopePlan } from '../scope/scope.types.js'
-import { applyScopeToQuery } from '../scope/typeorm-scope.service.js'
+import { applyScopeToQuery, lookupScope } from '../scope/typeorm-scope.service.js'
 
 /**
  * Translation result from translate() — includes the QueryBuilder and the
@@ -85,7 +85,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     const repo = entityRepo ?? this.repo
     const alias = 'entity'
     const qb = repo.createQueryBuilder(alias)
-    const lambdaScope = scopes ? (nav: string) => scopes.lambda.get(nav) : undefined
+    const lambdaScope = scopes ? (nav: string) => lookupScope(scopes, 'lambda', [nav]) : undefined
 
     // 0. Row-level scope of the requested entity set
     applyScopeToQuery(qb, alias, scopes?.root)

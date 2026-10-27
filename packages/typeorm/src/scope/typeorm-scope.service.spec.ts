@@ -1,8 +1,9 @@
 import 'reflect-metadata'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Column, DataSource, Entity, ManyToOne, OneToMany, PrimaryGeneratedColumn } from 'typeorm'
 import {
   EdmRegistry,
+  navigationTargetTypeName,
   runWithODataRequestContext,
   type ODataModuleResolvedOptions,
   type ODataQuery,
@@ -12,8 +13,8 @@ import { TypeOrmQueryTranslator } from '../translator/typeorm-query-translator.j
 import { TypeOrmAutoHandler } from '../translator/typeorm-auto-handler.js'
 import { ODataScopeRegistry } from './scope-registry.js'
 import {
+  lookupScope,
   TypeOrmScopeService,
-  navigationTargetTypeName,
   renameParameters,
   scopeInCondition,
 } from './typeorm-scope.service.js'
@@ -45,7 +46,7 @@ class Doc {
   @Column({ type: 'integer' })
   folderId: number
 
-  @ManyToOne(() => Folder, (f) => f.docs)
+  @ManyToOne(() => Folder, (f) => f.docs, { eager: true })
   folder: Folder
 }
 
@@ -298,6 +299,179 @@ describe('TypeOrmScopeService', () => {
     expect([...nested.expand.keys()]).toEqual(['folder'])
     expect([...nested.lambda.keys()]).toEqual(['folder/docs'])
   })
+  it('loads eager relations on scoped by-key reads, like Repository.findOne()', async () => {
+    const { service } = makeService({ Docs: ownerScope })
+    const doc = await asOwner('a', () => service.findOne('Docs', { id: 1 }, 'entity'))
+    expect(doc).toMatchObject({ id: 1, folder: { id: 1 } })
+  })
+
+  it('runs a scope once per entity set and operation, even through several paths', async () => {
+    const calls: string[] = []
+    const counting: ODataScopeFn = (qb, ctx) => {
+      calls.push(`${ctx.entitySetName}:${ctx.operation}:${ctx.navigationPath.join('/')}`)
+      return ownerScope(qb, ctx)
+    }
+    const { service } = makeService({ Folders: counting, Docs: counting })
+    const plan = await asOwner('a', () =>
+      service.prepare(
+        {
+          entitySetName: 'Folders',
+          expand: {
+            items: [
+              {
+                navigationProperty: 'docs',
+                expand: {
+                  items: [
+                    {
+                      navigationProperty: 'folder',
+                      expand: { items: [{ navigationProperty: 'docs' }] },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        'collection',
+      ),
+    )
+    expect(calls.sort()).toEqual([
+      'Docs:expand:docs',
+      'Folders:collection:',
+      'Folders:expand:docs/folder',
+    ])
+    expect([...plan.expand.keys()].sort()).toEqual(['docs', 'docs/folder', 'docs/folder/docs'])
+  })
+
+  it('runs scoped writes in a transaction with the row check inside it', async () => {
+    const { handler } = makeService({ Folders: ownerScope })
+    const spy = vi.spyOn(dataSource.getRepository(Folder).manager, 'transaction')
+    await asOwner('a', () => handler.handleUpdate('1', { owner: 'a' }, 'Folders'))
+    expect(spy).toHaveBeenCalledTimes(1)
+    spy.mockRestore()
+  })
+
+  it('refuses a PATCH whose body key differs from the URL key', async () => {
+    const { handler } = makeService({ Folders: ownerScope })
+    const err = await asOwner('a', () =>
+      handler.handleUpdate('1', { id: 2, owner: 'a' }, 'Folders'),
+    ).catch((e: unknown) => e)
+    expect((err as { getStatus(): number }).getStatus()).toBe(400)
+    expect(await dataSource.getRepository(Folder).findOneByOrFail({ id: 2 })).toMatchObject({
+      owner: 'b',
+    })
+  })
+
+  it('locks the checked row on drivers with row locks', async () => {
+    const calls: string[] = []
+    const qb: Record<string, unknown> = {}
+    for (const m of ['setFindOptions', 'andWhere']) qb[m] = () => qb
+    qb.setLock = (mode: string) => {
+      calls.push(mode)
+      return qb
+    }
+    qb.getOne = () => Promise.resolve(null)
+    const manager = {
+      connection: { options: { type: 'postgres' } },
+      createQueryBuilder: () => qb,
+    }
+    const { service } = makeService({})
+    await service.findOne('Folders', { id: 1 }, 'write', manager as never, { lock: true })
+    expect(calls).toEqual(['pessimistic_write'])
+    calls.length = 0
+    await service.findOne('Folders', { id: 1 }, 'write', manager as never)
+    expect(calls).toEqual([])
+  })
+
+  it('quotes the primary-key column of a lambda scope', async () => {
+    const { service, translator } = makeService({ Folders: ownerScope, Docs: ownerScope })
+    const query: ODataQuery = {
+      entitySetName: 'Folders',
+      filter: {
+        kind: 'LambdaExpr',
+        operator: 'any',
+        collection: 'docs',
+        variable: null,
+        predicate: null,
+      },
+    }
+    const plan = await asOwner('a', () => service.prepare(query, 'collection'))
+    const { qb } = translator.translate(
+      query,
+      edm.getEntityType('Folder')!,
+      dataSource.getRepository(Folder) as never,
+      plan,
+    )
+    expect(qb.getQuery()).toMatch(/sub_lambda_\d+\."id" IN \(SELECT/)
+  })
+
+  it('fails closed when a required plan misses a lambda path', () => {
+    const { translator } = makeService({}, { requireScope: true })
+    const query: ODataQuery = {
+      entitySetName: 'Folders',
+      filter: {
+        kind: 'LambdaExpr',
+        operator: 'any',
+        collection: 'docs',
+        variable: null,
+        predicate: null,
+      },
+    }
+    expect(() =>
+      translator.translate(
+        query,
+        edm.getEntityType('Folder')!,
+        dataSource.getRepository(Folder) as never,
+        {
+          expand: new Map(),
+          lambda: new Map(),
+          required: true,
+        },
+      ),
+    ).toThrow(/lambda path 'docs'/)
+  })
+
+  it('binds unprefixed lambda properties to the outer entity', async () => {
+    const { handler } = makeService({})
+    const lambda = (outerOwner: string): ODataQuery => ({
+      entitySetName: 'Folders',
+      filter: {
+        kind: 'LambdaExpr',
+        operator: 'any',
+        collection: 'docs',
+        variable: 'd',
+        predicate: {
+          kind: 'BinaryExpr',
+          operator: 'and',
+          left: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['d', 'title'] },
+            right: { kind: 'Literal', value: 'y' },
+          },
+          right: {
+            kind: 'BinaryExpr',
+            operator: 'eq',
+            left: { kind: 'PropertyAccess', path: ['owner'] },
+            right: { kind: 'Literal', value: outerOwner },
+          },
+        },
+      } as ODataQuery['filter'],
+    })
+    // Doc 2 ('y') is owned by b but sits in folder 1, owned by a: `owner` is the folder's.
+    expect(await handler.handleCount(lambda('a'))).toBe(1)
+    expect(await handler.handleCount(lambda('b'))).toBe(0)
+  })
+})
+
+describe('lookupScope', () => {
+  it('fails closed on a missing path only when the plan is required', () => {
+    const plan = { expand: new Map(), lambda: new Map() }
+    expect(lookupScope(plan, 'lambda', ['x'])).toBeUndefined()
+    expect(() => lookupScope({ ...plan, required: true }, 'expand', ['a', 'b'])).toThrow(
+      /No row-level scope was prepared for expand path 'a\/b'/,
+    )
+  })
 })
 
 describe('scope helpers', () => {
@@ -333,7 +507,7 @@ describe('scope helpers', () => {
     )
   })
 
-  it('strips Collection() and namespaces from navigation types', () => {
+  it('strips Collection() and namespaces from navigation types (core helper)', () => {
     expect(navigationTargetTypeName('Collection(Default.Doc)')).toBe('Doc')
     expect(navigationTargetTypeName('Default.Folder')).toBe('Folder')
     expect(navigationTargetTypeName('Folder')).toBe('Folder')

@@ -7,6 +7,7 @@ import { EdmRegistry } from '../edm/edm-registry.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQuery } from './odata-query.types.js'
+import { navigationTargetTypeName } from '../edm/navigation.js'
 import type { EdmEntityType } from '../edm/edm-entity-type.js'
 import type { FilterNode, SelectItem, ExpandNode, SearchNode, ApplyNode } from '../parser/ast.js'
 import { ODataValidationError } from './odata-validation.error.js'
@@ -185,11 +186,7 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
 
   /** Resolve `Default.X` / `Collection(Default.X)` to the registered entity type `X`. */
   private navigationTargetType(navType: string): EdmEntityType | undefined {
-    const inner =
-      navType.startsWith('Collection(') && navType.endsWith(')')
-        ? navType.slice('Collection('.length, -1)
-        : navType
-    return this.edmRegistry.getEntityType(inner.split('.').pop() ?? inner)
+    return this.edmRegistry.getEntityType(navigationTargetTypeName(navType))
   }
 
   /**
@@ -203,7 +200,10 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
   private validateExpandNode(expandNode: ExpandNode, entityType: EdmEntityType): void {
     for (const item of expandNode.items) {
       const navNames = entityType.navigationProperties.map((np) => np.name)
-      if (!navNames.includes(item.navigationProperty)) {
+      const navProp = entityType.navigationProperties.find(
+        (np) => np.name === item.navigationProperty,
+      )
+      if (!navProp) {
         throw new ODataValidationError(
           `Navigation property '${item.navigationProperty}' not found on entity '${entityType.name}'`,
           entityType.name,
@@ -211,6 +211,18 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
           navNames,
         )
       }
+      // Nested options ($select, $filter, $orderby, $expand) are validated against the target
+      // type, so they can only reference its exposed properties.
+      const targetType = this.navigationTargetType(navProp.type)
+      if (!targetType) continue
+      for (const selectItem of item.select?.items ?? []) {
+        this.validateSelectItem(selectItem, targetType)
+      }
+      if (item.filter) this.validateFilterNode(item.filter, targetType)
+      for (const orderItem of item.orderBy ?? []) {
+        this.validateFilterNode(orderItem.expression, targetType)
+      }
+      if (item.expand) this.validateExpandNode(item.expand, targetType)
     }
   }
 

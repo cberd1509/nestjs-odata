@@ -158,7 +158,10 @@ export class BatchController {
     operation: 'entity' | 'write',
   ): Promise<ObjectLiteral | null> {
     if (this.scopes?.isScoped(entitySetName)) {
-      return (await this.scopes.findOne(entitySetName, where, operation, manager)) ?? null
+      const found = await this.scopes.findOne(entitySetName, where, operation, manager, {
+        lock: operation === 'write',
+      })
+      return found ?? null
     }
     return manager.findOne(entityClass as new () => ObjectLiteral, { where })
   }
@@ -272,6 +275,13 @@ export class BatchController {
    */
   private async dispatchIndividualRequest(part: BatchRequestPart): Promise<BatchResponsePart> {
     try {
+      // A write outside a changeset still runs its scope check and the write in one
+      // transaction, so the row cannot leave the scope in between.
+      if (this.scopes && part.method.toUpperCase() !== 'GET') {
+        return await this.dataSource.transaction((manager) =>
+          this.dispatchWithManager(part, manager),
+        )
+      }
       return await this.dispatchWithManager(part, this.dataSource.manager)
     } catch (err) {
       return this.buildErrorResponse(err, part.contentId)
@@ -629,6 +639,17 @@ export class BatchController {
           'NotFound',
           `Entity '${entitySetName}' with key '${keyStr}' not found`,
         ),
+      }
+    }
+    // The URL key wins: a different key in the body would update another row.
+    for (const kp of keyProperties) {
+      if (body[kp] !== undefined && body[kp] !== where[kp]) {
+        return {
+          contentId: part.contentId,
+          statusCode: 400,
+          headers: {},
+          body: buildODataError('BadRequest', 'Key in body does not match URL key'),
+        }
       }
     }
     // Merge patch fields onto the existing entity, then save

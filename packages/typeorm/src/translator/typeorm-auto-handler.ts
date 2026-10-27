@@ -56,13 +56,44 @@ export class TypeOrmAutoHandler {
     entitySetName: string,
     keyStr: string,
     where: Record<string, unknown>,
+    manager?: EntityManager,
   ): Promise<ObjectLiteral | null> {
     if (!this.scopes?.isScoped(entitySetName)) return null
-    const entity = await this.scopes.findOne(entitySetName, where, 'write')
+    const entity = await this.scopes.findOne(entitySetName, where, 'write', manager, { lock: true })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
     return entity
+  }
+
+  /**
+   * Run a write. For a scoped entity set, the scope check and the write share one transaction
+   * (and the checked row is locked on drivers that support it), so the row cannot leave the
+   * scope between the check and the write.
+   */
+  private async inScopedWrite<T>(
+    entitySetName: string,
+    work: (repo: Repository<ObjectLiteral>, manager?: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    const repo = this.resolveRepo(entitySetName)
+    if (!this.scopes?.isScoped(entitySetName)) return work(repo)
+    return repo.manager.transaction((manager) => work(manager.getRepository(repo.target), manager))
+  }
+
+  /** 400 when the body carries a key property whose value differs from the URL key. */
+  private assertBodyKeyMatches(
+    entityType: EdmEntityType,
+    body: Record<string, unknown>,
+    where: Record<string, unknown>,
+  ): void {
+    for (const kp of entityType.keyProperties) {
+      if (body[kp] !== undefined && body[kp] !== where[kp]) {
+        throw new HttpException(
+          { error: { code: '400', message: 'Key in body does not match URL key' } },
+          400,
+        )
+      }
+    }
   }
 
   /**
@@ -518,16 +549,17 @@ export class TypeOrmAutoHandler {
    * Per T-04-08: parseODataKey returns typed values for safe parameterized queries.
    * Per T-09-04: If-Match header enforces optimistic concurrency — 412 on stale ETag.
    */
-  async handleUpdate(
+  private async update(
     keyStr: string,
     body: Record<string, unknown>,
     entitySetName: string,
-    ifMatchHeader?: string,
+    ifMatchHeader: string | undefined,
+    repo: Repository<ObjectLiteral>,
+    manager?: EntityManager,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
-    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where)
+    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where, manager)
 
     // ETag If-Match validation before update
     if (this.etagProvider && ifMatchHeader) {
@@ -557,7 +589,9 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    const merged = { ...where, ...body }
+    // The URL key wins: a different key in the body would update another row.
+    this.assertBodyKeyMatches(entityType, body, where)
+    const merged = { ...body, ...where }
     const preloaded = await repo.preload(merged as ObjectLiteral)
     if (!preloaded) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
@@ -587,31 +621,23 @@ export class TypeOrmAutoHandler {
    * Per T-10-03: managed columns (PK, timestamps, version) skipped.
    * Per T-10-04: ETag If-Match enforcement identical to handleUpdate().
    */
-  async handleReplace(
+  private async replace(
     keyStr: string,
     body: Record<string, unknown>,
     entitySetName: string,
-    ifMatchHeader?: string,
+    ifMatchHeader: string | undefined,
+    repo: Repository<ObjectLiteral>,
+    manager?: EntityManager,
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
-    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
 
     // Validate key in body matches URL key (D-01 spec compliance — T-10-01)
-    for (const kp of entityType.keyProperties) {
-      const bodyKeyValue = body[kp]
-      const urlKeyValue = where[kp]
-      if (bodyKeyValue !== undefined && bodyKeyValue !== urlKeyValue) {
-        throw new HttpException(
-          { error: { code: '400', message: 'Key in body does not match URL key' } },
-          400,
-        )
-      }
-    }
+    this.assertBodyKeyMatches(entityType, body, where)
 
     // Find existing entity to confirm it exists (through its row-level scope, if any)
     const existing =
-      (await this.findInScopeForWrite(entitySetName, keyStr, where)) ??
+      (await this.findInScopeForWrite(entitySetName, keyStr, where, manager)) ??
       (await repo.findOne({ where }))
     if (!existing) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
@@ -676,11 +702,16 @@ export class TypeOrmAutoHandler {
    * Per T-04-08: parseODataKey returns typed values for safe parameterized queries.
    * Per T-09-04: If-Match header enforces optimistic concurrency — 412 on stale ETag.
    */
-  async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
+  private async delete(
+    keyStr: string,
+    entitySetName: string,
+    ifMatchHeader: string | undefined,
+    repo: Repository<ObjectLiteral>,
+    manager?: EntityManager,
+  ): Promise<void> {
     const entityType = this.resolveEntityType(entitySetName)
-    const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where)
+    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where, manager)
 
     // ETag If-Match validation before delete
     if (this.etagProvider && ifMatchHeader) {
@@ -714,5 +745,39 @@ export class TypeOrmAutoHandler {
     if (result.affected === 0) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
+  }
+
+  /**
+   * Handle OData PATCH — partial update (merge-patch semantics). See {@link update}.
+   * A key property in the body must match the URL key (400 otherwise).
+   */
+  async handleUpdate(
+    keyStr: string,
+    body: Record<string, unknown>,
+    entitySetName: string,
+    ifMatchHeader?: string,
+  ): Promise<unknown> {
+    return this.inScopedWrite(entitySetName, (repo, manager) =>
+      this.update(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
+    )
+  }
+
+  /** Handle OData PUT — full entity replacement. See {@link replace}. */
+  async handleReplace(
+    keyStr: string,
+    body: Record<string, unknown>,
+    entitySetName: string,
+    ifMatchHeader?: string,
+  ): Promise<unknown> {
+    return this.inScopedWrite(entitySetName, (repo, manager) =>
+      this.replace(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
+    )
+  }
+
+  /** Handle OData DELETE — remove entity. See {@link delete}. */
+  async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
+    return this.inScopedWrite(entitySetName, (repo, manager) =>
+      this.delete(keyStr, entitySetName, ifMatchHeader, repo, manager),
+    )
   }
 }

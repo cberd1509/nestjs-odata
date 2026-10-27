@@ -1,15 +1,11 @@
 import type { SelectQueryBuilder, ObjectLiteral, EntityManager } from 'typeorm'
 import type { ExpandNode, ExpandItem, EdmEntityType } from '@nestjs-odata/core'
-import { ODataValidationError } from '@nestjs-odata/core'
+import { navigationTargetTypeName, ODataValidationError } from '@nestjs-odata/core'
 import type { EdmRegistry } from '@nestjs-odata/core'
 import { TypeOrmFilterVisitor } from './filter-visitor.js'
 import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
 import type { TypeOrmScopePlan } from '../scope/scope.types.js'
-import {
-  navigationTargetTypeName,
-  renameParameters,
-  scopeInCondition,
-} from '../scope/typeorm-scope.service.js'
+import { lookupScope, renameParameters, scopeInCondition } from '../scope/typeorm-scope.service.js'
 
 /** Options for {@link TypeOrmExpandVisitor} beyond the query builder and the registry. */
 export interface TypeOrmExpandVisitorOptions {
@@ -113,7 +109,8 @@ export class TypeOrmExpandVisitor {
     // which related rows are expanded, never which parent rows are returned.
     const conditions: string[] = []
     const params: Record<string, unknown> = {}
-    const scoped = this.options.scopes?.expand.get(path.join('/'))
+    const scopes = this.options.scopes
+    const scoped = scopes ? lookupScope(scopes, 'expand', path) : undefined
     if (scoped) {
       conditions.push(scopeInCondition(scoped, (c) => `${joinAlias}.${c.propertyPath}`))
       Object.assign(params, scoped.params)
@@ -187,7 +184,7 @@ export class TypeOrmExpandVisitor {
     const sub = manager
       .createQueryBuilder(metadata.target, subAlias)
       .select(metadata.primaryColumns.map((c) => `${subAlias}.${c.propertyPath}`))
-    const lambdaScopes = this.options.scopes?.lambda
+    const scopes = this.options.scopes
     new TypeOrmFilterVisitor(
       sub,
       subAlias,
@@ -195,11 +192,17 @@ export class TypeOrmExpandVisitor {
       this.options.maxFilterDepth,
       this.options.dialect,
       manager.getRepository(metadata.target),
-      lambdaScopes ? (nav) => lambdaScopes.get([...path, nav].join('/')) : undefined,
+      scopes ? (nav) => lookupScope(scopes, 'lambda', [...path, nav]) : undefined,
     ).visit(item.filter!)
     const rendered = renameParameters(sub.getQuery(), sub.getParameters())
-    const columns = metadata.primaryColumns.map((c) => `${joinAlias}.${c.propertyPath}`)
-    const lhs = columns.length === 1 ? columns[0] : `(${columns.join(', ')})`
-    return { sql: `${lhs} IN (${rendered.sql})`, params: rendered.params }
+    const sql = scopeInCondition(
+      {
+        entitySetName: targetEntityType.name,
+        ...rendered,
+        primaryColumns: metadata.primaryColumns,
+      },
+      (c) => `${joinAlias}.${c.propertyPath}`,
+    )
+    return { sql, params: rendered.params }
   }
 }
