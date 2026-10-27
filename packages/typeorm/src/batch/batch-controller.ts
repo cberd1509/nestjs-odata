@@ -58,6 +58,7 @@ import {
   parseODataKey,
   parseBatchBody,
   extractBoundary,
+  resolveReturnPreference,
   type ODataModuleResolvedOptions,
   type BatchResponsePart,
   type BatchRequestPart,
@@ -68,12 +69,17 @@ import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
 import type { EntityClass } from '@nestjs-odata/core'
 import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
-import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 import { entityLocation } from '../utils/entity-key.js'
 import { ODataWriteRegistry } from '../write/write-registry.js'
 import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
 import type { ODataChangesetRunner, ODataWriteHandlers } from '../write/write.types.js'
-import { etagMatches, hasEntityETag, resolveEntityETag } from '../write/etag.js'
+import {
+  hasEntityETag,
+  IF_MATCH_REQUIRED_MESSAGE,
+  preconditionFailure,
+  resolveEntityETag,
+} from '../write/etag.js'
+import { prepareWriteBody, type WriteBodyOperation } from '../write/body.js'
 import {
   assertHandlerEntity,
   buildWriteContext,
@@ -97,6 +103,9 @@ class ChangesetOperationError extends Error {
 
 /** HTTP methods a write handler serves. */
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE'])
+
+/** Methods that modify an existing entity: preconditions (`If-Match`, `If-None-Match`) apply. */
+const KEYED_WRITE_METHODS = new Set(['PATCH', 'PUT', 'DELETE'])
 
 /** Where a batch error came from, for the error mapper's context (part, or changeset). */
 type ErrorOrigin = Pick<BatchRequestPart, 'contentId'> &
@@ -131,6 +140,12 @@ function parseEntityUrl(url: string): { entitySetName: string; key?: string } | 
   }
 
   return null
+}
+
+/** The `content-language` header of an error part, if any. */
+function languageHeader(headers: Record<string, string>): Record<string, string> {
+  const language = headers['content-language']
+  return language ? { 'content-language': language } : {}
 }
 
 /**
@@ -210,8 +225,9 @@ export class BatchController {
   }
 
   /**
-   * 412 when the part's `If-Match` does not match the entity's current ETag. Batch parts follow
-   * the same rules as standalone requests (OData-Protocol 4.01 §11.7, §8.2.4).
+   * 412 when the part's `If-Match` does not match the entity's current ETag, or its
+   * `If-None-Match` does (`*` matches any existing entity). Batch parts follow the same rules as
+   * standalone requests (OData-Protocol 4.01 §11.7, §8.2.4, §8.2.5).
    */
   private preconditionFailed(
     contentId: string | undefined,
@@ -220,14 +236,67 @@ export class BatchController {
     part: BatchRequestPart,
   ): BatchResponsePart | undefined {
     const ifMatch = part.headers['if-match']
-    if (!ifMatch) return undefined
+    const ifNoneMatch = part.headers['if-none-match']
+    if (!ifMatch && !ifNoneMatch) return undefined
     const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
-    if (etag === undefined || etagMatches(ifMatch, etag)) return undefined
-    return this.errorPart(412, 'The ETag value does not match the current version of the entity', {
+    const failure = preconditionFailure({ ifMatch, ifNoneMatch }, etag)
+    if (!failure) return undefined
+    return this.errorPart(failure.status, failure.message, {
       contentId,
       method: part.method,
       url: part.url,
     })
+  }
+
+  /**
+   * 428 for a PATCH, PUT or DELETE part without `If-Match` on an entity set that requires it
+   * (`requireIfMatch`, OData-Protocol 4.01 §8.2.4), before anything is read or written.
+   */
+  private ifMatchMissing(
+    part: BatchRequestPart,
+    entitySetName: string,
+  ): BatchResponsePart | undefined {
+    if (!KEYED_WRITE_METHODS.has(part.method.toUpperCase())) return undefined
+    if (part.headers['if-match'] || !this.writes?.requiresIfMatch(entitySetName)) return undefined
+    return this.errorPart(428, IF_MATCH_REQUIRED_MESSAGE, part)
+  }
+
+  /** {@link prepareWriteBody} with the module's `ignoreUnknownProperties` option. */
+  private prepareBody(
+    entityType: EdmEntityType,
+    body: Record<string, unknown>,
+    operation: WriteBodyOperation,
+  ): Record<string, unknown> {
+    return prepareWriteBody(entityType, body, operation, {
+      ignoreUnknown: this.options.ignoreUnknownProperties,
+    })
+  }
+
+  /**
+   * Apply the part's `Prefer: return=minimal` to a successful POST, PATCH or PUT (OData-Protocol
+   * 4.01 §8.2.8.7): 204 without a body, `Preference-Applied`, and for a create its `Location`
+   * and `OData-EntityId`. `return=representation` keeps the body and is reported too. The
+   * `Prefer` header of the `$batch` request itself is not applied to its parts.
+   */
+  private applyReturnPreference(
+    part: BatchRequestPart,
+    result: BatchResponsePart,
+  ): BatchResponsePart {
+    const method = part.method.toUpperCase()
+    if (method !== 'POST' && method !== 'PATCH' && method !== 'PUT') return result
+    if (result.statusCode !== 200 && result.statusCode !== 201) return result
+    const prefer = part.headers['prefer']
+    const applied = resolveReturnPreference(prefer, part.url)
+    if (!applied || resolveReturnPreference(prefer, undefined) !== applied) return result
+    const headers = { ...result.headers, 'preference-applied': `return=${applied}` }
+    if (applied === 'representation') return { ...result, headers }
+    const location = result.headers['location']
+    return {
+      contentId: result.contentId,
+      statusCode: 204,
+      headers: location ? { ...headers, 'odata-entityid': location } : headers,
+      body: undefined,
+    }
   }
 
   /**
@@ -252,6 +321,8 @@ export class BatchController {
       manager: changesetManager,
       batch: { contentId: part.contentId, inChangeset: changesetManager !== undefined },
       ifMatch: part.headers['if-match'],
+      ifNoneMatch: part.headers['if-none-match'],
+      requireIfMatch: this.writes?.requiresIfMatch(entitySetName) ?? false,
     }
 
     if (method === 'POST') {
@@ -329,7 +400,7 @@ export class BatchController {
     try {
       rawBody = await this.extractRawBody(req)
     } catch (err) {
-      res.status(HttpStatus.BAD_REQUEST).json(odataErrorBody('BadRequest', String(err)))
+      this.badRequest(res, String(err))
       return
     }
 
@@ -341,14 +412,7 @@ export class BatchController {
     try {
       boundary = extractBoundary(contentType)
     } catch {
-      res
-        .status(HttpStatus.BAD_REQUEST)
-        .json(
-          odataErrorBody(
-            'BadRequest',
-            'Missing or invalid boundary in Content-Type for $batch request',
-          ),
-        )
+      this.badRequest(res, 'Missing or invalid boundary in Content-Type for $batch request')
       return
     }
 
@@ -356,8 +420,7 @@ export class BatchController {
     try {
       parsed = parseBatchBody(rawBody, boundary)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Malformed batch body'
-      res.status(HttpStatus.BAD_REQUEST).json(odataErrorBody('BadRequest', msg))
+      this.badRequest(res, err instanceof Error ? err.message : 'Malformed batch body')
       return
     }
 
@@ -376,6 +439,14 @@ export class BatchController {
     const { contentType: responseContentType, body } = buildBatchResponse(responseParts)
 
     res.status(HttpStatus.OK).set('Content-Type', responseContentType).send(body)
+  }
+
+  /** 400 for a malformed `$batch` request, with `Content-Language` (OData-Protocol §9.4). */
+  private badRequest(res: BatchResponse, message: string): void {
+    res
+      .status(HttpStatus.BAD_REQUEST)
+      .set('Content-Language', this.options.errorLanguage ?? 'en')
+      .json(odataErrorBody('BadRequest', message))
   }
 
   /**
@@ -474,9 +545,11 @@ export class BatchController {
             throw new ChangesetOperationError()
           }
 
-          // Store location URL in contentIdMap after a successful 201 with Content-ID (WRITE-03)
+          // Store location URL in contentIdMap after a successful create with Content-ID
+          // (WRITE-03): 201, or 204 under Prefer: return=minimal, both carry Location.
           const location = result.headers['location']
-          if (result.statusCode === 201 && location && part.contentId !== undefined) {
+          const created = result.statusCode === 201 || result.statusCode === 204
+          if (created && location && part.contentId !== undefined) {
             contentIdMap.set(part.contentId, location)
           }
         }
@@ -485,7 +558,11 @@ export class BatchController {
     } catch (err) {
       // All changeset parts get the same error response (BATCH-02 atomicity)
       const errorResponse = failure
-        ? { statusCode: failure.statusCode, headers: {}, body: failure.body }
+        ? {
+            statusCode: failure.statusCode,
+            headers: languageHeader(failure.headers),
+            body: failure.body,
+          }
         : this.buildErrorResponse(err)
       return parts.map((p) => ({ ...errorResponse, contentId: p.contentId }))
     }
@@ -540,6 +617,15 @@ export class BatchController {
     manager: EntityManager,
     inChangeset = false,
   ): Promise<BatchResponsePart> {
+    return this.applyReturnPreference(part, await this.dispatchPart(part, manager, inChangeset))
+  }
+
+  /** Dispatch one part (see {@link dispatchWithManager}), before its `Prefer` is applied. */
+  private async dispatchPart(
+    part: BatchRequestPart,
+    manager: EntityManager,
+    inChangeset: boolean,
+  ): Promise<BatchResponsePart> {
     const parsed = parseEntityUrl(part.url)
     if (!parsed) {
       return this.errorPart(400, `Cannot parse entity URL: ${part.url}`, part)
@@ -565,6 +651,8 @@ export class BatchController {
     }
 
     const method = part.method.toUpperCase()
+    const missing = this.ifMatchMissing(part, entitySetName)
+    if (missing) return missing
 
     try {
       const handlers = WRITE_METHODS.has(method)
@@ -596,25 +684,12 @@ export class BatchController {
         // Collection GET — not supported in batch (read-only outside changeset)
         return await this.dispatchGetCollection(entitySetName, entityClass, manager, part.contentId)
       } else if (method === 'POST') {
-        return await this.dispatchCreate(
-          part,
-          entitySetName,
-          entityType.keyProperties,
-          entityClass,
-          manager,
-        )
+        return await this.dispatchCreate(part, entitySetName, entityType, entityClass, manager)
       } else if (method === 'PATCH') {
         if (key === undefined) {
           return this.errorPart(400, `PATCH requires a key: ${part.url}`, part)
         }
-        return await this.dispatchUpdate(
-          key,
-          part,
-          entitySetName,
-          entityType.keyProperties,
-          entityClass,
-          manager,
-        )
+        return await this.dispatchUpdate(key, part, entitySetName, entityType, entityClass, manager)
       } else if (method === 'PUT') {
         if (key === undefined) {
           return this.errorPart(400, `PUT requires a key: ${part.url}`, part)
@@ -700,16 +775,22 @@ export class BatchController {
   private async dispatchCreate(
     part: BatchRequestPart,
     entitySetName: string,
-    keyProperties: readonly string[],
+    entityType: EdmEntityType,
     entityClass: EntityClass,
     manager: EntityManager,
   ): Promise<BatchResponsePart> {
     const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
     const repo = manager.getRepository(entityClass)
-    const created = repo.create(body as ObjectLiteral)
+    // Computed properties ignored, unknown ones refused (400), as over HTTP.
+    const created = repo.create(this.prepareBody(entityType, body, 'create'))
     const saved = (await repo.save(created)) as Record<string, unknown>
     return this.entityPart(part.contentId, 201, entitySetName, saved, {
-      location: entityLocation(this.options.serviceRoot, entitySetName, keyProperties, saved),
+      location: entityLocation(
+        this.options.serviceRoot,
+        entitySetName,
+        entityType.keyProperties,
+        saved,
+      ),
     })
   }
 
@@ -718,20 +799,21 @@ export class BatchController {
     keyStr: string,
     part: BatchRequestPart,
     entitySetName: string,
-    keyProperties: readonly string[],
+    entityType: EdmEntityType,
     entityClass: EntityClass,
     manager: EntityManager,
   ): Promise<BatchResponsePart> {
     const body = part.body ? (JSON.parse(part.body) as Record<string, unknown>) : {}
-    const where = parseODataKey(keyStr, keyProperties)
+    const where = parseODataKey(keyStr, entityType.keyProperties)
     const EntityCls = entityClass as new () => ObjectLiteral
+    // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
+    // Computed properties are dropped, unknown ones refused (400).
+    const patch = this.prepareBody(entityType, body, 'update')
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) return this.notFound(entitySetName, keyStr, part)
     const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
     if (stale) return stale
-    // Merge patch fields onto the existing entity, then save. Key properties in the body are
-    // ignored (OData §11.4.3): the URL key identifies the row.
-    const patch = withoutKeyProperties(keyProperties, body)
+    // Merge patch fields onto the existing entity, then save.
     const merged = manager.merge(EntityCls, existing, patch)
     const saved = await manager.save(EntityCls, merged)
     return this.entityPart(part.contentId, 200, entitySetName, saved)
@@ -758,10 +840,9 @@ export class BatchController {
     const where = parseODataKey(keyStr, entityType.keyProperties)
     const EntityCls = entityClass as new () => ObjectLiteral
 
-    // Validate key in body matches URL key (T-10-01)
-    if (bodyKeyMismatch(entityType.keyProperties, body, where)) {
-      return this.errorPart(400, 'Key in body does not match URL key', part)
-    }
+    // Key properties in the body are ignored (OData §11.4.3, T-10-01): the URL key decides the
+    // row. Computed properties are dropped, unknown ones refused (400).
+    const values = this.prepareBody(entityType, body, 'replace')
 
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) return this.notFound(entitySetName, keyStr, part)
@@ -782,8 +863,8 @@ export class BatchController {
       if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue
 
       const propName = col.propertyName
-      if (Object.prototype.hasOwnProperty.call(body, propName)) {
-        replacement[propName] = body[propName]
+      if (Object.prototype.hasOwnProperty.call(values, propName)) {
+        replacement[propName] = values[propName]
       } else if (col.default !== undefined) {
         replacement[propName] = col.default
       } else if (col.isNullable) {
@@ -810,9 +891,10 @@ export class BatchController {
     const where = parseODataKey(keyStr, keyProperties)
     const notFound = () => this.notFound(entitySetName, keyStr, part)
     const ifMatch = part.headers['if-match']
-    // Load the row only when the scope or an If-Match needs it.
+    // Load the row only when the scope or a precondition needs it.
     if (
       this.scopes?.isScoped(entitySetName) ||
+      part.headers['if-none-match'] ||
       (ifMatch && hasEntityETag(entitySetName, this.writes, this.etagProvider))
     ) {
       const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
@@ -838,18 +920,26 @@ export class BatchController {
    * Never exposes stack traces (T-05-05).
    */
   private buildErrorResponse(err: unknown, origin?: ErrorOrigin): BatchResponsePart {
-    const { status, body } = buildODataErrorResponse(err, this.options.errorMapper, {
-      request: getODataRequestContext()?.request,
-      batch: origin
-        ? { method: origin.method, url: origin.url, contentId: origin.contentId }
-        : { changeset: true },
-    })
-    // OData §9.2.2: a 405 lists the allowed methods.
+    const { status, body, language } = buildODataErrorResponse(
+      err,
+      this.options.errorMapper,
+      {
+        request: getODataRequestContext()?.request,
+        batch: origin
+          ? { method: origin.method, url: origin.url, contentId: origin.contentId }
+          : { changeset: true },
+      },
+      this.options.errorLanguage,
+    )
+    // OData §9.2.2: a 405 lists the allowed methods. §9.4: errors carry Content-Language.
     const notAllowed = err instanceof WriteNotAllowedException ? err : undefined
     return {
       contentId: origin?.contentId,
       statusCode: status,
-      headers: notAllowed && status === 405 ? { allow: notAllowed.allow } : {},
+      headers: {
+        'content-language': language,
+        ...(notAllowed && status === 405 ? { allow: notAllowed.allow } : {}),
+      },
       body: JSON.stringify(body),
     }
   }

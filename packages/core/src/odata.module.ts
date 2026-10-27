@@ -3,14 +3,20 @@ import {
   ConfigurableModuleAsyncOptions,
   DynamicModule,
   Global,
+  Inject,
+  Logger,
   Module,
+  Optional,
+  type NestModule,
 } from '@nestjs/common'
 import { PATH_METADATA } from '@nestjs/common/constants.js'
-import { APP_INTERCEPTOR } from '@nestjs/core'
+import { APP_INTERCEPTOR, HttpAdapterHost } from '@nestjs/core'
 import { ODataRequestContextInterceptor } from './context/odata-request-context.js'
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import type { ODataErrorMapper } from './response/odata-error.js'
+import { DEFAULT_ERROR_LANGUAGE, isLanguageTag } from './response/odata-error.js'
+import { rewriteCanonicalKeyUrl } from './utils/canonical-key-url.js'
 import { EdmRegistry } from './edm/edm-registry.js'
 import { EdmFeatureInitializer } from './edm/edm-feature-initializer.js'
 import { EDM_ENTITY_CONFIGS, ODATA_MODULE_OPTIONS } from './tokens.js'
@@ -62,6 +68,21 @@ export interface ODataModuleOptions {
    */
   errorMapper?: ODataErrorMapper
   /**
+   * Language of error messages, an RFC 5646 tag sent as `Content-Language` on every error
+   * response and `$batch` error part (OData-Protocol 4.01 §9.4). Default: `'en'` (the language
+   * of the library's own messages). An `errorMapper` result may set its own `language`.
+   */
+  errorLanguage?: string
+  /**
+   * Accept and drop write-body properties that are not in the entity type, instead of
+   * answering 400 Bad Request. Default: false.
+   *
+   * OData-Protocol 4.01 §11.4.2: a service MUST fail a create or update when it cannot persist
+   * a property of the request, so unknown properties are refused by default. Enable this only
+   * for clients you cannot fix that send extra fields; the values are never persisted.
+   */
+  ignoreUnknownProperties?: boolean
+  /**
    * OData controller classes decorated with @ODataController().
    * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
    * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
@@ -85,6 +106,10 @@ export interface ODataModuleResolvedOptions {
   requireScope: boolean
   /** Application exception-to-OData-error mapping, if any. */
   errorMapper?: ODataErrorMapper
+  /** Language of error messages (`Content-Language`). Default: 'en'. */
+  errorLanguage: string
+  /** Drop unknown write-body properties instead of answering 400. Default: false. */
+  ignoreUnknownProperties: boolean
 }
 
 const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
@@ -95,6 +120,8 @@ const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
   unmappedTypeStrategy: 'skip',
   maxDeepInsertDepth: 5,
   requireScope: false,
+  errorLanguage: DEFAULT_ERROR_LANGUAGE,
+  ignoreUnknownProperties: false,
 }
 
 const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } =
@@ -109,11 +136,32 @@ const RAW_OPTIONS_TOKEN = MODULE_OPTIONS_TOKEN
 /** Provider that applies defaults to the raw options and exposes them under ODATA_MODULE_OPTIONS */
 const resolvedOptionsProvider = {
   provide: ODATA_MODULE_OPTIONS,
-  useFactory: (raw: ODataModuleOptions): ODataModuleResolvedOptions => ({
-    ...DEFAULT_OPTIONS,
-    ...raw,
-  }),
+  useFactory: (raw: ODataModuleOptions): ODataModuleResolvedOptions => {
+    assertErrorLanguage(raw.errorLanguage)
+    return {
+      ...DEFAULT_OPTIONS,
+      ...raw,
+      errorLanguage: raw.errorLanguage ?? DEFAULT_ERROR_LANGUAGE,
+    }
+  },
   inject: [RAW_OPTIONS_TOKEN],
+}
+
+function assertErrorLanguage(language: unknown): void {
+  if (language !== undefined && !isLanguageTag(language)) {
+    throw new Error(
+      'ODataModule: errorLanguage must be an RFC 5646 language tag, e.g. "en" or "es-CO"',
+    )
+  }
+}
+
+/** Express applications the canonical-URL rewrite is installed on (once per application). */
+const rewriteInstalled = new WeakSet<object>()
+
+/** Minimal shape of the Express application and request the rewrite uses. */
+interface ExpressAppLike {
+  use(fn: (req: { url: string }, res: unknown, next: () => void) => void): unknown
+  enabled?(setting: string): boolean
 }
 
 /**
@@ -158,7 +206,57 @@ function createMetadataControllerWithPath(serviceRoot: string): typeof MetadataC
   providers: [EdmRegistry],
   exports: [EdmRegistry],
 })
-export class ODataModule extends ConfigurableModuleClass {
+export class ODataModule extends ConfigurableModuleClass implements NestModule {
+  private static readonly logger = new Logger('ODataModule')
+
+  constructor(
+    @Optional() private readonly adapterHost?: HttpAdapterHost,
+    @Optional()
+    @Inject(ODATA_MODULE_OPTIONS)
+    private readonly resolvedOptions?: ODataModuleResolvedOptions,
+    @Optional() private readonly edmRegistry?: EdmRegistry,
+  ) {
+    super()
+  }
+
+  /**
+   * Make the canonical entity URL `{serviceRoot}/{EntitySet}({key})` (OData-URL 4.01 §4.3.1)
+   * routable: the OData key routes are registered as `{EntitySet}/:key`, so a request for
+   * `Products(1)` is rewritten to `Products/1` before routing (see `rewriteCanonicalKeyUrl`).
+   * `Location` and `@odata.id` use the canonical form. Both forms keep working.
+   *
+   * Installed once per application on the Express adapter (Nest runs `configure()` before it
+   * registers routes). Also warns when Express's own `etag` setting is on: it adds a hash ETag
+   * to every response (errors, collections, $metadata), which is not an OData ETag.
+   */
+  configure(): void {
+    const adapter = this.adapterHost?.httpAdapter
+    if (!adapter || !this.resolvedOptions || !this.edmRegistry) return
+    if (adapter.getType?.() !== 'express') return
+    const app = adapter.getInstance<ExpressAppLike>()
+    if (!app || rewriteInstalled.has(app)) return
+    rewriteInstalled.add(app)
+
+    const serviceRoot = this.resolvedOptions.serviceRoot
+    const registry = this.edmRegistry
+    app.use((req, _res, next) => {
+      const rewritten = rewriteCanonicalKeyUrl(
+        req.url,
+        serviceRoot,
+        (name) => registry.getEntitySet(name) !== undefined,
+      )
+      if (rewritten !== undefined) req.url = rewritten
+      next()
+    })
+
+    if (app.enabled?.('etag')) {
+      ODataModule.logger.warn(
+        "Express's 'etag' setting is on: it adds a hash ETag to every response, including errors " +
+          "and collections, that is not an OData ETag. Call app.set('etag', false) for OData services.",
+      )
+    }
+  }
+
   /** Static storage for serviceRoot, set by forRoot() and read by forFeature() adapters. */
   private static _serviceRoot: string = ''
 
@@ -173,6 +271,7 @@ export class ODataModule extends ConfigurableModuleClass {
     if (!options.serviceRoot || options.serviceRoot.trim() === '') {
       throw new Error('ODataModule.forRoot(): serviceRoot must be a non-empty string')
     }
+    assertErrorLanguage(options.errorLanguage)
 
     // Store serviceRoot for adapter modules to read synchronously
     ODataModule._serviceRoot = options.serviceRoot

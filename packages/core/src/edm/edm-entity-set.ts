@@ -9,6 +9,13 @@ export interface EdmEntitySet {
   readonly entityTypeName: string
   readonly namespace: string
   readonly isReadOnly: boolean
+  /**
+   * Set when data modification requests on the entity set require `If-Match` (428 Precondition
+   * Required otherwise): the properties its ETag is computed from, advertised with the
+   * `Core.OptimisticConcurrency` annotation in `$metadata` (empty when the ETag is computed by
+   * a function).
+   */
+  readonly optimisticConcurrency?: readonly string[]
 }
 
 /**

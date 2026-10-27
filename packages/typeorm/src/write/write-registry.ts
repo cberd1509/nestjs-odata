@@ -12,6 +12,7 @@ export class ODataWriteRegistry {
     { readonly value: ODataWriteHandlers<any>; readonly source: unknown }
   >()
   private readonly etags = new Map<string, ODataETagSource>()
+  private readonly requireIfMatch = new Set<string>()
 
   static for(applicationKey: object): ODataWriteRegistry {
     let registry = ODataWriteRegistry.byApplication.get(applicationKey)
@@ -54,5 +55,15 @@ export class ODataWriteRegistry {
 
   getETag(entitySetName: string): ODataETagSource | undefined {
     return this.etags.get(entitySetName)
+  }
+
+  /** Make PATCH, PUT and DELETE on `entitySetName` require `If-Match` (428 otherwise). */
+  registerRequireIfMatch(entitySetName: string): void {
+    this.requireIfMatch.add(entitySetName)
+  }
+
+  /** Whether data modification requests on `entitySetName` require `If-Match`. */
+  requiresIfMatch(entitySetName: string): boolean {
+    return this.requireIfMatch.has(entitySetName)
   }
 }

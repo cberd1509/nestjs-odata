@@ -16,6 +16,21 @@ import type { IEdmDeriver, EntityClass } from '@nestjs-odata/core'
 import { mapColumnTypeToEdm } from './typeorm-type-mapper.js'
 
 /**
+ * Columns whose value the database or TypeORM computes (`Core.Computed`): create/update dates,
+ * version counters, generated columns (`@Generated`, `asExpression`). Generated primary keys are
+ * not included: a key stays client-settable on POST.
+ */
+function isComputedColumn(col: EntityMetadata['columns'][number]): boolean {
+  return (
+    col.isCreateDate ||
+    col.isUpdateDate ||
+    col.isVersion ||
+    col.generatedType !== undefined ||
+    (col.isGenerated && !col.isPrimary)
+  )
+}
+
+/**
  * TypeOrmEdmDeriver — derives OData v4 EdmEntityConfig[] from TypeORM EntityMetadata.
  *
  * Respects OData decorators: @EdmType, @ODataExclude, @ODataEntitySet.
@@ -100,12 +115,14 @@ export class TypeOrmEdmDeriver implements IEdmDeriver {
         .filter((col) => !excludedProps.has(col.propertyName) && col.isSelect !== false)
         .reduce<EdmProperty[]>((acc, col) => {
           const override = edmTypeOverrides[col.propertyName]
+          const computed = isComputedColumn(col) ? { computed: true } : {}
 
           if (override) {
             acc.push({
               name: col.propertyName,
               type: override.type as EdmPrimitiveType,
               nullable: col.isNullable,
+              ...computed,
               ...(override.precision !== undefined ? { precision: override.precision } : {}),
               ...(override.scale !== undefined ? { scale: override.scale } : {}),
               ...(override.maxLength !== undefined ? { maxLength: override.maxLength } : {}),
@@ -129,6 +146,7 @@ export class TypeOrmEdmDeriver implements IEdmDeriver {
             name: col.propertyName,
             type: edmType,
             nullable: col.isNullable,
+            ...computed,
             ...(col.precision !== undefined && col.precision !== null
               ? { precision: col.precision }
               : {}),

@@ -37,6 +37,7 @@ const STATUS_TEXTS: Record<number, string> = {
   409: 'Conflict',
   412: 'Precondition Failed',
   422: 'Unprocessable Entity',
+  428: 'Precondition Required',
   429: 'Too Many Requests',
   500: 'Internal Server Error',
   501: 'Not Implemented',
@@ -54,6 +55,9 @@ const HEADER_NAMES: Record<string, string> = {
   location: 'Location',
   etag: 'ETag',
   allow: 'Allow',
+  'content-language': 'Content-Language',
+  'preference-applied': 'Preference-Applied',
+  'odata-entityid': 'OData-EntityId',
 }
 
 export function buildBatchResponse(parts: BatchResponsePart[]): {

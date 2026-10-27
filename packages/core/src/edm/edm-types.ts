@@ -30,6 +30,12 @@ export interface EdmProperty {
   readonly precision?: number
   readonly scale?: number
   readonly maxLength?: number
+  /**
+   * Computed by the service (`Core.Computed`): creation/update timestamps, version counters,
+   * generated columns. Clients may send it, but the service ignores the value on writes
+   * (OData-Protocol 4.01 §11.4.2, §11.4.3).
+   */
+  readonly computed?: boolean
 }
 
 /** A navigation property linking two EDM entity types */

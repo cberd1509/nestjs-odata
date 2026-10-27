@@ -68,5 +68,35 @@ export function resolveEntityETag(
   const source = writes?.getETag(entitySetName)
   if (source !== undefined) return computeETagFromSource(source, entity)
   const column = etagProvider?.getETagColumn(entitySetName)
-  return column ? etagProvider!.computeETag(entity, column) : undefined
+  // No value (e.g. the column was left out by $select): no ETag rather than a wrong one.
+  if (!column || entity[column] === undefined || entity[column] === null) return undefined
+  return etagProvider!.computeETag(entity, column)
 }
+
+/**
+ * 412 / 428 checks of a data modification request against the target entity's current ETag
+ * (OData-Protocol 4.01 §8.2.4, §8.2.5, §11.4.1.1), shared by the HTTP routes and `$batch`.
+ * Returns the failing status and message, or `undefined` when the write may proceed.
+ */
+export function preconditionFailure(
+  headers: { readonly ifMatch?: string; readonly ifNoneMatch?: string },
+  currentETag: string | undefined,
+): { readonly status: 412; readonly message: string } | undefined {
+  // If-Match on an entity set without ETags is ignored (nothing to compare with).
+  if (headers.ifMatch && currentETag !== undefined && !etagMatches(headers.ifMatch, currentETag)) {
+    return { status: 412, message: ETAG_MISMATCH_MESSAGE }
+  }
+  // `*` matches any existing entity; a list matches when it contains the current ETag.
+  if (headers.ifNoneMatch && etagMatches(headers.ifNoneMatch, currentETag)) {
+    return { status: 412, message: 'The entity matches the If-None-Match precondition' }
+  }
+  return undefined
+}
+
+/** Message of the 412 for an `If-Match` that does not match. */
+export const ETAG_MISMATCH_MESSAGE =
+  'The ETag value does not match the current version of the entity'
+
+/** Message of the 428 for a write without `If-Match` on an entity set that requires it. */
+export const IF_MATCH_REQUIRED_MESSAGE =
+  'This entity set requires an If-Match header for data modification requests'

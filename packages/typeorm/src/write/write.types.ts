@@ -14,6 +14,17 @@ export interface ODataWriteContext {
   readonly rawKey?: string
   /** The `If-Match` request header, if any. The handler decides whether it matches. */
   readonly ifMatch?: string
+  /**
+   * The `If-None-Match` request header, if any. The handler decides whether it matches; for a
+   * data modification request a match (`*` matches any existing entity) MUST answer 412 with
+   * no change (OData-Protocol 4.01 §8.2.5).
+   */
+  readonly ifNoneMatch?: string
+  /**
+   * True when the entity set requires `If-Match` (`requireIfMatch`). The library already
+   * answered 428 when the header is missing; the handler still checks that it matches.
+   */
+  readonly requireIfMatch?: boolean
   /** The Nest execution context of the route (the `$batch` route for batch parts). */
   readonly executionContext?: ExecutionContext
   /** The platform request object (the `$batch` request for batch parts). */

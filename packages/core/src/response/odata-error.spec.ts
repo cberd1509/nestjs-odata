@@ -37,6 +37,7 @@ describe('buildODataErrorResponse', () => {
   it('uses the mapping returned by the mapper', () => {
     expect(buildODataErrorResponse(new DomainProblem('NAME_MISSING', 'name'), mapper)).toEqual({
       status: 422,
+      language: 'en',
       body: {
         error: {
           code: 'NAME_MISSING',
@@ -55,12 +56,17 @@ describe('buildODataErrorResponse', () => {
       code: 'C',
       message: 'm',
     }))
-    expect(res).toEqual({ status: 409, body: { error: { code: 'C', message: 'm', details: [] } } })
+    expect(res).toEqual({
+      status: 409,
+      language: 'en',
+      body: { error: { code: 'C', message: 'm', details: [] } },
+    })
   })
 
   it('falls back to the default mapping when the mapper returns nothing, throws or is invalid', () => {
     const fallback = {
       status: 500,
+      language: 'en',
       body: {
         error: {
           code: 'InternalServerError',
@@ -98,6 +104,7 @@ describe('buildODataErrorResponse', () => {
     )
     expect(res).toEqual({
       status: 412,
+      language: 'en',
       body: { error: { code: 'PreconditionFailed', message: 'ETag mismatch', details: [] } },
     })
     expect(buildODataErrorResponse(new BadRequestException('Bad name')).body.error.message).toBe(
@@ -182,6 +189,7 @@ describe('buildODataErrorResponse hardening', () => {
     const httpErrorsStyle = Object.assign(new Error('Payload too large'), { status: 413 })
     expect(buildODataErrorResponse(httpErrorsStyle)).toEqual({
       status: 413,
+      language: 'en',
       body: { error: { code: 'Error', message: 'Payload too large', details: [] } },
     })
     const withStatusCode = Object.assign(new Error('Gone away'), { statusCode: 410 })
@@ -197,6 +205,7 @@ describe('buildODataErrorResponse hardening', () => {
     const res = buildODataErrorResponse(new ServiceUnavailableException('db at 10.0.0.5 is down'))
     expect(res).toEqual({
       status: 503,
+      language: 'en',
       body: {
         error: {
           code: 'ServiceUnavailable',
@@ -231,6 +240,7 @@ describe('default mapping of wrapped errors', () => {
     })
     expect(buildODataErrorResponse(wrapped)).toEqual({
       status: 400,
+      language: 'en',
       body: { error: { code: 'BadRequest', message: 'Bad name', details: [] } },
     })
     // A wrapped 5xx stays a redacted 500.

@@ -2,6 +2,7 @@ import {
   DynamicModule,
   Inject,
   Injectable,
+  Logger,
   Module,
   OnApplicationBootstrap,
   OnModuleInit,
@@ -23,6 +24,7 @@ import type {
 import {
   EdmRegistry,
   ETAG_PROVIDER,
+  getETagProperty,
   ODataModule,
   ODATA_CONTROLLER_KEY,
   ODATA_MODULE_OPTIONS,
@@ -88,6 +90,8 @@ export const TYPEORM_ODATA_WRITES = Symbol('TYPEORM_ODATA_WRITES')
 export interface TypeOrmODataWrites {
   readonly handlers: ReadonlyMap<unknown, ODataWriteHandlersDefinition>
   readonly etags: ReadonlyMap<unknown, ODataETagSource>
+  /** Entity classes whose writes require `If-Match` (`requireIfMatch`). */
+  readonly requireIfMatch?: ReadonlySet<unknown>
 }
 
 /** Options of ODataTypeOrmModule.forRoot(): application-wide TypeORM adapter settings. */
@@ -165,6 +169,14 @@ export interface ODataTypeOrmFeatureConfig {
    * Takes precedence over `@ODataETag` and `@UpdateDateColumn`.
    */
   readonly etag?: ODataETagSource
+  /**
+   * Require optimistic concurrency: PATCH, PUT and DELETE of this entity set (also inside
+   * `$batch`) without an `If-Match` header answer 428 Precondition Required, with no change
+   * (OData-Protocol 4.01 §8.2.4, §11.4.1.1). `$metadata` advertises it with the
+   * `Core.OptimisticConcurrency` annotation. The entity set needs an ETag (`etag` option,
+   * `@ODataETag` or `@UpdateDateColumn`) so clients can send a matching one. Default: false.
+   */
+  readonly requireIfMatch?: boolean
 }
 
 /** Anything accepted by ODataTypeOrmModule.forFeature() — bare entity class or config object. */
@@ -182,12 +194,14 @@ function normalizeFeatureItems(items: ODataTypeOrmFeatureItem[]): {
   scopes: Map<EntityClassOrSchema, ODataScopeDefinition>
   writeHandlers: Map<EntityClassOrSchema, ODataWriteHandlersDefinition>
   etags: Map<EntityClassOrSchema, ODataETagSource>
+  requireIfMatch: Set<EntityClassOrSchema>
 } {
   const entities: EntityClassOrSchema[] = []
   const nameOverrides = new Map<EntityClassOrSchema, string>()
   const scopes = new Map<EntityClassOrSchema, ODataScopeDefinition>()
   const writeHandlers = new Map<EntityClassOrSchema, ODataWriteHandlersDefinition>()
   const etags = new Map<EntityClassOrSchema, ODataETagSource>()
+  const requireIfMatch = new Set<EntityClassOrSchema>()
   for (const item of items) {
     if (isFeatureConfig(item)) {
       entities.push(item.entity)
@@ -195,11 +209,12 @@ function normalizeFeatureItems(items: ODataTypeOrmFeatureItem[]): {
       if (item.scope) scopes.set(item.entity, item.scope)
       if (item.writeHandlers) writeHandlers.set(item.entity, item.writeHandlers)
       if (item.etag) etags.set(item.entity, item.etag)
+      if (item.requireIfMatch) requireIfMatch.add(item.entity)
     } else {
       entities.push(item)
     }
   }
-  return { entities, nameOverrides, scopes, writeHandlers, etags }
+  return { entities, nameOverrides, scopes, writeHandlers, etags, requireIfMatch }
 }
 
 /** True for an injectable class (as opposed to a handlers object). */
@@ -227,6 +242,8 @@ function isScopeClass(def: ODataScopeDefinition): def is new (...args: any[]) =>
  */
 @Injectable()
 export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstrap {
+  private static readonly logger = new Logger('ODataTypeOrmModule')
+
   /** Entity sets this feature registered, checked against `requireScope` at bootstrap. */
   private readonly entitySetNames: string[] = []
 
@@ -263,6 +280,27 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
     return (qb, ctx) => instance.apply(qb, ctx)
   }
 
+  /**
+   * The properties an entity set's ETag is computed from, for `Core.OptimisticConcurrency`:
+   * the `etag` option's property, else `@ODataETag`, else `@UpdateDateColumn`. Empty when the
+   * ETag is a function of the entity; `undefined` when the entity set has no ETag at all.
+   */
+  private etagProperties(
+    entityClass: unknown,
+    meta: { readonly columns: readonly { isUpdateDate: boolean; propertyName: string }[] },
+  ): string[] | undefined {
+    const source = this.writes?.etags.get(entityClass)
+    if (typeof source === 'string') return [source]
+    if (typeof source === 'function') return []
+    const explicit =
+      typeof entityClass === 'function'
+        ? getETagProperty(entityClass as new (...args: unknown[]) => unknown)
+        : undefined
+    if (explicit) return [explicit]
+    const updateDate = meta.columns.find((c) => c.isUpdateDate)
+    return updateDate ? [updateDate.propertyName] : undefined
+  }
+
   onModuleInit(): void {
     const deriver = new TypeOrmEdmDeriver(
       this.options.namespace ?? 'Default',
@@ -287,6 +325,20 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
       const namespace = this.options.namespace ?? 'Default'
       // Apply forFeature() name override (takes precedence over @ODataEntitySet and pluralization).
       const entitySetName = overrideByTypeName.get(config.entityTypeName) ?? config.entitySetName
+      const index = metadatas.findIndex((m) => m.name === config.entityTypeName)
+      const entityClass = this.entityClasses[index]
+      const requireIfMatch = this.writes?.requireIfMatch?.has(entityClass) ?? false
+      let optimisticConcurrency: string[] | undefined
+      if (requireIfMatch) {
+        optimisticConcurrency = this.etagProperties(entityClass, metadatas[index])
+        if (optimisticConcurrency === undefined) {
+          TypeOrmEdmInitializer.logger.warn(
+            `Entity set '${entitySetName}' requires If-Match but has no ETag (no etag option, ` +
+              '@ODataETag or @UpdateDateColumn): clients can only send If-Match: *.',
+          )
+          optimisticConcurrency = []
+        }
+      }
       const entityType: EdmEntityType = {
         name: config.entityTypeName,
         namespace,
@@ -300,6 +352,7 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
         entityTypeName: config.entityTypeName,
         namespace,
         isReadOnly: config.isReadOnly,
+        ...(optimisticConcurrency !== undefined ? { optimisticConcurrency } : {}),
       }
       this.edmRegistry.register(entityType, entitySet)
 
@@ -308,8 +361,6 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
         this.edmRegistry.getEntitySetByTypeName(config.entityTypeName)?.name ?? entitySetName
       this.entitySetNames.push(registeredSet)
 
-      const entityClass =
-        this.entityClasses[metadatas.findIndex((m) => m.name === config.entityTypeName)]
       const scopeDef = this.scopes?.byEntity.get(entityClass) ?? this.scopes?.defaultScope
       if (scopeDef && this.scopeRegistry) {
         this.scopeRegistry.register(registeredSet, this.toScopeFn(scopeDef), scopeDef)
@@ -325,6 +376,9 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
       const etagSource = this.writes?.etags.get(entityClass)
       if (etagSource && this.writeRegistry) {
         this.writeRegistry.registerETag(registeredSet, etagSource)
+      }
+      if (requireIfMatch && this.writeRegistry) {
+        this.writeRegistry.registerRequireIfMatch(registeredSet)
       }
     }
   }
@@ -372,7 +426,8 @@ export class ODataTypeOrmModule {
     // Normalize: accept either plain entity classes or { entity, name } config
     // objects in the same array. The name override is applied at EDM-registration
     // time in TypeOrmEdmInitializer.
-    const { entities, nameOverrides, scopes, writeHandlers, etags } = normalizeFeatureItems(items)
+    const { entities, nameOverrides, scopes, writeHandlers, etags, requireIfMatch } =
+      normalizeFeatureItems(items)
     const handlerClassProviders: Provider[] = [
       ...new Set([...writeHandlers.values()].filter(isHandlersClass)),
     ]
@@ -431,6 +486,7 @@ export class ODataTypeOrmModule {
           useValue: {
             handlers: writeHandlers,
             etags,
+            requireIfMatch,
           } satisfies TypeOrmODataWrites,
         },
         {

@@ -88,7 +88,11 @@ describe('BatchController dispatch', () => {
     mockEdmRegistry.getEntityType.mockReturnValue({
       name: 'Product',
       namespace: 'Default',
-      properties: [],
+      properties: [
+        { name: 'id', type: 'Edm.Int32', nullable: false },
+        { name: 'name', type: 'Edm.String', nullable: false },
+        { name: 'price', type: 'Edm.Decimal', nullable: false },
+      ],
       navigationProperties: [],
       keyProperties: ['id'],
       isReadOnly: false,

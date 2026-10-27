@@ -691,7 +691,7 @@ describe('OData v4 Advanced Tests (e2e)', () => {
       expect(location).toMatch(/Products\(\d+\)/)
     })
 
-    it('POST: extra unknown fields are ignored (mass assignment protection)', async () => {
+    it('POST: unknown fields are refused with 400 (OData §11.4.2, mass assignment protection)', async () => {
       const res = await request
         .post('/odata/Products')
         .send({
@@ -700,13 +700,12 @@ describe('OData v4 Advanced Tests (e2e)', () => {
           active: true,
           createdAt: new Date().toISOString(),
           __admin: true, // unknown field
-          secretField: 'should be ignored',
+          secretField: 'cannot be persisted',
         })
-        .expect(201)
+        .expect(400)
 
-      const body = res.body as Record<string, unknown>
-      expect(body['__admin']).toBeUndefined()
-      expect(body['secretField']).toBeUndefined()
+      const body = res.body as { error: { message: string; details: { target: string }[] } }
+      expect(body.error.details.map((d) => d.target)).toEqual(['__admin', 'secretField'])
     })
 
     it('PATCH: partial update preserves unmentioned fields', async () => {
