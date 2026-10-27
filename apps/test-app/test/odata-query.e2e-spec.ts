@@ -240,4 +240,15 @@ describe('OData Query Surface (e2e)', () => {
       expect(Number(item['price'])).toBeGreaterThanOrEqual(25)
     }
   })
+
+  it('uses SQLite functions on the better-sqlite3 driver (year(), indexof())', async () => {
+    const byYear = await request.get('/odata/Products?$filter=year(createdAt) eq 2024').expect(200)
+    expect((byYear.body as { value: unknown[] }).value.length).toBeGreaterThan(0)
+    const byIndex = await request
+      .get("/odata/Products?$filter=indexof(name,'Widget') eq 6")
+      .expect(200)
+    expect((byIndex.body as { value: { name: string }[] }).value.map((p) => p.name)).toContain(
+      'Alpha Widget',
+    )
+  })
 })

@@ -175,7 +175,8 @@ ODataTypeOrmModule.forFeature(
 
 Registers TypeORM entities for OData auto-derivation.
 
-**`items` array** accepts a mixed list of:
+**`items` array** accepts a mixed list of (`EntityClassOrSchema` is exported, and is whatever
+`TypeOrmModule.forFeature()` accepts: an entity class or an `EntitySchema`):
 
 - **Bare entity class** — `Product` — the OData entity-set name is derived from
   the class name (respecting any `@ODataEntitySet` decorator, otherwise

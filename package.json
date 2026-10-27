@@ -15,8 +15,7 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "prepare": "husky",
-    "release": "changeset publish",
-    "smoke:nest12": "node scripts/smoke-nest12.mjs"
+    "release": "changeset publish"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.2",

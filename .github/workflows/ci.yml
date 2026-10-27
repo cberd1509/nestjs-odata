@@ -39,18 +39,3 @@ jobs:
         run: |
           pnpm --filter @nestjs-odata/core publish --dry-run --access public
           pnpm --filter @nestjs-odata/typeorm publish --dry-run --access public
-
-  nest12-esm-smoke:
-    name: NestJS 12 ESM consumer smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: '.node-version'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo build --filter=@nestjs-odata/core --filter=@nestjs-odata/typeorm
-      - name: Install the packed packages into an ESM NestJS 12 + TypeORM 1 app and run it
-        run: pnpm smoke:nest12

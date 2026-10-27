@@ -90,9 +90,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     // 0. Row-level scope of the requested entity set
     applyScopeToQuery(qb, alias, scopes?.root)
 
-    const dbType = repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
-    const dialect: 'sqlite' | 'postgres' | 'ansi' =
-      dbType === 'sqlite' || dbType === 'postgres' ? dbType : 'ansi'
+    const dialect = sqlDialectOf(repo.manager.dataSource.options.type)
 
     // 1. Filter
     if (query.filter) {
@@ -214,4 +212,29 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     applyExpandPagination(items, expandPaginationMap)
     return { items }
   }
+}
+
+/** The SQL dialect a filter needs, from the TypeORM driver type. */
+export type SqlDialect = 'sqlite' | 'postgres' | 'ansi'
+
+/** Drivers built on SQLite (TypeORM's `AbstractSqliteDriver` family). */
+const SQLITE_DRIVER_TYPES: ReadonlySet<string> = new Set([
+  'sqlite',
+  'better-sqlite3',
+  'capacitor',
+  'cordova',
+  'expo',
+  'nativescript',
+  'react-native',
+  'sqljs',
+])
+
+/**
+ * Map a TypeORM `DataSourceOptions['type']` to the dialect used for date and string functions:
+ * every SQLite-based driver (`sqlite`, `better-sqlite3`, `sqljs`, …) is `sqlite` (strftime,
+ * INSTR), `postgres` is `postgres`, everything else ANSI.
+ */
+export function sqlDialectOf(type: string): SqlDialect {
+  if (SQLITE_DRIVER_TYPES.has(type)) return 'sqlite'
+  return type === 'postgres' ? 'postgres' : 'ansi'
 }

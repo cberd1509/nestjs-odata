@@ -56,9 +56,9 @@
     "rxjs": "^7.0.0"
   },
   "devDependencies": {
-    "@nestjs/common": "^11.1.19",
-    "@nestjs/core": "^11.1.19",
-    "@nestjs/testing": "^11.1.19",
+    "@nestjs/common": "^12.3.2",
+    "@nestjs/core": "^12.3.2",
+    "@nestjs/testing": "^12.3.2",
     "@swc/core": "^1.15.33",
     "@types/node": "24",
     "@types/pluralize": "^0.0.33",

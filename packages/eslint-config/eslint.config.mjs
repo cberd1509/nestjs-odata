@@ -11,9 +11,6 @@ export default tseslint.config(
       '**/*.js',
       '**/*.cjs',
       '**/*.mjs',
-      // Consumer smoke apps install their own dependencies in a temp dir (scripts/smoke-nest12.mjs)
-      // and are type-checked there by tsc, so typed linting cannot resolve their imports here.
-      'smoke/**',
     ],
   },
   eslint.configs.recommended,
