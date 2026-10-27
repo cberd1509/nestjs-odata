@@ -21,7 +21,7 @@ features:
   - title: NestJS Native
     details: Works with NestJS decorators, guards, pipes, and interceptors. Mix OData and REST routes freely.
   - title: Rich Filter Support
-    details: Lambda any/all, arithmetic operators, date/time functions, string functions — all translated to parameterized SQL.
+    details: Navigation paths, lambda any/all (incl. many-to-many), arithmetic operators, date/time and string functions — all translated to parameterized SQL.
   - title: $batch Support
     details: Multi-operation batch requests with atomic changesets. Zero additional setup when using ODataTypeOrmModule.
   - title: Security Built-In

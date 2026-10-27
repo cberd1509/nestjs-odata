@@ -88,11 +88,98 @@ For collection navigation properties (one-to-many, many-to-many), paginate the e
 ```bash
 # Expand first 5 orders for each customer
 curl 'http://localhost:3000/odata/Customers?$expand=orders($top=5;$skip=0)'
+
+# The second-largest item of each order
+curl 'http://localhost:3000/odata/Orders?$expand=items($top=1;$skip=1;$orderby=quantity desc)'
 ```
 
-::: info Implementation detail
-In v1, `$expand` pagination is applied in-memory after the JOIN query runs. Results are bounded by the parent `maxTop` and `maxExpandDepth` limits, making this safe without unbounded queries.
+The page is taken per parent, after the nested `$filter`, `$search` and the target's
+[row-level scope](./row-level-scopes), in the order of the nested `$orderby` (then the key).
+
+::: info How paging runs
+On one-to-many navigation properties the page is computed in SQL: the JOIN keeps only the
+related rows whose `ROW_NUMBER() OVER (PARTITION BY <foreign key> ORDER BY <nested $orderby>, <key>)`
+falls in the page, so only the requested rows are loaded. This needs window functions and is used
+on SQLite (every SQLite-based driver), PostgreSQL, CockroachDB, SQL Server and Oracle.
+
+On MySQL/MariaDB (window functions depend on the server version), on many-to-many navigation
+properties and on targets with composite keys, the expanded collection is sliced in memory after
+the query. Results are still bounded by the parent `maxTop` and `maxExpandDepth`.
+
+Paging options are kept per expand path: in
+`$expand=reports($top=1),manager($expand=reports($top=2))` the two `reports` collections are paged
+independently.
 :::
+
+## $expand with $count
+
+`$count=true` inside `$expand` annotates the expanded collection with its total count
+(`nav@odata.count`, OData 4.01 Part 1 §11.2.6.5). The count includes the nested `$filter` and
+`$search` and the target's row-level scope, and ignores the nested `$top`/`$skip`:
+
+```bash
+curl 'http://localhost:3000/odata/Orders?$expand=items($count=true;$top=2)'
+```
+
+```json
+{
+  "value": [
+    {
+      "id": 1,
+      "items@odata.count": 3,
+      "items": [
+        { "id": 1, "quantity": 150 },
+        { "id": 2, "quantity": 30 }
+      ]
+    }
+  ]
+}
+```
+
+To get only the count, without the related entities, expand `nav/$count`. Only `$filter` and
+`$search` may follow it:
+
+```bash
+curl 'http://localhost:3000/odata/Orders?$expand=items/$count($filter=quantity gt 40)'
+```
+
+```json
+{ "value": [{ "id": 1, "items@odata.count": 2 }] }
+```
+
+Counts run as one grouped `COUNT(*)` query per counted expand item, after the main query.
+`$count` and `/$count` on a single-valued navigation property answer 400.
+
+## $expand with $search
+
+`$search` inside `$expand` keeps only the related entities matching the search, using the same
+[search provider](./query-options#search) and `@ODataSearchable()` properties as a top-level
+`$search`:
+
+```bash
+curl 'http://localhost:3000/odata/Customers?$expand=orders($search=pending;$count=true)'
+```
+
+A target entity without searchable properties answers 400, and a service without a search
+provider answers 501.
+
+## $levels (recursive navigation properties)
+
+For a navigation property whose target is the same entity type (a hierarchy such as
+`Employee.manager` or `Employee.reports`), `$levels` repeats the expansion that many levels deep.
+The other nested options apply at every level:
+
+```bash
+# An employee, their manager and their manager's manager, with id and name only
+curl 'http://localhost:3000/odata/Employees?$expand=manager($levels=2;$select=id,name)'
+
+# As deep as maxExpandDepth allows
+curl 'http://localhost:3000/odata/Employees?$expand=reports($levels=max)'
+```
+
+`$levels=max` expands to the remaining `maxExpandDepth`. A number of levels that goes past
+`maxExpandDepth`, or more than one level on a navigation property that is not recursive, answers
+400 (`$levels=1` is a plain expand on any navigation property).
 
 ## $expand with $filter
 
@@ -158,8 +245,27 @@ When exceeded, the response is:
 
 ## Nested query options and row-level scopes
 
-`$filter`, `$select`, `$orderby` and `$expand` inside `$expand(...)` are validated against the
-related entity type (unknown or excluded properties give 400) and apply to the related rows only: a nested
-`$filter` that matches nothing yields an empty collection (or `null`), never a missing parent.
-When the target entity set has a [row-level scope](./row-level-scopes), it restricts the expanded
-rows in the same way, at every depth.
+The nested options are `$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count`, `$search`,
+`$levels` and `$expand`, separated by semicolons (OData 4.01 Part 2 §5.1.3). They are validated
+against the related entity type (unknown or excluded properties give 400) and apply to the related
+rows only: a nested `$filter` that matches nothing yields an empty collection (or `null`), never a
+missing parent. When the target entity set has a [row-level scope](./row-level-scopes), it
+restricts the expanded rows, the nested counts and the nested paging in the same way, at every
+depth.
+
+A nested `$filter` can use [navigation paths](./query-options#navigation-paths) and lambdas like
+a top-level one.
+
+## Unsupported nested options
+
+Options the library does not implement are refused instead of being ignored (OData 4.01 Part 1
+§9.3.1), so a client never gets more data than it asked for:
+
+| Request                                                   | Response                                            |
+| --------------------------------------------------------- | --------------------------------------------------- |
+| `items($compute=...)`, `items($apply=...)`                | 501 `NotImplemented`                                |
+| `items/$ref`                                              | 501 `NotImplemented`                                |
+| `$it` inside a nested option (`items($filter=$it/...)`)   | 501 `NotImplemented` (it would refer to the parent) |
+| Parameter aliases (`items(@p=1)`)                         | 501 `NotImplemented`                                |
+| An unknown option (`items($foo=1)`)                       | 400 `BadRequest`                                    |
+| `items/$count($top=1)` (only `$filter`/`$search` allowed) | 400 `BadRequest`                                    |

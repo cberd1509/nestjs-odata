@@ -362,6 +362,26 @@ curl 'http://localhost:3000/odata/Categories?$filter=products/any(p:p/price gt 1
 
 # Orders where ALL items have quantity >= 2
 curl 'http://localhost:3000/odata/Orders?$filter=items/all(i:i/quantity ge 2)'
+
+# Products tagged "sale" (many-to-many)
+curl 'http://localhost:3000/odata/Products?$filter=tags/any(t:t/name eq '\''sale'\'')'
+```
+
+Filter on a related entity through a single-valued navigation property:
+
+```bash
+# Products in the "Electronics" category
+curl 'http://localhost:3000/odata/Products?$filter=category/name eq '\''Electronics'\'''
+```
+
+Count and page expanded collections:
+
+```bash
+# Each order with its item count and its two largest items
+curl 'http://localhost:3000/odata/Orders?$expand=items($count=true;$top=2;$orderby=quantity desc)'
+
+# Only the item count of each order
+curl 'http://localhost:3000/odata/Orders?$expand=items/$count'
 ```
 
 ### Combining query options

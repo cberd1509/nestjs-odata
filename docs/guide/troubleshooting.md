@@ -30,9 +30,7 @@ If any of these are missing, the entity will not appear in the EDM.
 ```typescript
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      /* ... */
-    }),
+    TypeOrmModule.forRoot({/* ... */}),
     ODataModule.forRoot({
       serviceRoot: '/odata',
       controllers: [ProductsController],
@@ -67,6 +65,33 @@ export class AppModule {}
 
 3. **Check supported functions.** Not all OData filter functions may be implemented. See [Filter Functions](./filter-functions.md) for the full list of supported functions.
 
+4. **Collection-valued navigation in a path.** `orderItems/quantity gt 1` is rejected with
+   "'orderItems' is a collection-valued navigation property ... use any/all". Paths can only
+   go through single-valued navigation properties (`category/name`); filter collections with a
+   lambda: `orderItems/any(i: i/quantity gt 1)`.
+
+5. **Lambda over something that isn't a collection.** `category/any(...)` (single-valued) or an
+   unknown name before `/any` is a 400. Lambdas range over `@OneToMany` and `@ManyToMany`
+   navigation properties.
+
+## A query returns 501 Not Implemented
+
+**Symptoms:** A request answers `501` with `"code": "NotImplemented"`.
+
+The request is valid OData, but uses a feature the library does not implement. Rather than
+ignore it (and return more data than asked for), it refuses the request (OData 4.01 Part 1
+§9.3.1). The message names the feature. The 501 cases are:
+
+- `$root`, and `$it` inside `$expand` options;
+- `$count` / `$this` path segments in `$filter` (`items/$count gt 2`): use `items/any()` or a
+  lambda instead;
+- navigation paths in `$orderby` (`$orderby=category/name`);
+- nested `$compute` / `$apply` in `$expand`, `$expand=nav/$ref`, parameter aliases in `$expand`
+  options;
+- nested `$search` when no search provider is registered.
+
+See [Unsupported nested options](./expand#unsupported-nested-options).
+
 ## $expand returns empty array
 
 **Symptoms:** `$expand=category` returns entities but the expanded property is `null` or an empty array.
@@ -93,6 +118,10 @@ export class AppModule {}
    ```
 
 3. **Check that related data exists.** If the database has no related records, the expansion will legitimately return `null` or `[]`.
+
+4. **Check row-level scopes and nested options.** The target entity set's
+   [scope](./row-level-scopes), a nested `$filter`/`$search`, or a nested `$skip` past the end of
+   the collection all leave related rows out of the expansion.
 
 ## OData routes conflict with my REST routes
 
@@ -127,9 +156,7 @@ curl 'http://localhost:3000/odata/Products?$top=10&$count=true'
 {
   "@odata.context": "...",
   "@odata.count": 1000,
-  "value": [
-    /* 10 items */
-  ]
+  "value": [/* 10 items */]
 }
 ```
 

@@ -9,7 +9,8 @@ import type { EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm'
  * - `count`: `GET /Set/$count`
  * - `entity`: a by-key read (`GET /Set/:key`)
  * - `expand`: an entity set reached through `$expand` (at any depth)
- * - `filter`: an entity set reached through a lambda (`any`/`all`) in `$filter`
+ * - `filter`: an entity set reached from `$filter`: through a lambda (`any`/`all`) or a
+ *   single-valued navigation path (`category/name`)
  * - `write`: the existence check that runs before an update, replace or delete
  */
 export type ODataScopeOperation = 'collection' | 'count' | 'entity' | 'expand' | 'filter' | 'write'
@@ -32,7 +33,8 @@ export interface ODataScopeContext {
   /**
    * Navigation properties followed from the requested entity set to reach this one: `[]` for
    * the root, `['items']` for `$expand=items`, `['items', 'product']` for
-   * `$expand=items($expand=product)`, `['items']` for `$filter=items/any(...)`.
+   * `$expand=items($expand=product)`, `['items']` for `$filter=items/any(...)`,
+   * `['category', 'group']` for `$filter=category/group/name eq 'x'`.
    */
   readonly navigationPath: readonly string[]
   /**
@@ -98,7 +100,11 @@ export interface TypeOrmScopePlan {
   readonly root?: ScopedSubquery
   /** Scopes of expanded entity sets, keyed by navigation path (`items/product`). */
   readonly expand: ReadonlyMap<string, ScopedSubquery>
-  /** Scopes of lambda (`any`/`all`) targets, keyed by navigation path (`items`). */
+  /**
+   * Scopes of entity sets reached from `$filter` — lambda (`any`/`all`) targets and the
+   * navigation segments of property paths — keyed by navigation path (`items`, `category`,
+   * `category/group`).
+   */
   readonly lambda: ReadonlyMap<string, ScopedSubquery>
   /** True under `requireScope`: a path without an entry fails instead of running unscoped. */
   readonly required: boolean
