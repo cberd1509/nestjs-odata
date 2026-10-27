@@ -17,6 +17,13 @@ export interface ODataBatchOptions {
    * entity set.
    */
   readonly entitySets?: readonly string[]
+  /**
+   * Milliseconds one operation may take before it is answered with 504 Gateway Timeout; inside
+   * a changeset that fails and rolls back the changeset, so a stuck route (or a query blocked
+   * behind the changeset's own row locks) cannot hold the transaction forever. The route itself
+   * is not cancelled. Default: 30 000. `0` disables the limit.
+   */
+  readonly operationTimeout?: number
 }
 
 /** DI token of the {@link ODataBatchOptions}, provided by `ODataTypeOrmModule.forRoot()`. */

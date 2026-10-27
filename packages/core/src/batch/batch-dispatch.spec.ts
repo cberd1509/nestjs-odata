@@ -3,12 +3,15 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import {
+  BatchOperationTimeoutError,
   batchOperationHeaders,
   dispatchBatchOperation,
   getODataBatchPart,
+  ODATA_BATCH_PART,
   resolveBatchOperationUrl,
   runWithODataBatchPart,
 } from './batch-dispatch.js'
+import { runWithODataRequestContext } from '../context/odata-request-context.js'
 
 /** A plain Node request handler standing in for the Express application. */
 function echoHandler(req: IncomingMessage, res: ServerResponse): void {
@@ -51,6 +54,7 @@ describe('batchOperationHeaders', () => {
       host: 'api.example.com',
       'accept-language': 'es',
       'if-match': 'W/"1"',
+      'accept-encoding': 'identity',
     })
   })
 
@@ -66,21 +70,25 @@ describe('batchOperationHeaders', () => {
         accept: 'multipart/mixed',
         expect: '100-continue',
         connection: 'keep-alive',
+        'accept-encoding': 'gzip',
         cookie: 'sid=1',
       },
       {},
       false,
     )
-    expect(headers).toEqual({ cookie: 'sid=1' })
+    // The operation's response is read in process: always ask for an unencoded body.
+    expect(headers).toEqual({ cookie: 'sid=1', 'accept-encoding': 'identity' })
   })
 
   it('joins array-valued headers and defaults a body to application/json', () => {
     expect(batchOperationHeaders({ 'x-a': ['1', '2'] }, {}, true)).toEqual({
       'x-a': '1, 2',
       'content-type': 'application/json',
+      'accept-encoding': 'identity',
     })
     expect(batchOperationHeaders({}, { 'content-type': 'text/plain' }, true)).toEqual({
       'content-type': 'text/plain',
+      'accept-encoding': 'identity',
     })
   })
 })
@@ -190,5 +198,130 @@ describe('dispatchBatchOperation', () => {
       },
     ])
     expect(res).toEqual({ statusCode: 201, headers: { location: '/odata/P(1)' }, body: '{}' })
+  })
+
+  it('never passes a stale Content-Length to inject() (body rewritten by $N substitution)', async () => {
+    const calls: { headers: Record<string, string> }[] = []
+    const fastifyLike = {
+      inject: (opts: { headers: Record<string, string> }) => {
+        calls.push(opts)
+        return Promise.resolve({ statusCode: 204, headers: {}, payload: '' })
+      },
+    }
+    await dispatchBatchOperation(adapter(fastifyLike), {
+      method: 'PATCH',
+      url: '/odata/P(1)',
+      headers: { 'content-type': 'application/json', 'content-length': '3' },
+      body: '{"ref":"/odata/P(1)"}',
+    })
+    expect(calls[0]?.headers['content-length']).toBeUndefined()
+  })
+
+  it('keeps multi-valued response headers (Set-Cookie) as separate values', async () => {
+    const handler = (_req: IncomingMessage, res: ServerResponse) => {
+      res.setHeader('Set-Cookie', ['a=1; Path=/', 'b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT'])
+      res.end()
+    }
+    const res = await dispatchBatchOperation(adapter(handler), {
+      method: 'GET',
+      url: '/',
+      headers: {},
+    })
+    expect(res.headers['set-cookie']).toEqual([
+      'a=1; Path=/',
+      'b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT',
+    ])
+  })
+
+  it('asks for an identity encoding and drops Content-Encoding from the part', async () => {
+    let acceptEncoding: string | undefined
+    const handler = (req: IncomingMessage, res: ServerResponse) => {
+      acceptEncoding = req.headers['accept-encoding']
+      res.setHeader('Content-Encoding', 'identity')
+      res.setHeader('Content-Type', 'application/json')
+      res.end('{}')
+    }
+    const res = await dispatchBatchOperation(adapter(handler), {
+      method: 'GET',
+      url: '/',
+      headers: batchOperationHeaders({ 'accept-encoding': 'gzip, br' }, {}, false),
+    })
+    expect(acceptEncoding).toBe('identity')
+    expect(res.headers['content-encoding']).toBeUndefined()
+  })
+
+  it('keeps a binary response body as bytes', async () => {
+    const bytes = Buffer.from([0xff, 0xd8, 0x00, 0x80, 0xfe])
+    const handler = (_req: IncomingMessage, res: ServerResponse) => {
+      res.setHeader('Content-Type', 'image/jpeg')
+      res.end(bytes)
+    }
+    const res = await dispatchBatchOperation(adapter(handler), {
+      method: 'GET',
+      url: '/',
+      headers: {},
+    })
+    expect(Buffer.isBuffer(res.body)).toBe(true)
+    expect(Buffer.compare(res.body as Buffer, bytes)).toBe(0)
+  })
+
+  it('rejects an operation that does not end within the timeout', async () => {
+    const hang = () => undefined // never answers
+    await expect(
+      dispatchBatchOperation(adapter(hang), {
+        method: 'GET',
+        url: '/',
+        headers: {},
+        timeoutMs: 20,
+      }),
+    ).rejects.toBeInstanceOf(BatchOperationTimeoutError)
+  })
+
+  it('attaches values to the injected request so they survive a lost async context', async () => {
+    const key = Symbol('k')
+    let seen: unknown
+    const handler = (req: IncomingMessage, res: ServerResponse) => {
+      seen = (req as unknown as Record<symbol, unknown>)[key]
+      res.end()
+    }
+    await dispatchBatchOperation(adapter(handler), {
+      method: 'GET',
+      url: '/',
+      headers: {},
+      attach: { [key]: 'value' },
+    })
+    expect(seen).toBe('value')
+  })
+})
+
+describe('getODataBatchPart', () => {
+  const part = { method: 'GET', url: '/x', contentId: '1', inChangeset: false, batchRequest: {} }
+
+  it('reads the part attached to the request, before the async context', () => {
+    const other = { ...part, contentId: 'wrong context' }
+    const request = { [ODATA_BATCH_PART]: part }
+    expect(runWithODataBatchPart(other, () => getODataBatchPart(request))).toBe(part)
+    // From the request of the OData request context too.
+    expect(
+      runWithODataRequestContext({ request }, () =>
+        runWithODataBatchPart(other, () => getODataBatchPart()),
+      ),
+    ).toBe(part)
+  })
+
+  it('reads the platform raw request (Fastify request.raw)', () => {
+    expect(getODataBatchPart({ raw: { [ODATA_BATCH_PART]: part } })).toBe(part)
+  })
+
+  it('falls back to the async context', () => {
+    expect(runWithODataBatchPart(part, () => getODataBatchPart({}))).toBe(part)
+  })
+})
+
+describe('batchOperationHeaders: HTTP/2 pseudo-headers', () => {
+  it('never inherits pseudo-headers', () => {
+    expect(
+      batchOperationHeaders({ ':authority': 'h', ':path': '/odata/$batch', 'x-a': '1' }, {}, false),
+    ).toEqual({ 'x-a': '1', 'accept-encoding': 'identity' })
   })
 })

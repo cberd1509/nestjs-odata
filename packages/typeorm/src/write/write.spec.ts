@@ -160,7 +160,9 @@ describe('buildBatchResponse headers', () => {
     const { body } = buildBatchResponse([
       { statusCode: 201, headers: { location: '/odata/Things(1)', etag: 'W/"MQ=="' }, body: '{}' },
     ])
-    expect(body).toContain('HTTP/1.1 201 Created\r\nLocation: /odata/Things(1)\r\nETag: W/"MQ=="')
+    expect(body.toString()).toContain(
+      'HTTP/1.1 201 Created\r\nLocation: /odata/Things(1)\r\nETag: W/"MQ=="',
+    )
   })
 })
 

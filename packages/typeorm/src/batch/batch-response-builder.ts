@@ -54,6 +54,7 @@ const HEADER_NAMES: Record<string, string> = {
   'preference-applied': 'Preference-Applied',
   'odata-entityid': 'OData-EntityId',
   'odata-version': 'OData-Version',
+  'set-cookie': 'Set-Cookie',
 }
 
 /** A fresh multipart boundary. */
@@ -61,9 +62,12 @@ function newBoundary(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 16)}`
 }
 
+/** A line of the multipart body: text, or the raw bytes of a binary operation body. */
+type Line = string | Buffer
+
 /** The lines of one `application/http` part (after its boundary delimiter). */
-function operationLines(part: BatchResponsePart): string[] {
-  const lines: string[] = []
+function operationLines(part: BatchResponsePart): Line[] {
+  const lines: Line[] = []
   const statusText = STATUS_TEXTS[part.statusCode] ?? 'Unknown'
   lines.push('Content-Type: application/http')
   lines.push('Content-Transfer-Encoding: binary')
@@ -80,12 +84,15 @@ function operationLines(part: BatchResponsePart): string[] {
       if (part.body === undefined) continue
       hasContentType = true
     }
-    lines.push(`${HEADER_NAMES[key] ?? name}: ${value}`)
+    // One line per value: `Set-Cookie` values cannot be joined with commas.
+    for (const single of typeof value === 'string' ? [value] : value) {
+      lines.push(`${HEADER_NAMES[key] ?? name}: ${single}`)
+    }
   }
 
   if (part.body !== undefined) {
     if (!hasContentType) lines.push('Content-Type: application/json')
-    lines.push(`Content-Length: ${Buffer.byteLength(part.body, 'utf-8')}`)
+    lines.push(`Content-Length: ${Buffer.byteLength(part.body)}`)
   }
   lines.push('')
 
@@ -103,14 +110,15 @@ function operationLines(part: BatchResponsePart): string[] {
  * single `application/http` part in its place (OData-Protocol 4.01 §11.7.7.5).
  *
  * @param parts - Array of per-operation (or per-changeset) response descriptors
- * @returns Object with `contentType` (for Content-Type header) and `body` (response body string)
+ * @returns Object with `contentType` (for Content-Type header) and `body` (the response bytes;
+ *   binary operation bodies are kept byte for byte)
  */
 export function buildBatchResponse(parts: readonly BatchResponseItem[]): {
   contentType: string
-  body: string
+  body: Buffer
 } {
   const boundary = newBoundary('batch')
-  const lines: string[] = []
+  const lines: Line[] = []
 
   for (const part of parts) {
     lines.push(`--${boundary}`)
@@ -131,7 +139,13 @@ export function buildBatchResponse(parts: readonly BatchResponseItem[]): {
   lines.push(`--${boundary}--`)
   lines.push('')
 
-  const body = lines.join('\r\n')
+  const crlf = Buffer.from('\r\n')
+  const chunks: Buffer[] = []
+  lines.forEach((line, i) => {
+    if (i > 0) chunks.push(crlf)
+    chunks.push(typeof line === 'string' ? Buffer.from(line, 'utf-8') : line)
+  })
+  const body = Buffer.concat(chunks)
   const contentType = `multipart/mixed; boundary=${boundary}`
 
   return { contentType, body }

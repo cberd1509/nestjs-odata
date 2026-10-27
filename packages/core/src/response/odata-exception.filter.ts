@@ -68,7 +68,7 @@ export class ODataExceptionFilter implements ExceptionFilter {
     }
     // A `$batch` operation runs through its route like a standalone request; the mapper also
     // learns which operation of the batch failed.
-    const part = getODataBatchPart()
+    const part = getODataBatchPart(http.getRequest?.())
     const { status, body, language } = buildODataErrorResponse(
       exception,
       this.options?.errorMapper,

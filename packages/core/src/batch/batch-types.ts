@@ -60,10 +60,10 @@ export interface BatchResponsePart {
   readonly contentId?: string
   /** HTTP status code for this operation */
   readonly statusCode: number
-  /** Response headers for this operation */
-  readonly headers: Readonly<Record<string, string>>
-  /** Serialized response body, if any */
-  readonly body?: string
+  /** Response headers for this operation (one entry per value for `Set-Cookie`) */
+  readonly headers: Readonly<Record<string, string | readonly string[]>>
+  /** Serialized response body, if any: text, or the raw bytes of a binary body */
+  readonly body?: string | Buffer
 }
 
 /**

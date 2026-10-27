@@ -11,6 +11,7 @@
  *   - #73 One `$batch` endpoint serves the entity sets of every forFeature() module.
  */
 import 'reflect-metadata'
+import { AsyncResource } from 'node:async_hooks'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BadRequestException,
@@ -20,7 +21,9 @@ import {
   Injectable,
   Module,
   Param,
+  Post,
   Req,
+  Res,
   UseGuards,
   UseInterceptors,
   type CallHandler,
@@ -49,6 +52,7 @@ import {
   type ODataQuery,
 } from '@nestjs-odata/core'
 import {
+  getODataChangesetManager,
   ODataTypeOrmModule,
   TypeOrmAutoHandler,
   type ODataTypeOrmRootOptions,
@@ -161,6 +165,37 @@ class NotesController {
 class TicketsController {
   constructor(private readonly handler: TypeOrmAutoHandler) {}
 
+  /** A route that never answers. */
+  @Post('hang')
+  hang(): Promise<never> {
+    return new Promise<never>(() => undefined)
+  }
+
+  /** A route answering with its own (non-OData) error and headers. */
+  @Get('locked')
+  locked(@Res() res: PlainResponse) {
+    res
+      .status(401)
+      .set('WWW-Authenticate', 'Bearer realm="odata"')
+      .set('Retry-After', '5')
+      .json({ message: 'login first' })
+  }
+
+  /** A route setting two cookies. */
+  @Get('cookies')
+  cookies(@Res() res: PlainResponse) {
+    res.set('Set-Cookie', ['a=1; Path=/', 'b=2; Path=/']).json({ ok: true })
+  }
+
+  /** What the route sees of the batch operation and the changeset. */
+  @Post('probe')
+  probe() {
+    return {
+      inChangeset: getODataChangesetManager() !== undefined,
+      contentId: getODataBatchPart()?.contentId ?? null,
+    }
+  }
+
   @ODataGetByKey('Tickets')
   get(@Param('key') key: string) {
     return this.handler.handleGetByKey(key, 'Tickets')
@@ -176,6 +211,13 @@ class TicketsController {
   remove(@Param('key') key: string) {
     return this.handler.handleDelete(key, 'Tickets')
   }
+}
+
+/** The subset of the Express response the plain routes above use. */
+interface PlainResponse {
+  status(code: number): PlainResponse
+  set(name: string, value: string | string[]): PlainResponse
+  json(body: unknown): void
 }
 
 @Module({
@@ -204,7 +246,13 @@ class NotesModule {}
 })
 class TicketsModule {}
 
-async function createApp(root?: ODataTypeOrmRootOptions): Promise<INestApplication> {
+/** Created outside any async context: resuming `next()` in it loses the caller's context. */
+const foreignContext = new AsyncResource('foreign-middleware')
+
+async function createApp(
+  root?: ODataTypeOrmRootOptions,
+  opts: { foreignMiddleware?: boolean } = {},
+): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       TypeOrmModule.forRoot({
@@ -220,6 +268,12 @@ async function createApp(root?: ODataTypeOrmRootOptions): Promise<INestApplicati
     ],
   }).compile()
   const app = moduleRef.createNestApplication()
+  if (opts.foreignMiddleware) {
+    // Like a session store or a callback-based auth library: next() runs in another context.
+    app.use((_req: unknown, _res: unknown, next: () => void) => {
+      foreignContext.runInAsyncScope(() => setImmediate(next))
+    })
+  }
   await app.init()
   return app
 }
@@ -551,6 +605,50 @@ describe('$batch conformance (e2e)', () => {
       expect(single(unknown).json.error.code).toBeDefined()
     })
 
+    it('refuses a nested $batch however it is spelled', async () => {
+      const [upper, encoded] = await postBatch(app, [
+        op({ method: 'POST', url: '/odata/$BATCH', body: {} }),
+        op({ method: 'POST', url: '%24Batch', body: {} }),
+      ])
+      expect(single(upper).status).toBe(400)
+      expect(single(encoded).status).toBe(400)
+    })
+
+    it("passes a route's own error through unchanged (status, headers, body)", async () => {
+      const [part] = await postBatch(app, [op({ method: 'GET', url: 'Tickets/locked' })])
+      expect(single(part).status).toBe(401)
+      expect(single(part).headers['www-authenticate']).toBe('Bearer realm="odata"')
+      expect(single(part).headers['retry-after']).toBe('5')
+      expect(single(part).body).toBe('{"message":"login first"}')
+    })
+
+    it('keeps every Set-Cookie of an operation', async () => {
+      const res = await supertest(server(app))
+        .post('/odata/$batch')
+        .set('Content-Type', `multipart/mixed; boundary=${BOUNDARY}`)
+        .send(batch([op({ method: 'GET', url: 'Tickets/cookies' })]))
+        .buffer(true)
+        .parse((r, fn) => {
+          const chunks: Buffer[] = []
+          r.on('data', (c: Buffer) => chunks.push(c))
+          r.on('end', () => fn(null, Buffer.concat(chunks).toString('utf-8')))
+        })
+      const text = res.body as string
+      expect(text).toContain('Set-Cookie: a=1; Path=/\r\n')
+      expect(text).toContain('Set-Cookie: b=2; Path=/\r\n')
+    })
+
+    it('replaces only whole $<Content-ID> references', async () => {
+      const [cs] = await postBatch(app, [
+        changeset([
+          { method: 'POST', url: '/odata/Notes', body: { title: 'first' }, contentId: '1' },
+          { method: 'POST', url: '/odata/Notes', body: { title: 'costs $1' }, contentId: '2' },
+        ]),
+      ])
+      const parts = (cs as { changeset: PartResponse[] }).changeset
+      expect(parts[1].json.title).toBe('costs $1')
+    })
+
     it('refuses operations outside the service root (other application routes)', async () => {
       const parts = await postBatch(app, [
         op({ method: 'GET', url: '/status' }),
@@ -592,6 +690,51 @@ describe('$batch options of ODataTypeOrmModule.forRoot()', () => {
       ])
       expect(single(ticketPart).status).toBe(200)
       expect(single(notePart).status).toBe(403)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('$batch operations whose middleware loses the async context', () => {
+  it('still see their batch operation and changeset (carried by the request)', async () => {
+    const app = await createApp(undefined, { foreignMiddleware: true })
+    try {
+      const [single1, cs] = await postBatch(app, [
+        op({ method: 'POST', url: 'Tickets/probe', body: {}, contentId: '7' }),
+        changeset([{ method: 'POST', url: 'Tickets/probe', body: {}, contentId: '8' }]),
+      ])
+      expect(single(single1).json).toMatchObject({ inChangeset: false, contentId: '7' })
+      const inner = (cs as { changeset: PartResponse[] }).changeset[0]
+      expect(inner.json).toMatchObject({ inChangeset: true, contentId: '8' })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('$batch operation timeout', () => {
+  it('answers an operation that does not end in time with 504 and fails its changeset', async () => {
+    const app = await createApp({ batch: { operationTimeout: 50 } })
+    try {
+      const ds = app.get(DataSource)
+      const before = await ds.getRepository(Ticket).count()
+      const [alone, cs] = await postBatch(app, [
+        op({ method: 'POST', url: 'Tickets/hang', body: {} }),
+        changeset([
+          {
+            method: 'POST',
+            url: '/odata/Tickets',
+            body: { subject: 'rolled back' },
+            contentId: '1',
+          },
+          { method: 'POST', url: 'Tickets/hang', body: {}, contentId: '2' },
+        ]),
+      ])
+      expect(single(alone).status).toBe(504)
+      expect(single(cs).status).toBe(504)
+      expect(single(cs).contentId).toBe('2')
+      expect(await ds.getRepository(Ticket).count()).toBe(before)
     } finally {
       await app.close()
     }

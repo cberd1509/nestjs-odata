@@ -11,12 +11,15 @@ import { Test } from '@nestjs/testing'
 import { HttpAdapterHost } from '@nestjs/core'
 import { DataSource } from 'typeorm'
 import {
+  EdmRegistry,
   getODataBatchPart,
+  ODATA_BATCH_PART,
   ODATA_MODULE_OPTIONS,
+  runWithODataBatchPart,
   runWithODataRequestContext,
 } from '@nestjs-odata/core'
 import { BatchController, type BatchRequest } from './batch-controller.js'
-import { getODataChangesetManager } from './changeset-context.js'
+import { getODataChangesetManager, ODATA_CHANGESET_MANAGER } from './changeset-context.js'
 import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
 
 interface Seen {
@@ -26,10 +29,19 @@ interface Seen {
   body: string
   manager: unknown
   part: ReturnType<typeof getODataBatchPart>
+  /** Set on the injected request (survives a lost async context). */
+  attachedPart?: ReturnType<typeof getODataBatchPart>
+  attachedManager?: unknown
 }
 
 /** What the fake application answers for one `METHOD url`. */
-type Route = (seen: Seen) => { status: number; headers?: Record<string, string>; body?: unknown }
+type Route = (seen: Seen) => {
+  status: number
+  headers?: Record<string, string | string[]>
+  body?: unknown
+  /** Sent as is (no JSON serialization). */
+  raw?: string | Buffer
+}
 
 const mockQueryRunner = {
   connect: vi.fn(),
@@ -71,15 +83,20 @@ describe('BatchController', () => {
         body: Buffer.concat(chunks).toString('utf-8'),
         manager: getODataChangesetManager(),
         part: getODataBatchPart(),
+        attachedPart: (req as unknown as Record<symbol, Seen['part']>)[ODATA_BATCH_PART],
+        attachedManager: (req as unknown as Record<symbol, unknown>)[ODATA_CHANGESET_MANAGER],
       }
       seen.push(s)
       const route = routes[`${req.method} ${req.url}`]
       const out = route
         ? route(s)
         : { status: 404, body: { message: `Cannot ${req.method} ${req.url}`, statusCode: 404 } }
+      if (out.status < 0) return // never answers
       res.statusCode = out.status
       for (const [k, v] of Object.entries(out.headers ?? {})) res.setHeader(k, v)
-      if (out.body === undefined) {
+      if (out.raw !== undefined) {
+        res.end(out.raw)
+      } else if (out.body === undefined) {
         res.end()
       } else {
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -88,10 +105,14 @@ describe('BatchController', () => {
     })
   }
 
-  async function makeController(batchOptions?: ODataBatchOptions): Promise<BatchController> {
+  async function makeController(
+    batchOptions?: ODataBatchOptions,
+    edm?: EdmRegistry,
+  ): Promise<BatchController> {
     const module = await Test.createTestingModule({
       controllers: [BatchController],
       providers: [
+        ...(edm ? [{ provide: EdmRegistry, useValue: edm }] : []),
         { provide: HttpAdapterHost, useValue: { httpAdapter: { getInstance: () => app } } },
         { provide: DataSource, useValue: mockDataSource },
         { provide: ODATA_MODULE_OPTIONS, useValue: mockOptions },
@@ -132,12 +153,15 @@ describe('BatchController', () => {
     controller: BatchController,
     parts: string[],
     headers: Record<string, string> = {},
+    batchUrl = '/odata/$batch',
+    extra: Record<symbol, unknown> = {},
   ): Promise<{ status: number; text: string }> {
     const res = mockResponse()
     const body = [...parts.flatMap((p) => ['--b', p]), '--b--'].join('\r\n')
     const req = {
+      ...extra,
       body,
-      originalUrl: '/odata/$batch',
+      originalUrl: batchUrl,
       headers: { 'content-type': 'multipart/mixed; boundary=b', ...headers },
     }
     await controller.handleBatch(req as unknown as BatchRequest, res)
@@ -324,6 +348,152 @@ describe('BatchController', () => {
     expect(String(res.send.mock.calls[0]?.[0])).toContain('HTTP/1.1 200 OK')
   })
 
+  // ── Review fixes (PR #87) ─────────────────────────────────────────────────
+
+  it('refuses a nested $batch whatever its case, and a $batch run from inside an operation', async () => {
+    const controller = await makeController()
+    const { text } = await run(controller, [
+      op('POST', '/odata/$BATCH', { body: {} }),
+      op('POST', '%24Batch', { body: {} }),
+    ])
+    expect(statuses(text)).toEqual(['400', '400'])
+    expect(seen).toHaveLength(0)
+
+    const part = { method: 'POST', url: 'x', inChangeset: false, batchRequest: {} }
+    const viaRequest = await run(controller, [op('GET', 'Products(1)')], {}, '/odata/$batch', {
+      [ODATA_BATCH_PART]: part,
+    })
+    expect(viaRequest.status).toBe(400)
+    const viaContext = await runWithODataBatchPart(part, () =>
+      run(controller, [op('GET', 'Products(1)')]),
+    )
+    expect(viaContext.status).toBe(400)
+    expect(seen).toHaveLength(0)
+  })
+
+  it('attaches the operation (and the changeset manager) to the injected request', async () => {
+    const controller = await makeController()
+    await run(controller, [changeset([op('POST', '/odata/Products', { cid: '1', body: {} })])])
+    expect(seen[0]?.attachedPart?.contentId).toBe('1')
+    expect(seen[0]?.attachedManager).toBe(mockQueryRunner.manager)
+  })
+
+  it('fails an operation that does not answer in time, rolling back its changeset (504)', async () => {
+    routes['PATCH /odata/Products(7)'] = () => ({ status: -1 })
+    const controller = await makeController({ operationTimeout: 30 })
+    const { text } = await run(controller, [
+      changeset([
+        op('POST', '/odata/Products', { cid: '1', body: {} }),
+        op('PATCH', '$1', { cid: '2', body: {} }),
+      ]),
+    ])
+    expect(statuses(text)).toEqual(['504'])
+    expect(text).toContain('Content-ID: 2')
+    expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('entitySets: refuses navigation and $expand into entity sets outside the allow-list', async () => {
+    const edm = new EdmRegistry()
+    edm.register(
+      {
+        name: 'Product',
+        namespace: 'Default',
+        keyProperties: ['id'],
+        isReadOnly: false,
+        properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+        navigationProperties: [
+          { name: 'Supplier', type: 'Default.Supplier', nullable: true, isCollection: false },
+        ],
+      },
+      { name: 'Products', entityTypeName: 'Product', namespace: 'Default', isReadOnly: false },
+    )
+    edm.register(
+      {
+        name: 'Supplier',
+        namespace: 'Default',
+        keyProperties: ['id'],
+        isReadOnly: false,
+        properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+        navigationProperties: [],
+      },
+      { name: 'Suppliers', entityTypeName: 'Supplier', namespace: 'Default', isReadOnly: false },
+    )
+    routes['GET /odata/Products(1)/id'] = () => ({ status: 200, body: { value: 1 } })
+    const controller = await makeController({ entitySets: ['Products'] }, edm)
+    const { text } = await run(controller, [
+      op('GET', 'Products(1)/Supplier'),
+      op('GET', 'Products?$expand=Supplier'),
+      op('GET', 'Products(1)/id'),
+      op('GET', 'Products?$top=1'),
+    ])
+    expect(statuses(text)).toEqual(['403', '403', '200', '200'])
+    const both = await makeController({ entitySets: ['Products', 'Suppliers'] }, edm)
+    routes['GET /odata/Products(1)/Supplier'] = () => ({ status: 200, body: { id: 3 } })
+    expect(statuses((await run(both, [op('GET', 'Products(1)/Supplier')])).text)).toEqual(['200'])
+  })
+
+  it('entitySets: the service root comes from the $batch URL (global prefix equal to the root)', async () => {
+    routes['GET /odata/odata/Products(1)'] = () => ({ status: 200, body: { id: 1 } })
+    const controller = await makeController({ entitySets: ['Products'] })
+    const { text } = await run(controller, [op('GET', 'Products(1)')], {}, '/odata/odata/$batch')
+    expect(statuses(text)).toEqual(['200'])
+  })
+
+  it("passes a route's own non-OData error through unchanged (status, headers, body)", async () => {
+    routes['GET /odata/Products(2)'] = () => ({
+      status: 401,
+      headers: { 'WWW-Authenticate': 'Bearer realm="odata"', 'Retry-After': '5' },
+      body: { message: 'login first' },
+    })
+    const errorMapper = vi.fn(() => undefined)
+    const controller = await makeController()
+    ;(controller as unknown as { options: Record<string, unknown> }).options = {
+      ...mockOptions,
+      errorMapper,
+    }
+    const { text } = await run(controller, [op('GET', '/odata/Products(2)')])
+    expect(statuses(text)).toEqual(['401'])
+    expect(text).toContain('www-authenticate: Bearer realm="odata"')
+    expect(text).toContain('retry-after: 5')
+    expect(text).toContain('{"message":"login first"}')
+    expect(errorMapper).not.toHaveBeenCalled()
+  })
+
+  it('emits one Set-Cookie line per cookie', async () => {
+    routes['GET /odata/Products(1)'] = () => ({
+      status: 200,
+      headers: { 'Set-Cookie': ['a=1', 'b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT'] },
+      body: { id: 1 },
+    })
+    const controller = await makeController()
+    const { text } = await run(controller, [op('GET', '/odata/Products(1)')])
+    expect(text).toContain('Set-Cookie: a=1\r\n')
+    expect(text).toContain('Set-Cookie: b=2; Expires=Wed, 21 Oct 2026 07:28:00 GMT\r\n')
+  })
+
+  it('keeps binary operation bodies byte for byte', async () => {
+    const bytes = Buffer.from([0xff, 0xd8, 0x00, 0x80])
+    routes['GET /odata/Products(1)/$value'] = () => ({
+      status: 200,
+      headers: { 'Content-Type': 'image/jpeg' },
+      raw: bytes,
+    })
+    const controller = await makeController()
+    const res = mockResponse()
+    const body = ['--b', op('GET', '/odata/Products(1)/$value'), '--b--'].join('\r\n')
+    await controller.handleBatch(
+      {
+        body,
+        originalUrl: '/odata/$batch',
+        headers: { 'content-type': 'multipart/mixed; boundary=b' },
+      } as unknown as BatchRequest,
+      res,
+    )
+    const sent = res.send.mock.calls[0]?.[0] as Buffer
+    expect(Buffer.isBuffer(sent)).toBe(true)
+    expect(sent.includes(bytes)).toBe(true)
+  })
+
   // ── Content-ID reference resolution (WRITE-03) ────────────────────────────
 
   type ResolveFn = (
@@ -354,6 +524,41 @@ describe('BatchController', () => {
     expect(
       resolve({ method: 'PATCH', url: 'x', headers: {}, body: '{"ref":"$1"}' }, map)['body'],
     ).toContain('/odata/Orders(42)')
+  })
+
+  it('ContentID: replaces whole tokens only, with exact IDs', async () => {
+    const controller = await makeController()
+    const map = new Map([
+      ['1', '/odata/Orders(42)'],
+      ['10', '/odata/Orders(99)'],
+    ])
+    const resolve = resolveRef(controller)
+    expect(resolve({ method: 'PATCH', url: '$10', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(99)',
+    )
+    expect(resolve({ method: 'GET', url: '$10/Items', headers: {} }, map)['url']).toBe(
+      '/odata/Orders(99)/Items',
+    )
+    // Not a reference: a token elsewhere in the URL, or a longer ID.
+    expect(resolve({ method: 'GET', url: 'Orders?$filter=a eq $1', headers: {} }, map)['url']).toBe(
+      'Orders?$filter=a eq $1',
+    )
+    expect(resolve({ method: 'GET', url: '$12', headers: {} }, map)['url']).toBe('$12')
+    const body = JSON.stringify({
+      note: 'costs $1',
+      'Order@odata.bind': '$1',
+      'Lines@odata.bind': ['$10', '$1'],
+      nested: { link: '$1/Items' },
+    })
+    const resolved = JSON.parse(
+      resolve({ method: 'POST', url: 'Lines', headers: {}, body }, map)['body'] as string,
+    ) as Record<string, unknown>
+    expect(resolved).toEqual({
+      note: 'costs $1',
+      'Order@odata.bind': '/odata/Orders(42)',
+      'Lines@odata.bind': ['/odata/Orders(99)', '/odata/Orders(42)'],
+      nested: { link: '/odata/Orders(42)/Items' },
+    })
   })
 
   it('ContentID: no matching token returns the same part object', async () => {

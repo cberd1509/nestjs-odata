@@ -37,11 +37,18 @@ import { HttpAdapterHost } from '@nestjs/core'
 import type { IncomingMessage } from 'http'
 import { DataSource, type EntityManager } from 'typeorm'
 import {
+  BatchOperationTimeoutError,
   batchOperationHeaders,
   buildODataErrorResponse,
   dispatchBatchOperation,
+  EdmRegistry,
   extractBoundary,
+  getODataBatchPart,
   getODataRequestContext,
+  navigationTargetTypeName,
+  ODATA_BATCH_PART,
+  parseQuery,
+  type ExpandNode,
   ODataExceptionFilter,
   odataErrorBody,
   ODATA_MODULE_OPTIONS,
@@ -55,7 +62,7 @@ import {
   type ODataModuleResolvedOptions,
 } from '@nestjs-odata/core'
 import { buildBatchResponse } from './batch-response-builder.js'
-import { runInODataChangeset } from './changeset-context.js'
+import { ODATA_CHANGESET_MANAGER, runInODataChangeset } from './changeset-context.js'
 import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
 import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
 import type { ODataChangesetRunner } from '../write/write.types.js'
@@ -77,7 +84,7 @@ export interface BatchRequest extends IncomingMessage {
 export interface BatchResponse {
   status(code: number): this
   set(field: string, value: string): this
-  send(body: string): this
+  send(body: string | Buffer): this
   json(body: unknown): this
 }
 
@@ -97,29 +104,55 @@ class ChangesetOperationError extends Error {
 type ErrorOrigin = Pick<BatchRequestPart, 'contentId'> &
   Partial<Pick<BatchRequestPart, 'method' | 'url'>>
 
+/** Default of `batch.operationTimeout`: how long one operation may take, in milliseconds. */
+export const DEFAULT_BATCH_OPERATION_TIMEOUT = 30_000
+
 /** Headers a failed changeset's single error response keeps from the failing operation. */
 const ERROR_HEADERS = new Set(['content-type', 'content-language', 'allow', 'odata-version'])
 
-/** True for an OData error body (`{ "error": { "code", "message" } }`). */
-function isODataErrorBody(body: string | undefined): boolean {
-  if (!body) return false
+/**
+ * The message of Nest's own "no route" answer (`404 { message: 'Cannot GET /x', ... }`), or
+ * `undefined` for any other response: only then is no route behind the response.
+ */
+function noRouteMessage(statusCode: number, body: string | Buffer | undefined): string | undefined {
+  if (statusCode !== 404 || typeof body !== 'string') return undefined
   try {
-    const parsed = JSON.parse(body) as { error?: { code?: unknown; message?: unknown } }
-    return typeof parsed.error?.code === 'string' && typeof parsed.error.message === 'string'
-  } catch {
-    return false
-  }
-}
-
-/** The `message` of a non-OData JSON error body (e.g. Nest's default 404), if any. */
-function plainErrorMessage(body: string | undefined): string | undefined {
-  if (!body) return undefined
-  try {
-    const message = (JSON.parse(body) as { message?: unknown }).message
-    return typeof message === 'string' ? message : undefined
+    const parsed = JSON.parse(body) as { message?: unknown; statusCode?: unknown; error?: unknown }
+    const message = parsed.message
+    return typeof message === 'string' &&
+      /^Cannot [A-Z]+ /.test(message) &&
+      !('error' in parsed && typeof parsed.error === 'object')
+      ? message
+      : undefined
   } catch {
     return undefined
   }
+}
+
+/** The first value of a response header. */
+function headerValue(value: string | readonly string[] | undefined): string | undefined {
+  return typeof value === 'string' ? value : value?.[0]
+}
+
+/** `$<Content-ID>` as a whole value, or as the first segment of a URL (`$1/Items`). */
+function resolveReference(value: string, contentIdMap: ReadonlyMap<string, string>): string {
+  if (!value.startsWith('$')) return value
+  const end = value.search(/[/?]/)
+  const id = value.slice(1, end === -1 ? undefined : end)
+  const target = contentIdMap.get(id)
+  return target === undefined ? value : target + (end === -1 ? '' : value.slice(end))
+}
+
+/** Every string value of a JSON value that is a whole `$<Content-ID>` reference, resolved. */
+function resolveJsonReferences(value: unknown, contentIdMap: ReadonlyMap<string, string>): unknown {
+  if (typeof value === 'string') return resolveReference(value, contentIdMap)
+  if (Array.isArray(value)) return value.map((v) => resolveJsonReferences(v, contentIdMap))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, resolveJsonReferences(v, contentIdMap)]),
+    )
+  }
+  return value
 }
 
 /** Path segments of a URL path, percent-decoded. */
@@ -155,6 +188,7 @@ export class BatchController {
     @Optional()
     @Inject(ODATA_BATCH_OPTIONS)
     private readonly batchOptions?: ODataBatchOptions,
+    @Optional() private readonly edmRegistry?: EdmRegistry,
   ) {}
 
   /**
@@ -196,6 +230,12 @@ export class BatchController {
       this.sendError(res, HttpStatus.NOT_FOUND, 'NotFound', 'The $batch endpoint is disabled')
       return
     }
+    // Re-entrancy: a $batch reached from inside a batch operation (however its URL is spelled)
+    // would multiply the operation limit.
+    if (getODataBatchPart(req)) {
+      this.badRequest(res, 'A $batch request cannot contain a $batch request')
+      return
+    }
 
     let rawBody: string
     try {
@@ -228,7 +268,7 @@ export class BatchController {
     const responseParts: BatchResponseItem[] = []
     for (const part of parsed.parts) {
       if (part.kind === 'request') {
-        responseParts.push(await this.runOperation(part, req, false))
+        responseParts.push(await this.runOperation(part, req))
       } else if (part.kind === 'changeset') {
         responseParts.push(await this.executeChangeset(part.parts, req))
       }
@@ -314,7 +354,7 @@ export class BatchController {
           for (const part of parts) {
             // Resolve any $N references in URL and body before dispatching (WRITE-03)
             const resolvedPart = this.resolveContentIdReferences(part, contentIdMap)
-            const result = await this.runOperation(resolvedPart, batchRequest, true)
+            const result = await this.runOperation(resolvedPart, batchRequest, manager)
             if (result.statusCode >= 400) {
               failure = result
               throw new ChangesetOperationError()
@@ -323,7 +363,7 @@ export class BatchController {
 
             // Record the created entity's URL for $N references: a 201, or a 204 under
             // Prefer: return=minimal, both carry Location.
-            const location = result.headers['location']
+            const location = headerValue(result.headers['location'])
             const created = result.statusCode === 201 || result.statusCode === 204
             if (created && location && part.contentId !== undefined) {
               contentIdMap.set(part.contentId, location)
@@ -335,7 +375,7 @@ export class BatchController {
       return { kind: 'changeset', parts: results } satisfies BatchChangesetResponse
     } catch (err) {
       if (failure) {
-        const headers: Record<string, string> = {}
+        const headers: Record<string, string | readonly string[]> = {}
         for (const [name, value] of Object.entries(failure.headers)) {
           if (ERROR_HEADERS.has(name)) headers[name] = value
         }
@@ -346,10 +386,13 @@ export class BatchController {
   }
 
   /**
-   * Resolve Content-ID references ($N) in a BatchRequestPart's URL and body.
+   * Resolve Content-ID references (`$N`) in a BatchRequestPart's URL and body.
    *
-   * Per WRITE-03: $N in a URL or body is substituted with the location URL recorded
-   * for content ID N from a prior 201 response in the same changeset.
+   * Per WRITE-03 / OData-Protocol §11.7.7.2: `$N` stands for the URL of the entity created by
+   * the request with Content-ID `N` in the same changeset. Only whole references are replaced,
+   * with exact IDs (`$1` never matches inside `$10`): the URL when it is `$N` or starts with
+   * `$N/`, and JSON string values (e.g. `@odata.bind`) that are `$N` or start with `$N/`.
+   * Text such as `"costs $1"` is left alone.
    *
    * Per immutability rules: never mutates the readonly BatchRequestPart — returns a new object.
    * Per T-10-07: substitution uses only URLs already in contentIdMap (populated by our own
@@ -361,15 +404,15 @@ export class BatchController {
   ): BatchRequestPart {
     if (contentIdMap.size === 0) return part // fast path: nothing to resolve
 
-    let url = part.url
+    const url = resolveReference(part.url, contentIdMap)
     let body = part.body
-
-    for (const [id, resolvedUrl] of contentIdMap) {
-      // Use plain string replacement to avoid RegExp injection via Content-ID values.
-      const token = `$${id}`
-      url = url.replaceAll(token, resolvedUrl)
-      if (body) {
-        body = body.replaceAll(token, resolvedUrl)
+    if (body && body.includes('$')) {
+      try {
+        const parsed: unknown = JSON.parse(body)
+        const resolved = JSON.stringify(resolveJsonReferences(parsed, contentIdMap))
+        if (resolved !== JSON.stringify(parsed)) body = resolved
+      } catch {
+        // Not JSON: no references to resolve.
       }
     }
 
@@ -387,8 +430,9 @@ export class BatchController {
   private async runOperation(
     part: BatchRequestPart,
     batchRequest: BatchRequest,
-    inChangeset: boolean,
+    changesetManager?: EntityManager,
   ): Promise<BatchResponsePart> {
+    const inChangeset = changesetManager !== undefined
     const batchUrl =
       batchRequest.originalUrl ?? batchRequest.url ?? `${this.options.serviceRoot}/$batch`
     let url: string
@@ -410,44 +454,49 @@ export class BatchController {
     ) {
       return this.errorPart(400, `The operation URL is outside the service: ${part.url}`, part)
     }
-    if (segments.at(-1) === '$batch') {
+    // Express routing is case-insensitive: `$BATCH` reaches this controller too.
+    if (segments.at(-1)?.toLowerCase() === '$batch') {
       return this.errorPart(400, 'A $batch request cannot contain a $batch request', part)
     }
-    if (this.batchOptions?.entitySets && !this.isAllowed(segments)) {
+    if (
+      this.batchOptions?.entitySets &&
+      !this.isAllowed(segments.slice(serviceSegments.length), url)
+    ) {
       return this.errorPart(403, `Operation not allowed in $batch: ${part.url}`, part)
     }
 
+    const partContext = {
+      method: part.method,
+      url: part.url,
+      contentId: part.contentId,
+      inChangeset,
+      batchRequest,
+    }
+    const timeoutMs = this.batchOptions?.operationTimeout ?? DEFAULT_BATCH_OPERATION_TIMEOUT
     try {
-      const response = await runWithODataBatchPart(
-        {
+      const response = await runWithODataBatchPart(partContext, () =>
+        dispatchBatchOperation(this.adapterHost.httpAdapter, {
           method: part.method,
-          url: part.url,
-          contentId: part.contentId,
-          inChangeset,
-          batchRequest,
-        },
-        () =>
-          dispatchBatchOperation(this.adapterHost.httpAdapter, {
-            method: part.method,
-            url,
-            headers: batchOperationHeaders(
-              batchRequest.headers,
-              part.headers,
-              part.body !== undefined && part.body !== '',
-            ),
-            body: part.body,
-            remoteAddress: batchRequest.socket?.remoteAddress,
-          }),
+          url,
+          headers: batchOperationHeaders(
+            batchRequest.headers,
+            part.headers,
+            part.body !== undefined && part.body !== '',
+          ),
+          body: part.body,
+          remoteAddress: batchRequest.socket?.remoteAddress,
+          // Carried by the request too: async context can be lost in middleware.
+          attach: {
+            [ODATA_BATCH_PART]: partContext,
+            [ODATA_CHANGESET_MANAGER]: changesetManager ?? null,
+          },
+          timeoutMs,
+        }),
       )
-      if (response.statusCode >= 400 && !isODataErrorBody(response.body)) {
-        // A response that did not come from an OData route (e.g. Nest's 404 for an unknown
-        // route): answer it as an OData error.
-        return this.errorPart(
-          response.statusCode,
-          plainErrorMessage(response.body) ?? `Operation failed: ${part.method} ${part.url}`,
-          part,
-        )
-      }
+      // No route answered (Nest's own 404): answer it as an OData error. Any other response,
+      // errors included, is the route's own and passes through unchanged.
+      const noRoute = noRouteMessage(response.statusCode, response.body)
+      if (noRoute !== undefined) return this.errorPart(404, noRoute, part)
       return {
         contentId: part.contentId,
         statusCode: response.statusCode,
@@ -455,24 +504,70 @@ export class BatchController {
         body: response.body,
       }
     } catch (err) {
+      if (err instanceof BatchOperationTimeoutError) {
+        return this.errorPart(504, err.message, part)
+      }
       return this.buildErrorResponse(err, part)
     }
   }
 
   /**
-   * True when the operation targets an entity set of the `entitySets` allow-list: the path
-   * segment after the service root, without its key (`Products(1)` → `Products`).
+   * True when every entity set the operation reaches is in the `entitySets` allow-list: the
+   * entity set of the resource path (`Products(1)`), the targets of navigation segments
+   * (`Products(1)/Supplier`) and of `$expand` (nested too). `path` is relative to the service
+   * root. Unknown resources (`$metadata`, a navigation the EDM does not know) are refused.
    */
-  private isAllowed(segments: readonly string[]): boolean {
-    const root = pathSegments(this.options.serviceRoot)
-    for (let i = 0; i + root.length < segments.length; i++) {
-      if (root.every((s, j) => segments[i + j] === s)) {
-        const target = segments[i + root.length] ?? ''
-        const entitySet = target.replace(/\(.*$/, '')
-        return this.batchOptions?.entitySets?.includes(entitySet) ?? true
+  private isAllowed(path: readonly string[], url: string): boolean {
+    const allowed = this.batchOptions?.entitySets ?? []
+    const first = path[0]?.replace(/\(.*$/, '')
+    if (!first || !allowed.includes(first)) return false
+    if (!this.edmRegistry) return path.length === 1 && !url.includes('$expand')
+    let typeName = this.edmRegistry.getEntitySet(first)?.entityTypeName
+    for (const raw of path.slice(1)) {
+      const segment = raw.replace(/\(.*$/, '')
+      if (segment.startsWith('$')) continue // $count, $value, $ref
+      const type = typeName ? this.edmRegistry.getEntityType(typeName) : undefined
+      if (!type) return false
+      const nav = type.navigationProperties.find((n) => n.name === segment)
+      if (!nav) {
+        if (type.properties.some((p) => p.name === segment)) continue
+        return false
       }
+      typeName = navigationTargetTypeName(nav.type)
+      const set = this.edmRegistry.getEntitySetByTypeName(typeName)
+      if (!set || !allowed.includes(set.name)) return false
     }
-    return false
+    const query = new URL(url, 'http://batch.invalid').searchParams.get('$expand')
+    if (query === null) return true
+    let expand: ExpandNode | undefined
+    try {
+      expand = parseQuery(`$expand=${encodeURIComponent(query)}`).expand
+    } catch {
+      return true // the route refuses an invalid $expand itself (400)
+    }
+    return typeName === undefined ? false : this.expandAllowed(typeName, expand, allowed)
+  }
+
+  /** True when every `$expand` target (nested ones too) is an allow-listed entity set. */
+  private expandAllowed(
+    typeName: string,
+    expand: ExpandNode | undefined,
+    allowed: readonly string[],
+  ): boolean {
+    for (const item of expand?.items ?? []) {
+      let current = typeName
+      for (const name of item.navigationProperty.split('/')) {
+        const nav = this.edmRegistry
+          ?.getEntityType(current)
+          ?.navigationProperties.find((n) => n.name === name)
+        if (!nav) return false
+        current = navigationTargetTypeName(nav.type)
+        const set = this.edmRegistry?.getEntitySetByTypeName(current)
+        if (!set || !allowed.includes(set.name)) return false
+      }
+      if (!this.expandAllowed(current, item.expand, allowed)) return false
+    }
+    return true
   }
 
   /**
