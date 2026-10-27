@@ -174,7 +174,7 @@ describe('ODataTypeOrmModule', () => {
 
     const mockEdmRegistry = {
       register: vi.fn(),
-      getEntitySets: vi.fn(() => new Map()),
+      getEntitySetByTypeName: vi.fn(() => undefined),
     }
     const mockOptions = { namespace: 'Default', unmappedTypeStrategy: 'skip' }
     // The deriver requires metadata.target === entityClass to match

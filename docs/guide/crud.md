@@ -89,7 +89,7 @@ Location: http://localhost:3000/odata/Products/3
 
 `PATCH /odata/{EntitySet}/{key}`
 
-Updates an entity using merge-patch semantics — only the fields included in the request body are updated. Returns `200 OK` with the updated entity. Returns `404 Not Found` if the key does not exist.
+Updates an entity using merge-patch semantics — only the fields included in the request body are updated. Returns `200 OK` with the updated entity. Returns `404 Not Found` if the key does not exist. A key property in the body must match the URL key, otherwise the request is refused with `400 Bad Request` (the same rule as PUT).
 
 ```bash
 curl -X PATCH http://localhost:3000/odata/Products/3 \

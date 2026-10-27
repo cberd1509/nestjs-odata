@@ -22,25 +22,21 @@ export class TypeOrmSelectVisitor {
    * - Otherwise, build a deduplicated column list and call qb.select().
    */
   apply(select: SelectNode): void {
-    if (select.all || !select.items?.length) {
-      return
-    }
+    const columns = this.columns(select)
+    if (columns.length > 0) this.qb.select(columns)
+  }
 
-    const columns = select.items.map((item) => `${this.alias}.${item.path[0]}`)
-
-    // Always include key properties — ensures entity identity is always available
-    for (const key of this.entityType.keyProperties) {
-      columns.push(`${this.alias}.${key}`)
-    }
-
-    // Deduplicate while preserving order
-    const seen = new Set<string>()
-    const deduplicated = columns.filter((col) => {
-      if (seen.has(col)) return false
-      seen.add(col)
-      return true
-    })
-
-    this.qb.select(deduplicated)
+  /**
+   * The columns a `$select` projects, as `alias.property`: the requested properties plus the
+   * key properties (entity identity is always available), deduplicated in order. Empty when
+   * the selection is `*` or absent (all columns).
+   */
+  columns(select: SelectNode): string[] {
+    if (select.all || !select.items?.length) return []
+    const columns = [
+      ...select.items.map((item) => `${this.alias}.${item.path[0]}`),
+      ...this.entityType.keyProperties.map((key) => `${this.alias}.${key}`),
+    ]
+    return [...new Set(columns)]
   }
 }

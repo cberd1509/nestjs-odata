@@ -51,6 +51,7 @@ import { buildBatchResponse } from './batch-response-builder.js'
 import { TYPEORM_ODATA_ENTITIES } from '../odata-typeorm.module.js'
 import type { EntityClass } from '@nestjs-odata/core'
 import { TypeOrmScopeService, applyScopeToQuery } from '../scope/typeorm-scope.service.js'
+import { bodyKeyMismatch } from '../utils/body-key.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -157,13 +158,11 @@ export class BatchController {
     manager: EntityManager,
     operation: 'entity' | 'write',
   ): Promise<ObjectLiteral | null> {
-    if (this.scopes?.isScoped(entitySetName)) {
-      const found = await this.scopes.findOne(entitySetName, where, operation, manager, {
-        lock: operation === 'write',
-      })
-      return found ?? null
-    }
-    return manager.findOne(entityClass as new () => ObjectLiteral, { where })
+    if (!this.scopes) return manager.findOne(entityClass as new () => ObjectLiteral, { where })
+    const found = await this.scopes.findOne(entitySetName, where, operation, manager, {
+      lock: operation === 'write',
+    })
+    return found ?? null
   }
 
   /**
@@ -277,7 +276,12 @@ export class BatchController {
     try {
       // A write outside a changeset still runs its scope check and the write in one
       // transaction, so the row cannot leave the scope in between.
-      if (this.scopes && part.method.toUpperCase() !== 'GET') {
+      const entitySetName = parseEntityUrl(part.url)?.entitySetName
+      if (
+        part.method.toUpperCase() !== 'GET' &&
+        entitySetName &&
+        this.scopes?.isScoped(entitySetName)
+      ) {
         return await this.dataSource.transaction((manager) =>
           this.dispatchWithManager(part, manager),
         )
@@ -567,14 +571,16 @@ export class BatchController {
   ): Promise<BatchResponsePart> {
     // Apply maxTop limit to prevent unbounded queries (T-05-06 / SEC-01).
     let items: ObjectLiteral[]
-    if (this.scopes?.isScoped(entitySetName)) {
+    if (this.scopes) {
+      // Same result as manager.find() (eager relations, take), restricted to the scope.
       const qb = manager.createQueryBuilder(entityClass as new () => ObjectLiteral, 'entity')
+      qb.setFindOptions({ take: this.options.maxTop, loadEagerRelations: true })
       applyScopeToQuery(
         qb,
         'entity',
         await this.scopes.subqueryFor(entitySetName, 'collection', [], manager),
       )
-      items = await qb.take(this.options.maxTop).getMany()
+      items = await qb.getMany()
     } else {
       items = await manager.find(entityClass as new () => ObjectLiteral, {
         take: this.options.maxTop,
@@ -642,14 +648,12 @@ export class BatchController {
       }
     }
     // The URL key wins: a different key in the body would update another row.
-    for (const kp of keyProperties) {
-      if (body[kp] !== undefined && body[kp] !== where[kp]) {
-        return {
-          contentId: part.contentId,
-          statusCode: 400,
-          headers: {},
-          body: buildODataError('BadRequest', 'Key in body does not match URL key'),
-        }
+    if (bodyKeyMismatch(keyProperties, body, where)) {
+      return {
+        contentId: part.contentId,
+        statusCode: 400,
+        headers: {},
+        body: buildODataError('BadRequest', 'Key in body does not match URL key'),
       }
     }
     // Merge patch fields onto the existing entity, then save
@@ -685,16 +689,12 @@ export class BatchController {
     const EntityCls = entityClass as new () => ObjectLiteral
 
     // Validate key in body matches URL key (T-10-01)
-    for (const kp of entityType.keyProperties) {
-      const bodyKeyValue = body[kp]
-      const urlKeyValue = where[kp]
-      if (bodyKeyValue !== undefined && bodyKeyValue !== urlKeyValue) {
-        return {
-          contentId: part.contentId,
-          statusCode: 400,
-          headers: {},
-          body: buildODataError('BadRequest', 'Key in body does not match URL key'),
-        }
+    if (bodyKeyMismatch(entityType.keyProperties, body, where)) {
+      return {
+        contentId: part.contentId,
+        statusCode: 400,
+        headers: {},
+        body: buildODataError('BadRequest', 'Key in body does not match URL key'),
       }
     }
 
@@ -769,17 +769,7 @@ export class BatchController {
       return notFound()
     }
     const result = await manager.delete(entityClass as new () => ObjectLiteral, where)
-    if (result.affected === 0) {
-      return {
-        contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError(
-          'NotFound',
-          `Entity '${entitySetName}' with key '${keyStr}' not found`,
-        ),
-      }
-    }
+    if (result.affected === 0) return notFound()
     return {
       contentId,
       statusCode: 204,

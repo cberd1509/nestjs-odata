@@ -81,7 +81,6 @@ export type ODataScopeDefinition = ODataScopeFn | (new (...args: any[]) => OData
  * names made unique. Used as `<primary key> IN (<sql>)`.
  */
 export interface ScopedSubquery {
-  readonly entitySetName: string
   readonly sql: string
   readonly params: Readonly<Record<string, unknown>>
   readonly primaryColumns: readonly {
@@ -101,9 +100,6 @@ export interface TypeOrmScopePlan {
   readonly expand: ReadonlyMap<string, ScopedSubquery>
   /** Scopes of lambda (`any`/`all`) targets, keyed by navigation path (`items`). */
   readonly lambda: ReadonlyMap<string, ScopedSubquery>
-  /**
-   * True under `requireScope`: a path without an entry fails instead of running unscoped.
-   * Optional so hand-built plans stay valid; `prepare()` always sets it.
-   */
-  readonly required?: boolean
+  /** True under `requireScope`: a path without an entry fails instead of running unscoped. */
+  readonly required: boolean
 }

@@ -230,6 +230,7 @@ class TypeOrmScopeService {
     where: Record<string, unknown>,
     operation: ODataScopeOperation,
     manager?: EntityManager,
+    options?: { lock?: boolean }, // SELECT ... FOR UPDATE where the driver supports it
   ): Promise<ObjectLiteral | undefined>
   subqueryFor(
     entitySetName: string,
@@ -248,7 +249,8 @@ function applyScopeToQuery(
 
 Related exports: `ODataScopeFn`, `ODataScope`, `ODataScopeDefinition`, `ODataScopeContext`,
 `ODataScopeOperation`, `ScopedSubquery`, `TypeOrmScopePlan`, `ODataScopeRegistry`,
-`scopeInCondition`, `navigationTargetTypeName`.
+`scopeInCondition`, `lookupScope`. `navigationTargetTypeName` (strip `Collection()` and the
+namespace from a navigation type) is exported by `@nestjs-odata/core`.
 
 ## TypeOrmEdmDeriver
 

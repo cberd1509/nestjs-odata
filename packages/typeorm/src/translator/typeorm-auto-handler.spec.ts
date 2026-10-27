@@ -106,12 +106,14 @@ function makeMockRepo(columns: MockColumnMetadata[] = []) {
   const save = vi.fn()
   const preload = vi.fn()
   const deleteMethod = vi.fn()
+  const merge = vi.fn((target: ObjectLiteral, patch: ObjectLiteral) => ({ ...target, ...patch }))
 
   const repo = {
     findOne,
     create,
     save,
     preload,
+    merge,
     delete: deleteMethod,
     metadata: { columns },
   } as unknown as Repository<ObjectLiteral>
@@ -365,10 +367,10 @@ describe('TypeOrmAutoHandler', () => {
   })
 
   describe('handleUpdate()', () => {
-    it('Test 13: calls repo.preload + repo.save and returns merged entity', async () => {
+    it('Test 13: loads the entity, merges the body onto it and saves (one SELECT)', async () => {
       const mergedEntity = { id: 1, name: 'Updated', price: 20.0 }
-      const { repo, preload, save } = makeMockRepo()
-      preload.mockResolvedValue(mergedEntity)
+      const { repo, findOne, preload, save } = makeMockRepo()
+      findOne.mockResolvedValue({ id: 1, name: 'Old', price: 10.0 })
       save.mockResolvedValue(mergedEntity)
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
@@ -378,14 +380,15 @@ describe('TypeOrmAutoHandler', () => {
         'Products',
       )
 
-      expect(preload).toHaveBeenCalledWith({ id: 1, name: 'Updated', price: 20.0 })
+      expect(findOne).toHaveBeenCalledTimes(1)
+      expect(preload).not.toHaveBeenCalled()
       expect(save).toHaveBeenCalledWith(mergedEntity)
       expect(result).toEqual(mergedEntity)
     })
 
-    it('Test 14: throws NotFoundException when repo.preload returns undefined (entity not found)', async () => {
-      const { repo, preload } = makeMockRepo()
-      preload.mockResolvedValue(undefined)
+    it('Test 14: throws NotFoundException when the entity does not exist', async () => {
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(null)
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
       await expect(autoHandler.handleUpdate('999', { name: 'Ghost' }, 'Products')).rejects.toThrow(
@@ -671,8 +674,8 @@ describe('TypeOrmAutoHandler', () => {
 
     it('Test E3: handleUpdate without If-Match header on ETag-enabled entity proceeds (no enforcement)', async () => {
       const entity = { id: 1, name: 'Widget' }
-      const { repo, preload, save } = makeMockRepo()
-      preload.mockResolvedValue(entity)
+      const { repo, findOne, save } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
       save.mockResolvedValue({ ...entity, name: 'Updated' })
 
       const etagProvider = {

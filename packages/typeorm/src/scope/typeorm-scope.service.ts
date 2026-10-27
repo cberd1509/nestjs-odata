@@ -10,13 +10,8 @@ import {
   type ODataModuleResolvedOptions,
   type ODataQuery,
 } from '@nestjs-odata/core'
-import type {
-  DataSource,
-  EntityManager,
-  EntityMetadata,
-  ObjectLiteral,
-  SelectQueryBuilder,
-} from 'typeorm'
+import { DataSource } from 'typeorm'
+import type { EntityManager, EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm'
 import { ODataScopeRegistry } from './scope-registry.js'
 import type {
   ODataScopeContext,
@@ -64,17 +59,51 @@ export function renameParameters(
 ): { sql: string; params: Record<string, unknown> } {
   const prefix = `odata_scope${++paramSequence}_`
   const renamed: Record<string, unknown> = {}
-  let out = sql
-  // Longest names first so `id` never replaces inside `idList`.
-  for (const name of Object.keys(params).sort((a, b) => b.length - a.length)) {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    out = out.replace(
-      new RegExp(`(?<![:\\w]):(\\.\\.\\.)?${escaped}(?![\\w.])`, 'g'),
-      (_m, spread: string | undefined) => `:${spread ?? ''}${prefix}${name}`,
-    )
-    renamed[`${prefix}${name}`] = params[name]
-  }
+  for (const [name, value] of Object.entries(params)) renamed[`${prefix}${name}`] = value
+  // One pass: `:name` / `:...name` placeholders (never `::cast`) whose name is a parameter.
+  const out = sql.replace(PARAMETER_PATTERN, (match, spread: string | undefined, name: string) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? `:${spread ?? ''}${prefix}${name}` : match,
+  )
   return { sql: out, params: renamed }
+}
+
+/** TypeORM's named-parameter syntax, `:name` and `:...name`, not preceded by `:` or a word char. */
+const PARAMETER_PATTERN = /(?<![:\w]):(\.\.\.)?([A-Za-z_][\w.]*)/g
+
+/** The TypeORM metadata of an entity, by EDM entity type name. */
+export function metadataForType(
+  manager: EntityManager,
+  entityTypeName: string,
+): EntityMetadata | undefined {
+  return manager.connection.entityMetadatas.find((m) => m.name === entityTypeName)
+}
+
+/** `SELECT <primary key> FROM <entity> AS alias`: the query a scope or nested filter refines. */
+export function primaryKeyQuery(
+  manager: EntityManager,
+  metadata: EntityMetadata,
+  alias: string,
+): SelectQueryBuilder<ObjectLiteral> {
+  return manager
+    .createQueryBuilder(metadata.target, alias)
+    .select(metadata.primaryColumns.map((c) => `${alias}.${c.propertyPath}`))
+}
+
+/**
+ * Render a {@link primaryKeyQuery} for embedding as `<pk> IN (...)`, with its parameters renamed
+ * so they cannot collide with the outer query's. Shared by scopes and nested `$expand` filters.
+ */
+export function renderPrimaryKeyQuery(
+  qb: SelectQueryBuilder<ObjectLiteral>,
+  metadata: EntityMetadata,
+): ScopedSubquery {
+  return {
+    ...renameParameters(qb.getQuery(), qb.getParameters()),
+    primaryColumns: metadata.primaryColumns.map((c) => ({
+      propertyPath: c.propertyPath,
+      databaseName: c.databaseName,
+    })),
+  }
 }
 
 /**
@@ -87,10 +116,10 @@ export function renameParameters(
 @Injectable()
 export class TypeOrmScopeService {
   constructor(
-    private readonly dataSource: DataSource,
-    private readonly edmRegistry: EdmRegistry,
+    @Inject(DataSource) private readonly dataSource: DataSource,
+    @Inject(EdmRegistry) private readonly edmRegistry: EdmRegistry,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
-    private readonly registry: ODataScopeRegistry,
+    @Inject(ODataScopeRegistry) private readonly registry: ODataScopeRegistry,
   ) {}
 
   /** True when reads and writes of `entitySetName` are scoped (or must be, with `requireScope`). */
@@ -116,9 +145,6 @@ export class TypeOrmScopeService {
     const entityType = this.entityTypeOf(entitySetName)
     const metadata = this.metadataOf(entityType.name)
     const alias = `${entitySetName.replace(/\W/g, '_')}_scope`
-    const qb = (manager ?? this.dataSource.manager)
-      .createQueryBuilder(metadata.target, alias)
-      .select(metadata.primaryColumns.map((c) => `${alias}.${c.propertyPath}`))
     const request = getODataRequestContext()
     const ctx: ODataScopeContext = {
       entitySetName,
@@ -130,17 +156,9 @@ export class TypeOrmScopeService {
       executionContext: request?.executionContext,
       request: request?.request,
     }
+    const qb = primaryKeyQuery(manager ?? this.dataSource.manager, metadata, alias)
     await fn(qb, ctx)
-    const { sql, params } = renameParameters(qb.getQuery(), qb.getParameters())
-    return {
-      entitySetName,
-      sql,
-      params,
-      primaryColumns: metadata.primaryColumns.map((c) => ({
-        propertyPath: c.propertyPath,
-        databaseName: c.databaseName,
-      })),
-    }
+    return renderPrimaryKeyQuery(qb, metadata)
   }
 
   /**
@@ -157,42 +175,34 @@ export class TypeOrmScopeService {
     manager?: EntityManager,
   ): Promise<TypeOrmScopePlan> {
     const entityType = this.entityTypeOf(query.entitySetName)
-    const memo = new Map<string, Promise<ScopedSubquery | undefined>>()
-    const tasks: Promise<void>[] = []
-    const resolve = (
-      entitySetName: string,
-      op: ODataScopeOperation,
-      path: readonly string[],
-      store: (sub: ScopedSubquery | undefined) => void,
-    ): void => {
-      const key = `${entitySetName}\u0000${op}`
-      let pending = memo.get(key)
-      if (!pending) {
-        pending = this.subqueryFor(entitySetName, op, path, manager)
-        memo.set(key, pending)
-      }
-      tasks.push(pending.then(store))
+    // Every entity set the query reaches, found by walking $filter/$apply lambdas and $expand.
+    const targets: ScopeTarget[] = []
+    const visit = (target: ScopeTarget): void => void targets.push(target)
+    if (query.filter) this.collectLambdas(query.filter, entityType, [], visit)
+    for (const step of query.apply?.steps ?? []) {
+      if (step.kind === 'ApplyFilter') this.collectLambdas(step.filter, entityType, [], visit)
     }
+    if (query.expand && !query.apply) this.collectExpand(query.expand, entityType, [], visit)
 
-    let root: ScopedSubquery | undefined
+    // One scope run per entity set and operation, all concurrently.
+    const memo = new Map<string, Promise<ScopedSubquery | undefined>>()
+    const resolve = (set: string, op: ODataScopeOperation, path: readonly string[]) => {
+      const key = `${set}\u0000${op}`
+      if (!memo.has(key)) memo.set(key, this.subqueryFor(set, op, path, manager))
+      return memo.get(key)!
+    }
+    const [root, ...subs] = await Promise.all([
+      resolve(query.entitySetName, operation, []),
+      ...targets.map((t) =>
+        resolve(t.entitySetName, t.kind === 'expand' ? 'expand' : 'filter', t.path),
+      ),
+    ])
     const expand = new Map<string, ScopedSubquery>()
     const lambda = new Map<string, ScopedSubquery>()
-    const walker: ScopeWalker = {
-      expand: (set, path) =>
-        resolve(set, 'expand', path, (sub) => sub && expand.set(path.join('/'), sub)),
-      lambda: (set, path) =>
-        resolve(set, 'filter', path, (sub) => sub && lambda.set(path.join('/'), sub)),
-    }
-
-    resolve(query.entitySetName, operation, [], (sub) => (root = sub))
-    if (query.filter) this.collectLambdas(query.filter, entityType, [], walker)
-    for (const step of query.apply?.steps ?? []) {
-      if (step.kind === 'ApplyFilter') this.collectLambdas(step.filter, entityType, [], walker)
-    }
-    if (query.expand && !query.apply) {
-      this.collectExpand(query.expand, entityType, [], walker)
-    }
-    await Promise.all(tasks)
+    targets.forEach((t, i) => {
+      const sub = subs[i]
+      if (sub) (t.kind === 'expand' ? expand : lambda).set(t.path.join('/'), sub)
+    })
     return { root, expand, lambda, required: this.options.requireScope === true }
   }
 
@@ -226,7 +236,7 @@ export class TypeOrmScopeService {
     node: ExpandNode,
     entityType: EdmEntityType,
     path: readonly string[],
-    walker: ScopeWalker,
+    visit: (target: ScopeTarget) => void,
   ): void {
     for (const item of node.items) {
       const navProp = entityType.navigationProperties.find(
@@ -237,9 +247,9 @@ export class TypeOrmScopeService {
       const itemPath = [...path, navProp.name]
       const target = this.targetOf(navProp.type, itemPath)
       if (!target) continue
-      walker.expand(target.entitySetName, itemPath)
-      if (item.filter) this.collectLambdas(item.filter, target.entityType, itemPath, walker)
-      if (item.expand) this.collectExpand(item.expand, target.entityType, itemPath, walker)
+      visit({ kind: 'expand', entitySetName: target.entitySetName, path: itemPath })
+      if (item.filter) this.collectLambdas(item.filter, target.entityType, itemPath, visit)
+      if (item.expand) this.collectExpand(item.expand, target.entityType, itemPath, visit)
     }
   }
 
@@ -247,18 +257,18 @@ export class TypeOrmScopeService {
     node: FilterNode,
     entityType: EdmEntityType,
     path: readonly string[],
-    walker: ScopeWalker,
+    visit: (target: ScopeTarget) => void,
   ): void {
     switch (node.kind) {
       case 'BinaryExpr':
-        this.collectLambdas(node.left, entityType, path, walker)
-        this.collectLambdas(node.right, entityType, path, walker)
+        this.collectLambdas(node.left, entityType, path, visit)
+        this.collectLambdas(node.right, entityType, path, visit)
         return
       case 'UnaryExpr':
-        this.collectLambdas(node.operand, entityType, path, walker)
+        this.collectLambdas(node.operand, entityType, path, visit)
         return
       case 'FunctionCall':
-        for (const arg of node.args) this.collectLambdas(arg, entityType, path, walker)
+        for (const arg of node.args) this.collectLambdas(arg, entityType, path, visit)
         return
       case 'LambdaExpr': {
         const navProp = entityType.navigationProperties.find(
@@ -267,7 +277,7 @@ export class TypeOrmScopeService {
         if (!navProp) return
         const lambdaPath = [...path, navProp.name]
         const target = this.targetOf(navProp.type, lambdaPath)
-        if (target) walker.lambda(target.entitySetName, lambdaPath)
+        if (target) visit({ kind: 'lambda', entitySetName: target.entitySetName, path: lambdaPath })
         return
       }
       default:
@@ -282,9 +292,7 @@ export class TypeOrmScopeService {
   ): { entitySetName: string; entityType: EdmEntityType } | undefined {
     const typeName = navigationTargetTypeName(navType)
     const entityType = this.edmRegistry.getEntityType(typeName)
-    const entitySet = [...this.edmRegistry.getEntitySets().values()].find(
-      (es) => es.entityTypeName === typeName,
-    )
+    const entitySet = this.edmRegistry.getEntitySetByTypeName(typeName)
     if (!entityType || !entitySet) {
       if (this.options.requireScope) {
         throw new InternalServerErrorException(
@@ -307,7 +315,7 @@ export class TypeOrmScopeService {
   }
 
   private metadataOf(entityTypeName: string): EntityMetadata {
-    const metadata = this.dataSource.entityMetadatas.find((m) => m.name === entityTypeName)
+    const metadata = metadataForType(this.dataSource.manager, entityTypeName)
     if (!metadata) {
       throw new Error(`TypeOrmScopeService: no TypeORM entity named '${entityTypeName}'`)
     }
@@ -315,10 +323,11 @@ export class TypeOrmScopeService {
   }
 }
 
-/** Callbacks `prepare()` uses while walking `$expand` and lambdas. */
-interface ScopeWalker {
-  expand(entitySetName: string, path: readonly string[]): void
-  lambda(entitySetName: string, path: readonly string[]): void
+/** An entity set `prepare()` found while walking `$expand` and lambdas. */
+interface ScopeTarget {
+  readonly kind: 'expand' | 'lambda'
+  readonly entitySetName: string
+  readonly path: readonly string[]
 }
 
 /** Drivers that implement `SELECT ... FOR UPDATE` (TypeORM's `pessimistic_write`). */

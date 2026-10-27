@@ -4,8 +4,15 @@ import { navigationTargetTypeName, ODataValidationError } from '@nestjs-odata/co
 import type { EdmRegistry } from '@nestjs-odata/core'
 import { TypeOrmFilterVisitor } from './filter-visitor.js'
 import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
+import { TypeOrmSelectVisitor } from './select-visitor.js'
 import type { TypeOrmScopePlan } from '../scope/scope.types.js'
-import { lookupScope, renameParameters, scopeInCondition } from '../scope/typeorm-scope.service.js'
+import {
+  lookupScope,
+  metadataForType,
+  primaryKeyQuery,
+  renderPrimaryKeyQuery,
+  scopeInCondition,
+} from '../scope/typeorm-scope.service.js'
 
 /** Options for {@link TypeOrmExpandVisitor} beyond the query builder and the registry. */
 export interface TypeOrmExpandVisitorOptions {
@@ -123,21 +130,18 @@ export class TypeOrmExpandVisitor {
     const condition = conditions.length > 0 ? conditions.join(' AND ') : undefined
 
     // Nested $select: join without selecting, then add only the requested columns and the key.
-    const selectItems =
-      item.select && !item.select.all && item.select.items?.length && targetEntityType
-        ? item.select.items
-        : undefined
-    if (selectItems && targetEntityType) {
-      this.qb.leftJoin(`${parentAlias}.${item.navigationProperty}`, joinAlias, condition, params)
-      const columns = new Set([
-        ...targetEntityType.keyProperties.map((k) => `${joinAlias}.${k}`),
-        ...selectItems.map((si) => `${joinAlias}.${si.path[0]}`),
-      ])
-      this.qb.addSelect([...columns])
+    const relation = `${parentAlias}.${item.navigationProperty}`
+    const columns =
+      item.select && targetEntityType
+        ? new TypeOrmSelectVisitor(this.qb, joinAlias, targetEntityType).columns(item.select)
+        : []
+    if (columns.length > 0) {
+      this.qb.leftJoin(relation, joinAlias, condition, params)
+      this.qb.addSelect(columns)
+    } else if (condition) {
+      this.qb.leftJoinAndSelect(relation, joinAlias, condition, params)
     } else {
-      const relation = `${parentAlias}.${item.navigationProperty}`
-      if (condition) this.qb.leftJoinAndSelect(relation, joinAlias, condition, params)
-      else this.qb.leftJoinAndSelect(relation, joinAlias)
+      this.qb.leftJoinAndSelect(relation, joinAlias)
     }
 
     if (item.orderBy?.length) {
@@ -168,11 +172,9 @@ export class TypeOrmExpandVisitor {
     targetEntityType: EdmEntityType,
     joinAlias: string,
     path: readonly string[],
-  ): { sql: string; params: Record<string, unknown> } {
+  ): { sql: string; params: Readonly<Record<string, unknown>> } {
     const manager = this.options.manager
-    const metadata = manager?.connection.entityMetadatas.find(
-      (m) => m.name === targetEntityType.name,
-    )
+    const metadata = manager && metadataForType(manager, targetEntityType.name)
     if (!manager || !metadata) {
       throw new ODataValidationError(
         `$filter inside $expand is not supported for '${item.navigationProperty}'`,
@@ -181,9 +183,7 @@ export class TypeOrmExpandVisitor {
       )
     }
     const subAlias = `${joinAlias}_filter`
-    const sub = manager
-      .createQueryBuilder(metadata.target, subAlias)
-      .select(metadata.primaryColumns.map((c) => `${subAlias}.${c.propertyPath}`))
+    const sub = primaryKeyQuery(manager, metadata, subAlias)
     const scopes = this.options.scopes
     new TypeOrmFilterVisitor(
       sub,
@@ -194,15 +194,10 @@ export class TypeOrmExpandVisitor {
       manager.getRepository(metadata.target),
       scopes ? (nav) => lookupScope(scopes, 'lambda', [...path, nav]) : undefined,
     ).visit(item.filter!)
-    const rendered = renameParameters(sub.getQuery(), sub.getParameters())
-    const sql = scopeInCondition(
-      {
-        entitySetName: targetEntityType.name,
-        ...rendered,
-        primaryColumns: metadata.primaryColumns,
-      },
-      (c) => `${joinAlias}.${c.propertyPath}`,
-    )
-    return { sql, params: rendered.params }
+    const rendered = renderPrimaryKeyQuery(sub, metadata)
+    return {
+      sql: scopeInCondition(rendered, (c) => `${joinAlias}.${c.propertyPath}`),
+      params: rendered.params,
+    }
   }
 }

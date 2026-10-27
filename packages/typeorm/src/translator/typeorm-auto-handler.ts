@@ -3,14 +3,15 @@ import type { ODataQuery, ODataQueryResult, EdmEntityType, IETagProvider } from 
 import {
   EdmRegistry,
   ETAG_PROVIDER,
+  navigationTargetTypeName,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
   type ODataModuleResolvedOptions,
 } from '@nestjs-odata/core'
 import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
+import { bodyKeyMismatch } from '../utils/body-key.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
-import type { ODataScopeOperation, TypeOrmScopePlan } from '../scope/scope.types.js'
 
 /**
  * TypeOrmAutoHandler — handles OData GET and $count requests automatically
@@ -39,27 +40,21 @@ export class TypeOrmAutoHandler {
     private readonly scopes?: TypeOrmScopeService,
   ) {}
 
-  /** Resolve the row-level scopes of a query (none when no scope service is wired). */
-  private async scopePlan(
-    query: ODataQuery,
-    operation: ODataScopeOperation,
-  ): Promise<TypeOrmScopePlan | undefined> {
-    return this.scopes ? this.scopes.prepare(query, operation) : undefined
-  }
-
   /**
-   * Load the entity an update, replace or delete targets through its row-level scope.
-   * Returns `null` when the entity set is unscoped (the caller keeps its own lookup) and
-   * throws 404 when the entity does not exist or is outside the scope.
+   * Load the entity an update, replace or delete targets, through its row-level scope (rows
+   * outside it look absent). Inside a write transaction (`manager`), the row is locked on
+   * drivers that support it. Throws 404 when there is no such entity.
    */
-  private async findInScopeForWrite(
+  private async findForWrite(
     entitySetName: string,
     keyStr: string,
     where: Record<string, unknown>,
+    repo: Repository<ObjectLiteral>,
     manager?: EntityManager,
-  ): Promise<ObjectLiteral | null> {
-    if (!this.scopes?.isScoped(entitySetName)) return null
-    const entity = await this.scopes.findOne(entitySetName, where, 'write', manager, { lock: true })
+  ): Promise<ObjectLiteral> {
+    const entity = this.scopes
+      ? await this.scopes.findOne(entitySetName, where, 'write', manager, { lock: !!manager })
+      : await repo.findOne({ where })
     if (!entity) {
       throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
     }
@@ -86,13 +81,11 @@ export class TypeOrmAutoHandler {
     body: Record<string, unknown>,
     where: Record<string, unknown>,
   ): void {
-    for (const kp of entityType.keyProperties) {
-      if (body[kp] !== undefined && body[kp] !== where[kp]) {
-        throw new HttpException(
-          { error: { code: '400', message: 'Key in body does not match URL key' } },
-          400,
-        )
-      }
+    if (bodyKeyMismatch(entityType.keyProperties, body, where)) {
+      throw new HttpException(
+        { error: { code: '400', message: 'Key in body does not match URL key' } },
+        400,
+      )
     }
   }
 
@@ -162,7 +155,7 @@ export class TypeOrmAutoHandler {
       top: effectiveTop + 1,
     }
 
-    const scopes = await this.scopePlan(query, 'collection')
+    const scopes = await this.scopes?.prepare(query, 'collection')
     const translateResult = this.translator.translate(fetchQuery, entityType, repo, scopes)
 
     const includeCount = query.count === true
@@ -212,7 +205,7 @@ export class TypeOrmAutoHandler {
       filter: query.filter,
     }
 
-    const scopes = await this.scopePlan(countQuery, 'count')
+    const scopes = await this.scopes?.prepare(countQuery, 'count')
     const { qb } = this.translator.translate(countQuery, entityType, repo, scopes)
     return qb.getCount()
   }
@@ -302,7 +295,7 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const repo = this.resolveRepo(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const entity = this.scopes?.isScoped(entitySetName)
+    const entity = this.scopes
       ? await this.scopes.findOne(entitySetName, where, 'entity')
       : await repo.findOne({ where })
     if (!entity) {
@@ -430,19 +423,9 @@ export class TypeOrmAutoHandler {
       const navProp = entityType.navigationProperties.find((p) => p.name === navPropName)
       if (!navProp) continue
 
-      // Resolve child entity type name.
-      // Collection nav props use format: "Collection(Default.OrderItem)" -> "OrderItem"
-      // Singular nav props use format: "Default.OrderItem" -> "OrderItem"
-      let rawType = navProp.type
-      if (rawType.startsWith('Collection(') && rawType.endsWith(')')) {
-        rawType = rawType.slice('Collection('.length, -1)
-      }
-      const childTypeName = rawType.split('.').pop() ?? rawType
-
-      // Find child entity set by entity type name
-      const childEntitySet = [...this.edmRegistry.getEntitySets().values()].find(
-        (es) => es.entityTypeName === childTypeName,
-      )
+      // "Collection(Default.OrderItem)" / "Default.OrderItem" -> "OrderItem"
+      const childTypeName = navigationTargetTypeName(navProp.type)
+      const childEntitySet = this.edmRegistry.getEntitySetByTypeName(childTypeName)
       if (!childEntitySet) {
         throw new HttpException(
           {
@@ -559,16 +542,14 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where, manager)
+    // The URL key wins: a different key in the body would update another row.
+    this.assertBodyKeyMatches(entityType, body, where)
+    const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
     // ETag If-Match validation before update
     if (this.etagProvider && ifMatchHeader) {
       const etagColumn = this.etagProvider.getETagColumn(entitySetName)
       if (etagColumn) {
-        const current = scoped ?? (await repo.findOne({ where }))
-        if (!current) {
-          throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
-        }
         if (
           !this.etagProvider.validateIfMatch(
             ifMatchHeader,
@@ -589,14 +570,8 @@ export class TypeOrmAutoHandler {
       }
     }
 
-    // The URL key wins: a different key in the body would update another row.
-    this.assertBodyKeyMatches(entityType, body, where)
-    const merged = { ...body, ...where }
-    const preloaded = await repo.preload(merged as ObjectLiteral)
-    if (!preloaded) {
-      throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
-    }
-    return repo.save(preloaded)
+    // Merge-patch onto the entity just loaded (no second SELECT, unlike preload()).
+    return repo.save(repo.merge(current, body as ObjectLiteral))
   }
 
   /**
@@ -635,13 +610,8 @@ export class TypeOrmAutoHandler {
     // Validate key in body matches URL key (D-01 spec compliance — T-10-01)
     this.assertBodyKeyMatches(entityType, body, where)
 
-    // Find existing entity to confirm it exists (through its row-level scope, if any)
-    const existing =
-      (await this.findInScopeForWrite(entitySetName, keyStr, where, manager)) ??
-      (await repo.findOne({ where }))
-    if (!existing) {
-      throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
-    }
+    // Find existing entity to confirm it exists (rows outside the scope look absent: 404)
+    const existing = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
     // ETag If-Match validation (identical block to handleUpdate — T-10-04)
     if (this.etagProvider && ifMatchHeader) {
@@ -711,16 +681,11 @@ export class TypeOrmAutoHandler {
   ): Promise<void> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    const scoped = await this.findInScopeForWrite(entitySetName, keyStr, where, manager)
-
-    // ETag If-Match validation before delete
-    if (this.etagProvider && ifMatchHeader) {
-      const etagColumn = this.etagProvider.getETagColumn(entitySetName)
-      if (etagColumn) {
-        const current = scoped ?? (await repo.findOne({ where }))
-        if (!current) {
-          throw new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`)
-        }
+    // Only load the row when the scope or an If-Match needs it; otherwise delete directly.
+    const etagColumn = ifMatchHeader ? this.etagProvider?.getETagColumn(entitySetName) : undefined
+    if (this.scopes?.isScoped(entitySetName) || etagColumn) {
+      const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
+      if (etagColumn && this.etagProvider && ifMatchHeader) {
         if (
           !this.etagProvider.validateIfMatch(
             ifMatchHeader,

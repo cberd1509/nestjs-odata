@@ -12,3 +12,15 @@ Row-level scopes.
   - A nested `$filter` now restricts the expanded rows (in the JOIN), not the parent rows.
   - A nested `$select` no longer replaces the root selection.
   - Lambda predicates such as `items/any(i: i/quantity gt 1)` work: the pipe validates `i/quantity` against the collection's entity type, and the translator maps it to the lambda alias.
+- **Hardening:**
+  - Options inside `$expand(...)` are validated against the related type; unknown or excluded properties give 400 instead of 500.
+  - TypeORM `select: false` columns are excluded from the EDM, like `@ODataExclude`.
+  - A `PATCH` body whose key differs from the URL key is refused with 400, over HTTP and in `$batch`, as `PUT` already was.
+  - Scoped writes run the scope check and the write in one transaction, with a row lock where the driver supports it.
+  - Scoped by-key reads load eager relations.
+  - Each scope runs once per entity set and operation for a request.
+  - Under `requireScope`, a missing `$expand` or lambda lookup fails.
+  - Inside a lambda, properties without the range variable refer to the outer entity, and predicates can use `and`, `or` and `not`.
+- **`@nestjs-odata/typeorm` peers:** `@nestjs-odata/core >=2.2.0` (the core release with request context and `requireScope`) and `@nestjs/core`.
+- **`navigationTargetTypeName`:** now exported from `@nestjs-odata/core`.
+- **`@nestjs-odata/core`:** new `EdmRegistry.getEntitySetByTypeName()`.

@@ -129,7 +129,17 @@ Some consequences:
 - **Parameter names don't collide.** Each scope's parameters are renamed with a unique prefix, so
   every scope can use `:userId`.
 - **Scopes can be async**, for example to load what the caller can access. They run before the
-  OData query is built, once per entity set and navigation path.
+  OData query is built, concurrently, and **once per entity set and operation** for a request:
+  an entity set reached through several `$expand` paths reuses one result. `ctx.navigationPath`
+  is the first path the entity set was reached through, so treat it as informational and don't
+  make the scope's result depend on it.
+- **Writes are checked and done in one transaction.** For a scoped entity set, `PATCH`, `PUT`
+  and `DELETE` look the row up through the scope and write it in the same transaction. On
+  drivers with row locks (PostgreSQL, MySQL/MariaDB, SQL Server, Oracle and others) the row is
+  locked (`SELECT ... FOR UPDATE`), so it can't leave the scope between the check and the write.
+  `$batch` writes outside a changeset get their own transaction. Inside a changeset, the
+  changeset's transaction is used.
+- **Scoped by-key reads load eager relations,** like `Repository.findOne()`.
 - **Rows outside the scope look absent.** By-key reads and writes return 404, not 403, so their
   existence doesn't leak.
 
@@ -141,6 +151,8 @@ ODataModule.forRoot({ serviceRoot: '/odata', requireScope: true })
 
 With `requireScope: true`:
 
+- **any path without a prepared scope fails** instead of running unscoped (for example a plan
+  built by hand that misses an `$expand` or lambda path);
 - the application **refuses to start** when an entity set registered with
   `ODataTypeOrmModule.forFeature()` has neither a `scope` nor a `defaultScope`;
 - at request time, reading or writing an entity set without a scope, or following `$expand` or a
@@ -165,6 +177,8 @@ builders.
 
 ## Limits
 
+- A `PATCH` body may not carry a key different from the URL key (400), so it can't redirect the
+  write to another row. `PUT` already refused that.
 - Scopes restrict reads and the existence check before writes. They do **not** check the data of
   a write: a `POST`, or a `PATCH` that changes the scoped column, can still create or move a row
   outside the caller's scope. Validate writes in your controller, or route them through your own

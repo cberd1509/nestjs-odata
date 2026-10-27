@@ -239,9 +239,7 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
 
       // The registry keeps the first registration of a type, so look the set name up again.
       const registeredSet =
-        [...this.edmRegistry.getEntitySets().values()].find(
-          (es) => es.entityTypeName === config.entityTypeName,
-        )?.name ?? entitySetName
+        this.edmRegistry.getEntitySetByTypeName(config.entityTypeName)?.name ?? entitySetName
       this.entitySetNames.push(registeredSet)
 
       const entityClass =
@@ -339,16 +337,7 @@ export class ODataTypeOrmModule {
           useFactory: (edmRegistry: EdmRegistry) => ODataScopeRegistry.for(edmRegistry),
           inject: [EdmRegistry],
         },
-        {
-          provide: TypeOrmScopeService,
-          useFactory: (
-            dataSource: DataSource,
-            edmRegistry: EdmRegistry,
-            resolved: ODataModuleResolvedOptions,
-            registry: ODataScopeRegistry,
-          ) => new TypeOrmScopeService(dataSource, edmRegistry, resolved, registry),
-          inject: [DataSource, EdmRegistry, ODATA_MODULE_OPTIONS, ODataScopeRegistry],
-        },
+        TypeOrmScopeService,
         TypeOrmEdmInitializer,
         {
           provide: TypeOrmSearchProvider,
