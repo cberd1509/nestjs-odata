@@ -27,6 +27,8 @@ class ProductNoSearchable {
 
 function makeDataSource(entityClass: new (...args: unknown[]) => unknown): DataSource {
   return {
+    // PostgreSQL: backslash is the default LIKE escape, so no ESCAPE clause is rendered.
+    options: { type: 'postgres' },
     entityMetadatas: [{ name: entityClass.name, target: entityClass } as EntityMetadata],
   } as unknown as DataSource
 }

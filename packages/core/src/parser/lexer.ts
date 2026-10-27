@@ -177,9 +177,11 @@ export function tokenize(input: string): Token[] {
       continue
     }
 
-    // Numeric literal: digit or negative number
-    if (isDigit(ch)) {
+    // Numeric literal: digits, optionally signed (`-5`, `-1.5`; ABNF `[ SIGN ] 1*DIGIT`)
+    const signed = ch === '-' && pos + 1 < input.length && isDigit(input[pos + 1])
+    if (isDigit(ch) || signed) {
       let numStr = ''
+      if (signed) numStr += input[pos++]
       while (pos < input.length && isDigit(input[pos])) {
         numStr += input[pos++]
       }
@@ -199,15 +201,12 @@ export function tokenize(input: string): Token[] {
       } else {
         // Could be start of GUID — check if followed by hex chars and dashes
         // e.g., 12345678-1234-...
-        const remaining = input.slice(start)
-        const guidMatch = GUID_RE.exec(remaining)
-        if (guidMatch && remaining.length >= 36) {
-          const guidStr = remaining.slice(0, 36)
-          if (GUID_RE.test(guidStr)) {
-            tokens.push({ kind: TokenKind.GUID_LITERAL, value: guidStr, position: start })
-            pos = start + 36
-            continue
-          }
+        // (GUID_RE is anchored: test the 36 characters a GUID spans, not the rest of the input.)
+        const guidStr = input.slice(start, start + 36)
+        if (!signed && GUID_RE.test(guidStr)) {
+          tokens.push({ kind: TokenKind.GUID_LITERAL, value: guidStr, position: start })
+          pos = start + 36
+          continue
         }
         tokens.push({ kind: TokenKind.INT_LITERAL, value: parseInt(numStr, 10), position: start })
       }

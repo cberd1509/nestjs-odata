@@ -97,6 +97,7 @@ None yet.
 | 261027-oqc | OData 4.01 query conformance: nav paths, lambdas, nested $expand options (#66 #68 #69 #72 #74) | 2026-10-27 | f262090  | [261027-oqc](./quick/261027-oqc-odata-query-conformance/)                  |
 | 261027-pc1 | OData 4.01 protocol conformance: writes, ETags, routing, errors (#63 #70 #71 #75–#81)          | 2026-10-27 | (branch) | [261027-pc1](./quick/261027-pc1-odata-protocol-conformance/)               |
 | 261027-bc1 | OData 4.01 $batch conformance: route dispatch, changesets, one endpoint (#64 #65 #67 #73)      | 2026-10-27 | (branch) | [261027-bc1](./quick/261027-bc1-odata-batch-conformance/)                  |
+| 261027-cv9 | Coverage thresholds to 90% (core + typeorm), real tests; lexer and SQLite LIKE fixes           | 2026-10-27 | (branch) | [261027-cv9](./quick/261027-cv9-coverage-90/)                              |
 
 ## Session Continuity
 

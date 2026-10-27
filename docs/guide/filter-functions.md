@@ -256,7 +256,7 @@ These functions have been available since the initial release:
 | `length(field)`              | Character count  | `LENGTH(field)`        |
 
 ::: tip LIKE injection prevention
-`%` and `_` characters in the search value are automatically escaped before SQL translation. The pattern `contains(name, '100%')` translates to `LIKE '%100\%%'`, not `LIKE '%100%%'`.
+`%`, `_` and `\` characters in the search value are automatically escaped before SQL translation, so they match literally. The pattern `contains(name, '100%')` translates to `LIKE '%100\%%'`, not `LIKE '%100%%'`. On SQLite, which has no default `LIKE` escape character, the condition also carries `ESCAPE '\'`.
 :::
 
 ### Additional string functions

@@ -44,9 +44,11 @@ pnpm --filter @nestjs-odata/test-app test:watch
 pnpm test -- --coverage
 ```
 
-Coverage thresholds are 80% for statements, functions and lines in both packages. Branch coverage
-is 80% for `@nestjs-odata/core` and 70% for `@nestjs-odata/typeorm`: Vitest 4's V8 provider counts
-branches more strictly than Vitest 3 did, so the adapter's existing suite measures lower.
+Coverage thresholds are 90% for statements, branches, functions and lines in both
+`@nestjs-odata/core` and `@nestjs-odata/typeorm`. Vitest 4's V8 provider counts branches strictly
+(every `??`, `?.` and implicit `else`), so cover new code paths with tests as you add them rather
+than relying on the margin. Spec files and `index.ts` barrels are the only exclusions; don't add
+`v8 ignore` comments.
 
 Tests run on Vitest 4 with `unplugin-swc`, which compiles test files with SWC so that
 `emitDecoratorMetadata` works (esbuild, Vitest's default transformer, does not emit decorator
