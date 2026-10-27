@@ -64,17 +64,17 @@
     "@nestjs/core": "^12.3.2",
     "@nestjs/testing": "^12.3.2",
     "@nestjs/typeorm": "^12.0.2",
-    "@swc/core": "^1.15.33",
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "24",
-    "@vitest/coverage-v8": "^3.2.4",
-    "better-sqlite3": "^12.9.0",
+    "@swc/core": "^1.16.20",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.19.2",
+    "@vitest/coverage-v8": "^4.1.12",
+    "better-sqlite3": "^12.11.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.0.0",
-    "tsdown": "^0.22.0",
+    "rxjs": "^7.8.2",
+    "tsdown": "^0.22.14",
     "typeorm": "^1.1.2",
     "typescript": "^5.9.3",
-    "unplugin-swc": "^1.5.9",
-    "vitest": "^3.2.4"
+    "unplugin-swc": "^1.6.0",
+    "vitest": "^4.1.12"
   }
 }

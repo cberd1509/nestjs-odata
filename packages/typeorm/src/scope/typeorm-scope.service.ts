@@ -226,7 +226,7 @@ export class TypeOrmScopeService {
     const alias = 'entity'
     const qb = em.createQueryBuilder(metadata.target, alias)
     // Find options make getOne() join `eager: true` relations like Repository.findOne().
-    qb.setFindOptions({ where: where as never, loadEagerRelations: true })
+    qb.setFindOptions({ where: where, loadEagerRelations: true })
     applyScopeToQuery(qb, alias, await this.subqueryFor(entitySetName, operation, [], em))
     // A row lock only means something inside a transaction (and PostgreSQL refuses one outside).
     if (options.lock && supportsRowLocks(em) && em.queryRunner?.isTransactionActive) {

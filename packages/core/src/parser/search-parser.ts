@@ -29,9 +29,7 @@ const MAX_SEARCH_DEPTH = 20
 // ---------------------------------------------------------------------------
 
 type SearchToken =
-  | { type: 'TERM'; value: string; negated: boolean }
-  | { type: 'AND' }
-  | { type: 'OR' }
+  { type: 'TERM'; value: string; negated: boolean } | { type: 'AND' } | { type: 'OR' }
 
 /**
  * Tokenizes a $search query string into a flat list of tokens.
@@ -143,11 +141,9 @@ function buildSearchNode(tokens: SearchToken[], depth: number): SearchNode {
   const termTokens = tokens.filter((t) => t.type === 'TERM')
   if (termTokens.length > 1) {
     // Build left-associative tree: ((a AND b) AND c)
-    let left: SearchNode = termToNode(
-      termTokens[0] as { type: 'TERM'; value: string; negated: boolean },
-    )
+    let left: SearchNode = termToNode(termTokens[0])
     for (let i = 1; i < termTokens.length; i++) {
-      const right = termToNode(termTokens[i] as { type: 'TERM'; value: string; negated: boolean })
+      const right = termToNode(termTokens[i])
       if (depth + i > MAX_SEARCH_DEPTH) {
         throw new ODataParseError(
           `$search expression exceeds maximum depth of ${MAX_SEARCH_DEPTH}`,
@@ -162,7 +158,7 @@ function buildSearchNode(tokens: SearchToken[], depth: number): SearchNode {
 
   // Single TERM
   if (tokens.length === 1 && tokens[0].type === 'TERM') {
-    return termToNode(tokens[0] as { type: 'TERM'; value: string; negated: boolean })
+    return termToNode(tokens[0])
   }
 
   throw new ODataParseError(`Unexpected token sequence in $search expression`, 0)

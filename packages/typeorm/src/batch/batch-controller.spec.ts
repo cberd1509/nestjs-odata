@@ -654,7 +654,7 @@ describe('BatchController dispatch', () => {
       headers: {},
       body: undefined,
     }
-    const result = resolveRef(controller)(part as Record<string, unknown>, new Map())
+    const result = resolveRef(controller)(part, new Map())
     expect(result).toBe(part) // reference equality — no new object
   })
 
@@ -666,7 +666,7 @@ describe('BatchController dispatch', () => {
       headers: {},
     }
     const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    const result = resolveRef(controller)(part, contentIdMap)
     expect(result['url']).toBe('/odata/Orders(42)')
   })
 
@@ -678,7 +678,7 @@ describe('BatchController dispatch', () => {
       headers: {},
     }
     const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    const result = resolveRef(controller)(part, contentIdMap)
     expect(result['url']).toBe('/odata/Orders(42)/Items')
   })
 
@@ -691,7 +691,7 @@ describe('BatchController dispatch', () => {
       body: '{"ref":"$1","status":"confirmed"}',
     }
     const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    const result = resolveRef(controller)(part, contentIdMap)
     expect(result['body']).toContain('/odata/Orders(42)')
   })
 
@@ -703,7 +703,7 @@ describe('BatchController dispatch', () => {
       headers: {},
     }
     const contentIdMap = new Map([['1', '/odata/Orders(42)']])
-    const result = resolveRef(controller)(part as Record<string, unknown>, contentIdMap)
+    const result = resolveRef(controller)(part, contentIdMap)
     expect(result).toBe(part) // no substitution — same reference
   })
 

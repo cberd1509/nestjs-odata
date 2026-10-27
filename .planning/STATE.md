@@ -93,6 +93,7 @@ None yet.
 | #          | Description                                                                              | Date       | Commit  | Directory                                                                  |
 | ---------- | ---------------------------------------------------------------------------------------- | ---------- | ------- | -------------------------------------------------------------------------- |
 | 260408-ox4 | Fix npm publish metadata: version 1.0.0, repository, keywords, READMEs, changeset config | 2026-04-08 | 3848e04 | [260408-ox4](./quick/260408-ox4-fix-npm-publish-metadata-for-both-packag/) |
+| 261027-dsr | Dependency security refresh: clear Dependabot alerts, Vitest 4, Actions v7               | 2026-10-27 | facb1c7 | [261027-dsr](./quick/261027-dsr-deps-security-refresh/)                    |
 
 ## Session Continuity
 

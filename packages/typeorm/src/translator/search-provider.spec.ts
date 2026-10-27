@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { DataSource, EntityMetadata } from 'typeorm'
-import type { EdmRegistry, EdmEntitySet } from '@nestjs-odata/core'
+import type { EdmRegistry } from '@nestjs-odata/core'
 import { ODataValidationError } from '@nestjs-odata/core'
 import { ODataSearchable } from '@nestjs-odata/core'
 import type { SearchNode, SearchTermNode, SearchBinaryNode } from '@nestjs-odata/core'
@@ -33,7 +33,7 @@ function makeDataSource(entityClass: new (...args: unknown[]) => unknown): DataS
 
 function makeEdmRegistry(entitySetName: string, entityTypeName: string): EdmRegistry {
   return {
-    getEntitySet: vi.fn().mockReturnValue({ entityTypeName } as EdmEntitySet),
+    getEntitySet: vi.fn().mockReturnValue({ entityTypeName }),
   } as unknown as EdmRegistry
 }
 

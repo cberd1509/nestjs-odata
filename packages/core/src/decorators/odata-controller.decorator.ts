@@ -37,5 +37,5 @@ export function ODataController(
   return applyDecorators(
     Controller(options?.path ?? entitySetName),
     SetMetadata(ODATA_CONTROLLER_KEY, entitySetName),
-  ) as ClassDecorator
+  )
 }
