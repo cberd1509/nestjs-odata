@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/"
+    "test": "node --test dist/smoke.test.js"
   },
   "dependencies": {
     "@nestjs/common": "12.3.2",
