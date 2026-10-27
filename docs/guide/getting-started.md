@@ -23,6 +23,29 @@ Required peer dependencies (if not already installed):
 pnpm add @nestjs/common @nestjs/core typeorm @nestjs/typeorm
 ```
 
+### Supported versions
+
+| Peer               | Supported ranges                    |
+| ------------------ | ----------------------------------- |
+| `@nestjs/common`   | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `@nestjs/core`     | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `@nestjs/typeorm`  | `^10.0.0 \|\| ^11.0.0 \|\| ^12.0.0` |
+| `typeorm`          | `^0.3.0 \|\| ^1.0.0`                |
+| `reflect-metadata` | `^0.1.13 \|\| ^0.2.0`               |
+
+`@nestjs-odata/typeorm` needs `@nestjs-odata/core` 2.2.0 or later (the first core release with
+NestJS 12 peers).
+
+The repository's own test suites run on NestJS 12 and TypeORM 1 (the workspace's development
+versions), through the packages' ESM builds. Older majors stay in the peer ranges but are not
+run in CI.
+
+Both packages ship ESM (`import`) and CommonJS (`require`) builds. NestJS 12 is ESM-only, so an
+ESM application (`"type": "module"` with `"module": "NodeNext"`) imports the ESM build directly.
+A CommonJS application on NestJS 12 depends on Node.js loading NestJS's ESM through
+`require(esm)` (Node.js 20.19+, 22.12+ or 24+); that combination is not covered by the
+repository's tests.
+
 ## TypeScript configuration
 
 Enable decorator metadata in your `tsconfig.json`:

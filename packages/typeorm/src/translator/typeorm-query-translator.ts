@@ -10,6 +10,7 @@ import type {
 } from '@nestjs-odata/core'
 import { EdmRegistry, ODATA_MODULE_OPTIONS, SEARCH_PROVIDER } from '@nestjs-odata/core'
 import { TypeOrmFilterVisitor } from './filter-visitor.js'
+import { sqlDialectOf } from './sql-dialect.js'
 import { TypeOrmSelectVisitor } from './select-visitor.js'
 import { TypeOrmOrderByVisitor } from './orderby-visitor.js'
 import { TypeOrmPaginationVisitor } from './pagination-visitor.js'
@@ -90,9 +91,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
     // 0. Row-level scope of the requested entity set
     applyScopeToQuery(qb, alias, scopes?.root)
 
-    const dbType = repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
-    const dialect: 'sqlite' | 'postgres' | 'ansi' =
-      dbType === 'sqlite' || dbType === 'postgres' ? dbType : 'ansi'
+    const dialect = sqlDialectOf(repo.manager.dataSource.options.type)
 
     // 1. Filter
     if (query.filter) {

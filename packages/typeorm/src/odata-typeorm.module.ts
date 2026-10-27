@@ -12,7 +12,6 @@ import { ModuleRef } from '@nestjs/core'
 import { PATH_METADATA } from '@nestjs/common/constants.js'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { DataSource, type ObjectLiteral } from 'typeorm'
-import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type.js'
 import type {
   EdmEntityConfig,
   EdmEntitySet,
@@ -47,6 +46,17 @@ import type {
   ODataWriteHandlers,
   ODataWriteHandlersDefinition,
 } from './write/write.types.js'
+
+/**
+ * An entity class or an `EntitySchema`: exactly what `TypeOrmModule.forFeature()` accepts.
+ *
+ * Derived from `forFeature`'s parameter instead of deep-importing `@nestjs/typeorm/dist/...`:
+ * `@nestjs/typeorm` 12 ships an `exports` map that only exposes its root entry, so a deep import
+ * in the published declarations would not resolve for consumers.
+ */
+export type EntityClassOrSchema = NonNullable<
+  Parameters<typeof TypeOrmModule.forFeature>[0]
+>[number]
 
 /**
  * DI injection token for the array of TypeORM entity classes

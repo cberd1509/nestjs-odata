@@ -75,7 +75,7 @@ export function metadataForType(
   manager: EntityManager,
   entityTypeName: string,
 ): EntityMetadata | undefined {
-  return manager.connection.entityMetadatas.find((m) => m.name === entityTypeName)
+  return manager.dataSource.entityMetadatas.find((m) => m.name === entityTypeName)
 }
 
 /** `SELECT <primary key> FROM <entity> AS alias`: the query a scope or nested filter refines. */
@@ -348,7 +348,7 @@ const ROW_LOCK_DRIVERS = new Set([
 ])
 
 function supportsRowLocks(manager: EntityManager): boolean {
-  return ROW_LOCK_DRIVERS.has(String(manager.connection.options.type))
+  return ROW_LOCK_DRIVERS.has(String(manager.dataSource.options.type))
 }
 
 /**

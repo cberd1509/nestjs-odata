@@ -45,7 +45,8 @@ function makeRepo(qb: MockQb): MockRepo {
   return {
     createQueryBuilder: vi.fn().mockReturnValue(qb),
     manager: {
-      connection: {
+      // Only `dataSource` (TypeORM 0.3+): the deprecated `connection` alias must not be needed.
+      dataSource: {
         options: { type: 'sqlite' },
       },
     },
@@ -406,5 +407,16 @@ describe('TypeOrmQueryTranslator', () => {
       expect(qb.getMany).toHaveBeenCalled()
       expect(result.items).toEqual([{ id: 1 }, { id: 2 }])
     })
+  })
+})
+
+describe('sqlDialectOf', () => {
+  it('treats every SQLite-based driver as sqlite', async () => {
+    const { sqlDialectOf } = await import('./sql-dialect.js')
+    for (const type of ['sqlite', 'better-sqlite3', 'sqljs', 'capacitor', 'expo']) {
+      expect(sqlDialectOf(type)).toBe('sqlite')
+    }
+    expect(sqlDialectOf('postgres')).toBe('postgres')
+    expect(sqlDialectOf('mysql')).toBe('ansi')
   })
 })

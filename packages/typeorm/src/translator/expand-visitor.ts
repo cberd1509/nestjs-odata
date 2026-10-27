@@ -1,4 +1,5 @@
 import type { SelectQueryBuilder, ObjectLiteral, EntityManager } from 'typeorm'
+import type { SqlDialect } from './sql-dialect.js'
 import type { ExpandNode, ExpandItem, EdmEntityType } from '@nestjs-odata/core'
 import { navigationTargetTypeName, ODataValidationError } from '@nestjs-odata/core'
 import type { EdmRegistry } from '@nestjs-odata/core'
@@ -24,7 +25,7 @@ export interface TypeOrmExpandVisitorOptions {
    */
   readonly manager?: EntityManager
   readonly maxFilterDepth?: number
-  readonly dialect?: 'sqlite' | 'postgres' | 'ansi'
+  readonly dialect?: SqlDialect
 }
 
 /**

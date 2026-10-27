@@ -18,6 +18,7 @@ OData v4 for NestJS with zero double-declaration. Define your entities once in T
 - **$batch support** — Multi-operation batch requests with atomic changesets.
 - **Row-level scopes** — Per-entity-set `scope` hooks restrict every read, `$count`, `$expand`, lambda, `$apply`, `$batch` and write check; `requireScope` fails closed.
 - **Custom write handlers** — Route POST/PATCH/PUT/DELETE and deep insert (also in `$batch`) through your own services, with configurable ETags and a changeset transaction hook.
+- **NestJS 10, 11 and 12** — Peer ranges cover NestJS 10–12 and TypeORM 0.3 or 1.x; developed and tested on NestJS 12 and TypeORM 1, including ESM (`"type": "module"`, NodeNext) apps.
 - **Security built-in** — `maxTop`, `maxExpandDepth`, `maxFilterDepth` limits enforced server-side. Parameterized queries prevent SQL injection.
 
 ## Quick start
@@ -25,6 +26,8 @@ OData v4 for NestJS with zero double-declaration. Define your entities once in T
 ```bash
 pnpm add @nestjs-odata/core @nestjs-odata/typeorm reflect-metadata
 ```
+
+Works with NestJS 10, 11 and 12 and TypeORM 0.3 or 1.x (tested on NestJS 12 and TypeORM 1).
 
 ```typescript
 // product.entity.ts

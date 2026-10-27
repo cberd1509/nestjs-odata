@@ -1,4 +1,5 @@
 import type { SelectQueryBuilder, ObjectLiteral, Repository } from 'typeorm'
+import type { SqlDialect } from './sql-dialect.js'
 import type {
   EdmEntityType,
   ApplyNode,
@@ -30,7 +31,7 @@ export class TypeOrmApplyVisitor {
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
     private readonly maxFilterDepth: number = 10,
-    private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
+    private readonly dialect: SqlDialect = 'ansi',
     private readonly repo: Repository<ObjectLiteral>,
     private readonly lambdaScope?: LambdaScopeLookup,
   ) {}
