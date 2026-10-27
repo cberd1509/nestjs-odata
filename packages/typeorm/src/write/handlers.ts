@@ -16,20 +16,57 @@ export function isDeepInsertBody(
   })
 }
 
-/** 405 for an operation an entity set with write handlers does not implement. */
+/**
+ * 405 for an operation an entity set with write handlers does not implement. Carries the
+ * methods the addressed resource does allow, for the `Allow` header that OData-Protocol 4.01
+ * §9.2.2 requires on a 405.
+ */
+export class WriteNotAllowedException extends HttpException {
+  constructor(
+    entitySetName: string,
+    operation: ODataWriteOperation,
+    /** Value of the `Allow` response header, e.g. `GET, PATCH`. */
+    readonly allow: string,
+  ) {
+    super(
+      {
+        error: {
+          code: 'MethodNotAllowed',
+          message: `Entity set '${entitySetName}' does not support ${operation}`,
+        },
+      },
+      HttpStatus.METHOD_NOT_ALLOWED,
+    )
+  }
+}
+
+/**
+ * The methods the write handlers allow on a resource: on the collection (`GET`, and `POST` with
+ * `create` or `deepInsert`), or on one entity (`GET`, `PATCH`, `PUT`, `DELETE` as implemented).
+ */
+export function allowedMethods(
+  handlers: ODataWriteHandlers<any>,
+  resource: 'collection' | 'entity',
+): string {
+  const methods = ['GET']
+  if (resource === 'collection') {
+    if (handlers.create || handlers.deepInsert) methods.push('POST')
+  } else {
+    if (handlers.update) methods.push('PATCH')
+    if (handlers.replace) methods.push('PUT')
+    if (handlers.delete) methods.push('DELETE')
+  }
+  return methods.join(', ')
+}
+
+/** 405 for `operation` on an entity set with write handlers, with its `Allow` value. */
 export function writeNotAllowed(
   entitySetName: string,
   operation: ODataWriteOperation,
-): HttpException {
-  return new HttpException(
-    {
-      error: {
-        code: 'MethodNotAllowed',
-        message: `Entity set '${entitySetName}' does not support ${operation}`,
-      },
-    },
-    HttpStatus.METHOD_NOT_ALLOWED,
-  )
+  handlers: ODataWriteHandlers<any>,
+): WriteNotAllowedException {
+  const resource = operation === 'create' || operation === 'deepInsert' ? 'collection' : 'entity'
+  return new WriteNotAllowedException(entitySetName, operation, allowedMethods(handlers, resource))
 }
 
 /**
@@ -66,7 +103,7 @@ export function createHandlerFor(
   const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
   const operation = deep ? 'deepInsert' : 'create'
   const handler = deep ? handlers.deepInsert : handlers.create
-  if (!handler) throw writeNotAllowed(entitySetName, operation)
+  if (!handler) throw writeNotAllowed(entitySetName, operation, handlers)
   return { operation, handler }
 }
 

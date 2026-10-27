@@ -50,7 +50,11 @@ const STATUS_TEXTS: Record<number, string> = {
  * @returns Object with `contentType` (for Content-Type header) and `body` (response body string)
  */
 /** Canonical casing for the response headers batch parts carry (`location`, `etag`). */
-const HEADER_NAMES: Record<string, string> = { location: 'Location', etag: 'ETag' }
+const HEADER_NAMES: Record<string, string> = {
+  location: 'Location',
+  etag: 'ETag',
+  allow: 'Allow',
+}
 
 export function buildBatchResponse(parts: BatchResponsePart[]): {
   contentType: string

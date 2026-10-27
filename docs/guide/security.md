@@ -142,7 +142,7 @@ export class AppModule {}
 
 Entities decorated with `@ODataETag()` get automatic optimistic concurrency control:
 
-- **Write protection**: `PATCH`, `PUT`, and `DELETE` require an `If-Match` header containing the current ETag value. If the ETag does not match (another client modified the entity), the server returns `412 Precondition Failed`.
+- **Write protection**: when a `PATCH`, `PUT` or `DELETE` (also inside `$batch`) carries an `If-Match` header that does not match the current ETag (another client modified the entity), the server returns `412 Precondition Failed` and changes nothing. A request **without** `If-Match` is not refused: the library does not require optimistic concurrency (no `428 Precondition Required`), so clients that want the protection must send the header.
 - **Read optimization**: `GET` single entity supports `If-None-Match`. If the ETag matches (entity unchanged), the server returns `304 Not Modified` with no body.
 
 This prevents lost-update scenarios in concurrent environments without pessimistic locking.

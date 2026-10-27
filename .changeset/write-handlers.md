@@ -17,3 +17,4 @@ Custom write handlers.
   - Scoped writes only take a row lock inside a transaction (PostgreSQL refuses `FOR UPDATE` outside one).
 - **`@nestjs-odata/core`:** POST responses whose entity carries an adapter-provided ETag get the `ETag` header and `@odata.etag`.
   - `TypeOrmETagProvider.validateIfMatch()` now uses the same comparison as the write paths (`*`, lists), and `computeETag()` the same format as `formatWeakETag()`. New `hasEntityETag()` helper.
+  - OData conformance: a 405 from write handlers carries an `Allow` header (Part 1 §9.2.2); repository creates send the entity's ETag and `@odata.etag` (instead of none); `$batch` repository writes check `If-Match` like the HTTP routes (412).

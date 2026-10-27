@@ -86,6 +86,10 @@ class Ledger {
 
   @OneToMany(() => Account, (account) => account.ledger, { cascade: true })
   accounts: Account[]
+
+  // Repository-path ETag (from the ETag provider).
+  @UpdateDateColumn()
+  updatedAt: Date
 }
 
 @Entity({ name: 'wh_invoices' })
@@ -464,8 +468,45 @@ describe('Custom write handlers (e2e)', () => {
     expect(calls).toEqual([])
   })
 
-  it('answers 405 for an operation the handlers do not implement', async () => {
-    await http.delete('/odata/Invoices/1').expect(405)
+  it('answers 405 with an Allow header for an operation the handlers do not implement', async () => {
+    // OData-Protocol 4.01 §9.2.2: a 405 MUST list the allowed methods.
+    const res = await http.delete('/odata/Invoices/1').expect(405)
+    expect(res.headers.allow).toBe('GET')
+    const text = await postBatch(batchBody([batchRequest('DELETE', '/odata/Invoices(1)')]))
+    expect(text).toContain('HTTP/1.1 405')
+    expect(text).toContain('Allow: GET')
+  })
+
+  it('sends the entity ETag on repository creates (header and @odata.etag agree)', async () => {
+    const res = await http.post('/odata/Ledgers').send({ name: 'With ETag' }).expect(201)
+    expect(res.headers.etag).toMatch(/^W\/"/)
+    expect(res.body['@odata.etag']).toBe(res.headers.etag)
+  })
+
+  it('checks If-Match on repository writes inside $batch (same rules as HTTP)', async () => {
+    const ledger = await dataSource.getRepository(Ledger).save({ name: 'Batch ETag' })
+    const stale = 'W/"stale"'
+    const withIfMatch = (method: string, body?: string) =>
+      batchRequest(method, `/odata/Ledgers(${ledger.id})`, body).replace(
+        `${method} /odata/Ledgers(${ledger.id}) HTTP/1.1`,
+        `${method} /odata/Ledgers(${ledger.id}) HTTP/1.1\r\nIf-Match: ${stale}`,
+      )
+    const text = await postBatch(
+      batchBody([withIfMatch('PATCH', '{"name":"stale write"}'), withIfMatch('DELETE')]),
+    )
+    expect([...text.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])).toEqual(['412', '412'])
+    expect(await dataSource.getRepository(Ledger).findOneByOrFail({ id: ledger.id })).toMatchObject(
+      { name: 'Batch ETag' },
+    )
+    const ok = await postBatch(
+      batchBody([
+        batchRequest('PATCH', `/odata/Ledgers(${ledger.id})`, '{"name":"fresh"}').replace(
+          'HTTP/1.1',
+          'HTTP/1.1\r\nIf-Match: *',
+        ),
+      ]),
+    )
+    expect(ok).toContain('HTTP/1.1 200')
   })
 
   it('routes a POST with navigation properties to the deepInsert handler', async () => {

@@ -68,12 +68,13 @@ import { entityLocation } from '../utils/entity-key.js'
 import { ODataWriteRegistry } from '../write/write-registry.js'
 import { ODATA_CHANGESET_RUNNER } from '../write/changeset-runner.js'
 import type { ODataChangesetRunner, ODataWriteHandlers } from '../write/write.types.js'
-import { resolveEntityETag } from '../write/etag.js'
+import { etagMatches, hasEntityETag, resolveEntityETag } from '../write/etag.js'
 import {
   assertHandlerEntity,
   buildWriteContext,
   createHandlerFor,
   writeNotAllowed,
+  WriteNotAllowedException,
 } from '../write/handlers.js'
 
 /**
@@ -254,6 +255,31 @@ export class BatchController {
   }
 
   /**
+   * 412 when the part's `If-Match` does not match the entity's current ETag. Batch parts follow
+   * the same rules as standalone requests (OData-Protocol 4.01 §11.7, §8.2.4).
+   */
+  private preconditionFailed(
+    contentId: string | undefined,
+    entitySetName: string,
+    entity: ObjectLiteral,
+    part: BatchRequestPart,
+  ): BatchResponsePart | undefined {
+    const ifMatch = part.headers['if-match']
+    if (!ifMatch) return undefined
+    const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
+    if (etag === undefined || etagMatches(ifMatch, etag)) return undefined
+    return {
+      contentId,
+      statusCode: 412,
+      headers: {},
+      body: buildODataError(
+        'PreconditionFailed',
+        'The ETag value does not match the current version of the entity',
+      ),
+    }
+  }
+
+  /**
    * Dispatch a POST/PATCH/PUT/DELETE batch part to the entity set's write handlers.
    * Rows outside the entity set's row-level scope answer 404 before the handler runs (without
    * a row lock outside a changeset, like the HTTP routes).
@@ -316,13 +342,13 @@ export class BatchController {
     if (method === 'PATCH' || method === 'PUT') {
       const operation = method === 'PATCH' ? 'update' : 'replace'
       const handler = handlers[operation]
-      if (!handler) throw writeNotAllowed(entitySetName, operation)
+      if (!handler) throw writeNotAllowed(entitySetName, operation, handlers)
       const result = await handler.call(handlers, where, body, ctxFor(operation))
       const entity = assertHandlerEntity(result, entitySetName, operation)
       return this.entityPart(part.contentId, 200, entitySetName, entity)
     }
 
-    if (!handlers.delete) throw writeNotAllowed(entitySetName, 'delete')
+    if (!handlers.delete) throw writeNotAllowed(entitySetName, 'delete', handlers)
     await handlers.delete(where, ctxFor('delete'))
     return { contentId: part.contentId, statusCode: 204, headers: {}, body: undefined }
   }
@@ -702,6 +728,7 @@ export class BatchController {
         }
         return await this.dispatchDelete(
           key,
+          part,
           entitySetName,
           entityType.keyProperties,
           entityClass,
@@ -799,6 +826,8 @@ export class BatchController {
     const EntityCls = entityClass as new () => ObjectLiteral
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
+    const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
+    if (stale) return stale
     // Merge patch fields onto the existing entity, then save. Key properties in the body are
     // ignored (OData §11.4.3): the URL key identifies the row.
     const patch = withoutKeyProperties(keyProperties, body)
@@ -840,6 +869,8 @@ export class BatchController {
 
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
     if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
+    const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
+    if (stale) return stale
 
     // Build full replacement using column metadata — same logic as handleReplace()
     const meta = this.dataSource.getMetadata(entityClass)
@@ -873,6 +904,7 @@ export class BatchController {
   /** DELETE /EntitySet(key) */
   private async dispatchDelete(
     keyStr: string,
+    part: BatchRequestPart,
     entitySetName: string,
     keyProperties: readonly string[],
     entityClass: EntityClass,
@@ -881,11 +913,16 @@ export class BatchController {
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
     const notFound = () => notFoundPart(contentId, entitySetName, keyStr)
+    const ifMatch = part.headers['if-match']
+    // Load the row only when the scope or an If-Match needs it.
     if (
-      this.scopes?.isScoped(entitySetName) &&
-      !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
+      this.scopes?.isScoped(entitySetName) ||
+      (ifMatch && hasEntityETag(entitySetName, this.writes, this.etagProvider))
     ) {
-      return notFound()
+      const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
+      if (!existing) return notFound()
+      const stale = this.preconditionFailed(contentId, entitySetName, existing, part)
+      if (stale) return stale
     }
     const result = await manager.delete(entityClass as new () => ObjectLiteral, where)
     if (result.affected === 0) return notFound()
@@ -911,7 +948,8 @@ export class BatchController {
         return {
           contentId,
           statusCode: http.getStatus(),
-          headers: {},
+          // OData §9.2.2: a 405 lists the allowed methods.
+          headers: http instanceof WriteNotAllowedException ? { allow: http.allow } : {},
           body: JSON.stringify({ error: response.error }),
         }
       }

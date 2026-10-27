@@ -3,6 +3,7 @@ import type { ODataQuery, ODataQueryResult, EdmEntityType, IETagProvider } from 
 import {
   EdmRegistry,
   ETAG_PROVIDER,
+  getODataRequestContext,
   navigationTargetTypeName,
   ODATA_MODULE_OPTIONS,
   parseODataKey,
@@ -20,6 +21,7 @@ import {
   buildWriteContext,
   createHandlerFor,
   writeNotAllowed,
+  WriteNotAllowedException,
 } from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
 
@@ -403,7 +405,11 @@ export class TypeOrmAutoHandler {
   ): Promise<{ entity: unknown; locationUrl: string }> {
     const entityType = this.resolveEntityType(entitySetName)
     const handlers = this.handlersFor(entitySetName)
-    if (handlers) return this.createWithHandlers(handlers, body, entitySetName, entityType)
+    if (handlers) {
+      return withAllowHeader(() =>
+        this.createWithHandlers(handlers, body, entitySetName, entityType),
+      )
+    }
     const repo = this.resolveRepo(entitySetName)
     const saved = await repo.save(repo.create(body as ObjectLiteral))
     const locationUrl = entityLocation(
@@ -412,7 +418,7 @@ export class TypeOrmAutoHandler {
       entityType.keyProperties,
       saved,
     )
-    return { entity: saved, locationUrl }
+    return { entity: this.withETag(entitySetName, saved), locationUrl }
   }
 
   /**
@@ -451,7 +457,9 @@ export class TypeOrmAutoHandler {
     const entityType = this.resolveEntityType(entitySetName)
     const handlers = depth === 0 ? this.handlersFor(entitySetName) : undefined
     if (handlers) {
-      return this.createWithHandlers(handlers, body, entitySetName, entityType, manager)
+      return withAllowHeader(() =>
+        this.createWithHandlers(handlers, body, entitySetName, entityType, manager),
+      )
     }
     const handlerRepo = this.resolveRepo(entitySetName)
 
@@ -578,7 +586,11 @@ export class TypeOrmAutoHandler {
       entityType.keyProperties,
       savedParent,
     )
-    return { entity: savedParent, locationUrl }
+    // Only the top-level entity's ETag is sent (nested entities have their own).
+    return {
+      entity: depth === 0 ? this.withETag(entitySetName, savedParent) : savedParent,
+      locationUrl,
+    }
   }
 
   /**
@@ -621,7 +633,10 @@ export class TypeOrmAutoHandler {
     // Merge-patch onto the entity just loaded (no second SELECT, unlike preload()).
     // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
     const patch = withoutKeyProperties(entityType.keyProperties, body)
-    return this.withETag(entitySetName, await repo.save(repo.merge(current, patch as ObjectLiteral)))
+    return this.withETag(
+      entitySetName,
+      await repo.save(repo.merge(current, patch as ObjectLiteral)),
+    )
   }
 
   /**
@@ -748,12 +763,12 @@ export class TypeOrmAutoHandler {
       ifMatch: ifMatchHeader,
     })
     if (operation === 'delete') {
-      if (!handlers.delete) throw writeNotAllowed(entitySetName, operation)
+      if (!handlers.delete) throw writeNotAllowed(entitySetName, operation, handlers)
       await handlers.delete(where, ctx)
       return undefined
     }
     const handler = handlers[operation]
-    if (!handler) throw writeNotAllowed(entitySetName, operation)
+    if (!handler) throw writeNotAllowed(entitySetName, operation, handlers)
     const result = await handler.call(handlers, where, body, ctx)
     return this.withETag(entitySetName, assertHandlerEntity(result, entitySetName, operation))
   }
@@ -770,7 +785,9 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const handlers = this.handlersFor(entitySetName)
     if (handlers) {
-      return this.writeWithHandlers(handlers, 'update', keyStr, body, entitySetName, ifMatchHeader)
+      return withAllowHeader(() =>
+        this.writeWithHandlers(handlers, 'update', keyStr, body, entitySetName, ifMatchHeader),
+      )
     }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.update(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
@@ -786,7 +803,9 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const handlers = this.handlersFor(entitySetName)
     if (handlers) {
-      return this.writeWithHandlers(handlers, 'replace', keyStr, body, entitySetName, ifMatchHeader)
+      return withAllowHeader(() =>
+        this.writeWithHandlers(handlers, 'replace', keyStr, body, entitySetName, ifMatchHeader),
+      )
     }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.replace(keyStr, body, entitySetName, ifMatchHeader, repo, manager),
@@ -797,11 +816,34 @@ export class TypeOrmAutoHandler {
   async handleDelete(keyStr: string, entitySetName: string, ifMatchHeader?: string): Promise<void> {
     const handlers = this.handlersFor(entitySetName)
     if (handlers) {
-      await this.writeWithHandlers(handlers, 'delete', keyStr, {}, entitySetName, ifMatchHeader)
+      await withAllowHeader(() =>
+        this.writeWithHandlers(handlers, 'delete', keyStr, {}, entitySetName, ifMatchHeader),
+      )
       return
     }
     return this.inScopedWrite(entitySetName, (repo, manager) =>
       this.delete(keyStr, entitySetName, ifMatchHeader, repo, manager),
     )
+  }
+}
+
+/**
+ * Run a write and, when it fails with a 405, set the `Allow` header on the current HTTP
+ * response (OData-Protocol 4.01 §9.2.2) before the exception reaches the exception filter.
+ */
+async function withAllowHeader<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work()
+  } catch (err) {
+    if (err instanceof WriteNotAllowedException) {
+      const ctx = getODataRequestContext()?.executionContext
+      if (ctx?.getType() === 'http') {
+        ctx
+          .switchToHttp()
+          .getResponse<{ setHeader?: (name: string, value: string) => void }>()
+          .setHeader?.('Allow', err.allow)
+      }
+    }
+    throw err
   }
 }

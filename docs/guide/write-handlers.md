@@ -15,7 +15,8 @@ OData query pipeline.
 | the same operations inside `$batch` | the same handlers                       |
 
 An entity set with write handlers **never falls back to the repository**. An operation without a
-handler answers `405 Method Not Allowed`.
+handler answers `405 Method Not Allowed` with an `Allow` header listing the methods the handlers
+do implement (OData 4.01 Part 1 §9.2.2), over HTTP and in `$batch`.
 
 A POST counts as a deep insert when a collection navigation property holds an array or a
 single-valued one holds an object; `null` and scalar values do not. A deep insert into an entity
@@ -104,6 +105,10 @@ interface ODataWriteContext {
 - `body` is the parsed JSON body. Validate it: the library does not, and with handlers there is
   no repository whitelist of columns.
 - Return the entity to serialize. For `create`, its key properties build the `Location` header.
+  A `deepInsert` handler should return the entity with the nested entities it created: OData
+  4.01 Part 1 §11.4.2.2 expects a 201 response expanded to at least the depth of the request.
+- Responses always carry the representation (201 / 200). `Prefer: return=minimal` is not
+  applied, which the protocol allows (§8.2.8.7), and no `Preference-Applied` is sent.
   `create`, `deepInsert`, `update` and `replace` must return an object: a handler that returns
   nothing fails with 500 (and rolls back its `$batch` changeset), over HTTP and in `$batch`.
 - Throw to fail the write. An `HttpException` keeps its status, and other errors become 500.
@@ -146,7 +151,7 @@ async rename(id: number, body: Record<string, unknown>, ifMatch?: string) {
 ```
 
 Without write handlers, the repository path checks `If-Match` against the ETag itself and
-answers 412 (the HTTP routes; `$batch` parts are not checked).
+answers 412, over HTTP and in `$batch` parts.
 
 ## Row-level scopes
 
