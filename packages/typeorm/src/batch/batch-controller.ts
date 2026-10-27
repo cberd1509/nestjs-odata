@@ -73,7 +73,7 @@ import type {
   ODataWriteHandlers,
 } from '../write/write.types.js'
 import { resolveEntityETag } from '../write/etag.js'
-import { assertHandlerEntity, isDeepInsertBody, writeNotAllowed } from '../write/handlers.js'
+import { assertHandlerEntity, createHandlerFor, writeNotAllowed } from '../write/handlers.js'
 
 /**
  * Internal error used to signal a failed changeset operation so the
@@ -279,10 +279,7 @@ export class BatchController {
     }
 
     if (method === 'POST') {
-      const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
-      const operation = deep ? 'deepInsert' : 'create'
-      const handler = deep ? handlers.deepInsert : handlers.create
-      if (!handler) throw writeNotAllowed(entitySetName, operation)
+      const { operation, handler } = createHandlerFor(handlers, entitySetName, entityType, body)
       const ctx: ODataWriteContext = { ...base, operation }
       const entity = assertHandlerEntity(
         await handler.call(handlers, body, ctx),

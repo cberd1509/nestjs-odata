@@ -20,7 +20,7 @@ import type {
   ODataWriteOperation,
 } from '../write/write.types.js'
 import { etagMatches, resolveEntityETag } from '../write/etag.js'
-import { assertHandlerEntity, isDeepInsertBody, writeNotAllowed } from '../write/handlers.js'
+import { assertHandlerEntity, createHandlerFor, writeNotAllowed } from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
 
 /**
@@ -124,10 +124,7 @@ export class TypeOrmAutoHandler {
     entityType: EdmEntityType,
     manager?: EntityManager,
   ): Promise<{ entity: unknown; locationUrl: string }> {
-    const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
-    const operation: ODataWriteOperation = deep ? 'deepInsert' : 'create'
-    const handler = deep ? handlers.deepInsert : handlers.create
-    if (!handler) throw writeNotAllowed(entitySetName, operation)
+    const { operation, handler } = createHandlerFor(handlers, entitySetName, entityType, body)
     const result = await handler.call(
       handlers,
       body,

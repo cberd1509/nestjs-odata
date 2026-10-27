@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, InternalServerErrorException } from '@nestjs/common'
 import type { EdmEntityType } from '@nestjs-odata/core'
-import type { ODataWriteOperation } from './write.types.js'
+import type { ODataWriteHandlers, ODataWriteOperation } from './write.types.js'
 
 /**
  * True when a POST body is a deep insert: it carries a collection navigation property as an
@@ -48,4 +48,24 @@ export function assertHandlerEntity(
     )
   }
   return result as Record<string, unknown>
+}
+
+/**
+ * The handler a POST goes to: `deepInsert` for a deep-insert body when the entity set has one,
+ * else `create`. Throws 405 when that handler is missing.
+ */
+export function createHandlerFor(
+  handlers: ODataWriteHandlers<any>,
+  entitySetName: string,
+  entityType: EdmEntityType,
+  body: Record<string, unknown>,
+): {
+  readonly operation: 'create' | 'deepInsert'
+  readonly handler: NonNullable<ODataWriteHandlers<any>['create']>
+} {
+  const deep = handlers.deepInsert !== undefined && isDeepInsertBody(entityType, body)
+  const operation = deep ? 'deepInsert' : 'create'
+  const handler = deep ? handlers.deepInsert : handlers.create
+  if (!handler) throw writeNotAllowed(entitySetName, operation)
+  return { operation, handler }
 }
