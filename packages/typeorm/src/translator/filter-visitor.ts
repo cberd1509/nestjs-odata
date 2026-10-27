@@ -1,4 +1,10 @@
-import { Brackets, type SelectQueryBuilder, type ObjectLiteral, type Repository } from 'typeorm'
+import {
+  Brackets,
+  type EntityManager,
+  type SelectQueryBuilder,
+  type ObjectLiteral,
+  type Repository,
+} from 'typeorm'
 import type { SqlDialect } from './sql-dialect.js'
 import type {
   BinaryExprNode,
@@ -12,14 +18,23 @@ import type {
   EdmEntityType,
 } from '@nestjs-odata/core'
 import { acceptVisitor, ODataValidationError } from '@nestjs-odata/core'
-import type { ScopedSubquery } from '../scope/scope.types.js'
+import type { RelationMetadata } from 'typeorm'
+import { ODataNotImplementedError } from '@nestjs-odata/core'
 import { scopeInCondition } from '../scope/typeorm-scope.service.js'
+import {
+  escapeTablePath,
+  renderNavigationPath,
+  type FilterScopeLookup,
+  type PathBinding,
+} from './navigation-path.js'
 
 /**
- * Looks up the row-level scope of the entity set a lambda (`any`/`all`) ranges over, by the
- * navigation property name of the collection. See `TypeOrmScopeService.prepare()`.
+ * Looks up the row-level scope of an entity set reached from `$filter` (the collection a lambda
+ * `any`/`all` ranges over, or a single-valued navigation in a property path), by its
+ * navigation path from the filtered entity with segments joined by `/` (`items`,
+ * `category/group`). See `TypeOrmScopeService.prepare()`.
  */
-export type LambdaScopeLookup = (navigationProperty: string) => ScopedSubquery | undefined
+export type LambdaScopeLookup = FilterScopeLookup
 
 /** Map of OData comparison operators to SQL operators */
 const COMPARISON_OPS: Record<string, string> = {
@@ -125,35 +140,28 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
     if (operator === 'or') {
       const depthAtEntry = this.currentDepth
+      // `(left) OR (right)`: each side is visited into its own bracket (its conditions are
+      // AND-ed inside it), and the two brackets are OR-ed.
+      const visitSide = (side: FilterNode) =>
+        new Brackets((qb) => {
+          const visitor = new TypeOrmFilterVisitor(
+            qb as SelectQueryBuilder<ObjectLiteral>,
+            this.alias,
+            this.entityType,
+            this.maxFilterDepth,
+            this.dialect,
+            this.repo,
+            this.lambdaScope,
+          )
+          visitor.paramCount = this.paramCount
+          visitor.currentDepth = depthAtEntry
+          acceptVisitor(side, visitor)
+          this.paramCount = visitor.paramCount
+        })
       this.qb.andWhere(
         new Brackets((qb) => {
-          const leftVisitor = new TypeOrmFilterVisitor(
-            qb as SelectQueryBuilder<ObjectLiteral>,
-            this.alias,
-            this.entityType,
-            this.maxFilterDepth,
-            this.dialect,
-            this.repo,
-            this.lambdaScope,
-          )
-          leftVisitor.paramCount = this.paramCount
-          leftVisitor.currentDepth = depthAtEntry
-          acceptVisitor(left, leftVisitor)
-          this.paramCount = leftVisitor.paramCount
-
-          const rightVisitor = new TypeOrmFilterVisitor(
-            qb as SelectQueryBuilder<ObjectLiteral>,
-            this.alias,
-            this.entityType,
-            this.maxFilterDepth,
-            this.dialect,
-            this.repo,
-            this.lambdaScope,
-          )
-          rightVisitor.paramCount = this.paramCount
-          rightVisitor.currentDepth = depthAtEntry
-          acceptVisitor(right, rightVisitor)
-          this.paramCount = rightVisitor.paramCount
+          qb.where(visitSide(left))
+          qb.orWhere(visitSide(right))
         }),
       )
       this.currentDepth--
@@ -179,11 +187,15 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
   visitUnaryExpr(node: UnaryExprNode): void {
     if (node.operator === 'not') {
+      const root = this.rootBinding()
       const innerVisitor = new InnerFilterExprBuilder(
         this.alias,
         this.entityType,
         this.paramCount,
         this.dialect,
+        null,
+        undefined,
+        { context: this.pathContext(), inner: root, outer: root },
       )
       const { expr, params, finalCount } = innerVisitor.build(node.operand)
       this.paramCount = finalCount
@@ -214,14 +226,6 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     )
     if (!relation) return // unknown relation — skip silently
 
-    if (relation.relationType === 'many-to-many') {
-      throw new ODataValidationError(
-        `Lambda expressions on ManyToMany relations are not supported`,
-        this.entityType.name,
-        '$filter',
-      )
-    }
-
     if (node.operator === 'all' && !node.predicate) {
       // vacuous truth — add no condition
       return
@@ -229,6 +233,12 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
     this.paramCount++ // reserve one count for alias suffix to prevent collision
     const subAlias = `${node.variable ?? 'sub'}_lambda_${this.paramCount}`
+
+    if (relation.isManyToMany) {
+      this.visitManyToManyLambda(node, relation, subAlias)
+      return
+    }
+
     const targetTable = relation.inverseEntityMetadata.tableName
     // For OneToMany: FK lives on related side — use inverseRelation.joinColumns
     const fkCol =
@@ -247,58 +257,117 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
         }
       : { sql: '', params: {} }
 
+    const source = `"${targetTable}" ${subAlias}`
+    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}${scope.sql}`
+    const range = { source, correlate, params: scope.params }
     if (node.operator === 'any') {
-      this.buildAnyClause(node, subAlias, targetTable, fkCol, pkCol, scope)
+      this.buildAnyClause(node, subAlias, relation, range)
     } else {
-      this.buildAllClause(node, subAlias, targetTable, fkCol, pkCol, scope)
+      this.buildAllClause(node, subAlias, relation, range)
+    }
+  }
+
+  /**
+   * Lambda over a many-to-many navigation: the subquery ranges over the junction table joined
+   * to the target, correlated with the outer entity through the junction's columns. The
+   * target's row-level scope applies as for one-to-many lambdas.
+   */
+  private visitManyToManyLambda(
+    node: LambdaExprNode,
+    relation: RelationMetadata,
+    subAlias: string,
+  ): void {
+    const manager = this.repo!.manager
+    const escape = (name: string): string => manager.connection.driver.escape(name)
+    const owning = relation.isOwning ? relation : relation.inverseRelation
+    const junction = relation.junctionEntityMetadata ?? owning?.junctionEntityMetadata
+    if (!owning || !junction) {
+      throw new ODataNotImplementedError(
+        `Lambda expressions on '${relation.propertyPath}' (a many-to-many relation without a ` +
+          'junction table) are not supported',
+      )
+    }
+    // Junction columns referencing this entity, and the ones referencing the target.
+    const ownerColumns = relation.isOwning ? owning.joinColumns : owning.inverseJoinColumns
+    const targetColumns = relation.isOwning ? owning.inverseJoinColumns : owning.joinColumns
+    const junctionAlias = `${subAlias}_j`
+    const target = relation.inverseEntityMetadata
+    const on = targetColumns
+      .map(
+        (c) =>
+          `${subAlias}.${escape(c.referencedColumn!.databaseName)} = ${junctionAlias}.${escape(c.databaseName)}`,
+      )
+      .join(' AND ')
+    const source =
+      `${escapeTablePath(manager, junction)} ${junctionAlias} ` +
+      `INNER JOIN ${escapeTablePath(manager, target)} ${subAlias} ON ${on}`
+
+    const scoped = this.lambdaScope?.(relation.propertyName)
+    const correlation = ownerColumns.map(
+      (c) =>
+        `${junctionAlias}.${escape(c.databaseName)} = ${escape(this.alias)}.${escape(c.referencedColumn!.databaseName)}`,
+    )
+    if (scoped) {
+      correlation.push(scopeInCondition(scoped, (c) => `${subAlias}.${escape(c.databaseName)}`))
+    }
+    const range = { source, correlate: correlation.join(' AND '), params: scoped?.params ?? {} }
+    if (node.operator === 'any') {
+      this.buildAnyClause(node, subAlias, relation, range)
+    } else {
+      this.buildAllClause(node, subAlias, relation, range)
     }
   }
 
   private buildAnyClause(
     node: LambdaExprNode,
     subAlias: string,
-    targetTable: string,
-    fkCol: string,
-    pkCol: string,
-    scope: { sql: string; params: Readonly<Record<string, unknown>> },
+    relation: RelationMetadata,
+    range: LambdaRange,
   ): void {
-    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}${scope.sql}`
+    const { source, correlate } = range
 
     if (!node.predicate) {
       // any() — check collection is non-empty
-      this.qb.andWhere(
-        `EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate})`,
-        scope.params,
-      )
+      this.qb.andWhere(`EXISTS (SELECT 1 FROM ${source} WHERE ${correlate})`, range.params)
       return
     }
 
-    const builder = new InnerFilterExprBuilder(
-      subAlias,
-      this.entityType,
-      this.paramCount,
-      this.dialect,
-      node.variable,
-      this.alias,
-    )
-    const result = builder.build(node.predicate)
-    this.paramCount = result.finalCount
-
-    this.qb.andWhere(
-      `EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND ${result.expr})`,
-      { ...scope.params, ...result.params },
-    )
+    const result = this.lambdaPredicate(node, subAlias, relation)
+    this.qb.andWhere(`EXISTS (SELECT 1 FROM ${source} WHERE ${correlate} AND ${result.expr})`, {
+      ...range.params,
+      ...result.params,
+    })
   }
 
   private buildAllClause(
     node: LambdaExprNode,
     subAlias: string,
-    targetTable: string,
-    fkCol: string,
-    pkCol: string,
-    scope: { sql: string; params: Readonly<Record<string, unknown>> },
+    relation: RelationMetadata,
+    range: LambdaRange,
   ): void {
     // node.predicate is guaranteed non-null here (vacuous truth handled above)
+    const result = this.lambdaPredicate(node, subAlias, relation)
+
+    // all() ranges over the rows inside the scope only.
+    const { source, correlate } = range
+    this.qb.andWhere(
+      `NOT EXISTS (SELECT 1 FROM ${source} WHERE ${correlate} AND NOT (${result.expr}))`,
+      { ...range.params, ...result.params },
+    )
+  }
+
+  /** Render a lambda predicate; paths after the range variable resolve on the target. */
+  private lambdaPredicate(
+    node: LambdaExprNode,
+    subAlias: string,
+    relation: RelationMetadata,
+  ): { expr: string; params: Record<string, unknown> } {
+    const escape = (name: string): string => this.repo!.manager.connection.driver.escape(name)
+    const inner: PathBinding = {
+      metadata: relation.inverseEntityMetadata,
+      column: (db) => `${subAlias}.${escape(db)}`,
+      scopePath: [relation.propertyName],
+    }
     const builder = new InnerFilterExprBuilder(
       subAlias,
       this.entityType,
@@ -306,16 +375,26 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       this.dialect,
       node.variable,
       this.alias,
+      { context: this.pathContext(), inner, outer: this.rootBinding() },
     )
     const result = builder.build(node.predicate!)
     this.paramCount = result.finalCount
+    return result
+  }
 
-    // all() ranges over the rows inside the scope only.
-    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}${scope.sql}`
-    this.qb.andWhere(
-      `NOT EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND NOT (${result.expr}))`,
-      { ...scope.params, ...result.params },
-    )
+  /** The entity this visitor filters, as the start of navigation paths. */
+  private rootBinding(): PathBinding | undefined {
+    if (!this.repo) return undefined
+    const escape = (name: string): string => this.repo!.manager.connection.driver.escape(name)
+    return {
+      metadata: this.repo.metadata,
+      column: (db) => `${escape(this.alias)}.${escape(db)}`,
+      scopePath: [],
+    }
+  }
+
+  private pathContext(): PathContext | undefined {
+    return this.repo ? { manager: this.repo.manager, scope: this.lambdaScope } : undefined
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -343,6 +422,11 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
    */
   private resolveExpression(node: FilterNode): string {
     if (node.kind === 'PropertyAccess') {
+      if (node.path.length > 1) {
+        const rendered = renderPath(this.pathContext(), this.rootBinding(), node.path)
+        Object.assign(this.pendingParams, rendered.params)
+        return rendered.sql
+      }
       return `${this.alias}.${node.path[0]}`
     }
     if (node.kind === 'BinaryExpr') {
@@ -439,6 +523,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
 
   /** Apply a LIKE function (contains, startswith, endswith) with escaped value */
   private applyLikeFunction(name: string, node: FunctionCallNode): void {
+    this.pendingParams = {}
     const prop = this.resolveExpression(node.args[0])
     const rawValue = String(this.extractLiteralValue(node.args[1]) ?? '')
     const escaped = this.escapeLike(rawValue)
@@ -454,7 +539,9 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     }
 
     const paramName = this.nextParam()
-    this.qb.andWhere(`${prop} LIKE :${paramName}`, { [paramName]: pattern })
+    const params = { ...this.pendingParams, [paramName]: pattern }
+    this.pendingParams = {}
+    this.qb.andWhere(`${prop} LIKE :${paramName}`, params)
   }
 
   /**
@@ -486,6 +573,12 @@ class InnerFilterExprBuilder {
      * variable (`ownerId` in `any(t: t/done eq true and ownerId eq 5)`) refers to that entity.
      */
     private readonly outerAlias?: string,
+    /** Where navigation paths start, for the range variable (`inner`) and the outer entity. */
+    private readonly paths?: {
+      readonly context: PathContext | undefined
+      readonly inner: PathBinding | undefined
+      readonly outer: PathBinding | undefined
+    },
   ) {
     this.paramCount = startCount
   }
@@ -547,11 +640,23 @@ class InnerFilterExprBuilder {
       }
     }
     if (node.kind === 'PropertyAccess') {
-      if (!this.lambdaVariable) return `${this.alias}.${node.path[0]}`
-      if (node.path.length > 1 && node.path[0] === this.lambdaVariable) {
-        return `${this.alias}.${node.path[1]}`
+      let alias = this.alias
+      let segments = node.path
+      let binding = this.paths?.inner
+      if (this.lambdaVariable) {
+        if (node.path.length > 1 && node.path[0] === this.lambdaVariable) {
+          segments = node.path.slice(1)
+        } else {
+          alias = this.outerAlias ?? this.alias
+          binding = this.paths?.outer
+        }
       }
-      return `${this.outerAlias ?? this.alias}.${node.path[0]}`
+      if (segments.length > 1) {
+        const rendered = renderPath(this.paths?.context, binding, segments)
+        Object.assign(this.params, rendered.params)
+        return rendered.sql
+      }
+      return `${alias}.${segments[0]}`
     }
     if (node.kind === 'Literal') {
       this.paramCount++
@@ -621,4 +726,31 @@ class InnerFilterExprBuilder {
     }
     return this.buildExpr(node)
   }
+}
+
+/** What rendering navigation paths needs besides the binding. */
+interface PathContext {
+  readonly manager: EntityManager
+  readonly scope: FilterScopeLookup | undefined
+}
+
+/** The rows a lambda ranges over: `FROM <source> WHERE <correlate>`, with the scope params. */
+interface LambdaRange {
+  readonly source: string
+  readonly correlate: string
+  readonly params: Readonly<Record<string, unknown>>
+}
+
+/** Render a navigation path, or fail when the visitor has no TypeORM metadata to resolve it. */
+function renderPath(
+  context: PathContext | undefined,
+  binding: PathBinding | undefined,
+  path: readonly string[],
+): { sql: string; params: Record<string, unknown> } {
+  if (!context || !binding) {
+    throw new ODataNotImplementedError(
+      `Navigation paths ('${path.join('/')}') are not supported in this filter`,
+    )
+  }
+  return renderNavigationPath(context.manager, binding, path, context.scope)
 }

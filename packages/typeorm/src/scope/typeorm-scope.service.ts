@@ -256,23 +256,37 @@ export class TypeOrmScopeService {
     }
   }
 
+  /**
+   * Collect the entity sets a filter reaches: lambda (`any`/`all`) targets and the targets of
+   * single-valued navigation paths (`category/name`), also inside lambda predicates, where
+   * paths after the range variable start at the lambda's target.
+   */
   private collectLambdas(
     node: FilterNode,
     entityType: EdmEntityType,
     path: readonly string[],
     visit: (target: ScopeTarget) => void,
+    lambda?: { variable: string; entityType: EdmEntityType; path: readonly string[] },
   ): void {
     switch (node.kind) {
       case 'BinaryExpr':
-        this.collectLambdas(node.left, entityType, path, visit)
-        this.collectLambdas(node.right, entityType, path, visit)
+        this.collectLambdas(node.left, entityType, path, visit, lambda)
+        this.collectLambdas(node.right, entityType, path, visit, lambda)
         return
       case 'UnaryExpr':
-        this.collectLambdas(node.operand, entityType, path, visit)
+        this.collectLambdas(node.operand, entityType, path, visit, lambda)
         return
       case 'FunctionCall':
-        for (const arg of node.args) this.collectLambdas(arg, entityType, path, visit)
+        for (const arg of node.args) this.collectLambdas(arg, entityType, path, visit, lambda)
         return
+      case 'PropertyAccess': {
+        if (lambda && node.path.length > 1 && node.path[0] === lambda.variable) {
+          this.collectNavigationPath(node.path.slice(1), lambda.entityType, lambda.path, visit)
+        } else {
+          this.collectNavigationPath(node.path, entityType, path, visit)
+        }
+        return
+      }
       case 'LambdaExpr': {
         const navProp = entityType.navigationProperties.find(
           (np) => np.name.toLowerCase() === node.collection.toLowerCase(),
@@ -280,11 +294,40 @@ export class TypeOrmScopeService {
         if (!navProp) return
         const lambdaPath = [...path, navProp.name]
         const target = this.targetOf(navProp.type, lambdaPath)
-        if (target) visit({ kind: 'lambda', entitySetName: target.entitySetName, path: lambdaPath })
+        if (!target) return
+        visit({ kind: 'lambda', entitySetName: target.entitySetName, path: lambdaPath })
+        if (node.predicate && node.variable) {
+          this.collectLambdas(node.predicate, entityType, path, visit, {
+            variable: node.variable,
+            entityType: target.entityType,
+            path: lambdaPath,
+          })
+        }
         return
       }
       default:
         return
+    }
+  }
+
+  /** Visit the target of every navigation segment of a property path (all but the last). */
+  private collectNavigationPath(
+    segments: readonly string[],
+    entityType: EdmEntityType,
+    path: readonly string[],
+    visit: (target: ScopeTarget) => void,
+  ): void {
+    let current = entityType
+    let currentPath = path
+    for (const segment of segments.slice(0, -1)) {
+      const navProp = current.navigationProperties.find((np) => np.name === segment)
+      // Unknown or collection-valued segments are rejected by the query pipe with a 400.
+      if (!navProp || navProp.isCollection) return
+      currentPath = [...currentPath, navProp.name]
+      const target = this.targetOf(navProp.type, currentPath)
+      if (!target) return
+      visit({ kind: 'lambda', entitySetName: target.entitySetName, path: currentPath })
+      current = target.entityType
     }
   }
 

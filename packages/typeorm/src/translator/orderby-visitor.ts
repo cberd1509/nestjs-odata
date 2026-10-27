@@ -13,9 +13,11 @@ export class TypeOrmOrderByVisitor {
 
   /**
    * Apply $orderby items to the QueryBuilder.
-   * First item uses orderBy(), subsequent items use addOrderBy().
+   * First item uses orderBy(), subsequent items use addOrderBy(). With `append` (a nested
+   * `$orderby` inside `$expand`), every item uses addOrderBy(), so the ordering of the parent
+   * rows set before is kept.
    */
-  apply(items: OrderByItem[]): void {
+  apply(items: OrderByItem[], append = false): void {
     if (!items.length) return
 
     for (let i = 0; i < items.length; i++) {
@@ -24,7 +26,7 @@ export class TypeOrmOrderByVisitor {
       const direction = item.direction.toUpperCase() as 'ASC' | 'DESC'
       const column = `${this.alias}.${propertyName}`
 
-      if (i === 0) {
+      if (i === 0 && !append) {
         this.qb.orderBy(column, direction)
       } else {
         this.qb.addOrderBy(column, direction)
