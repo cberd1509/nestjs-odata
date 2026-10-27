@@ -146,8 +146,9 @@ export class AppModule {}
 
 Entities decorated with `@ODataETag()` get automatic optimistic concurrency control:
 
-- **Write protection**: when a `PATCH`, `PUT` or `DELETE` (also inside `$batch`) carries an `If-Match` header that does not match the current ETag (another client modified the entity), the server returns `412 Precondition Failed` and changes nothing. A request **without** `If-Match` is not refused: the library does not require optimistic concurrency (no `428 Precondition Required`), so clients that want the protection must send the header.
-- **Read optimization**: `GET` single entity supports `If-None-Match`. If the ETag matches (entity unchanged), the server returns `304 Not Modified` with no body.
+- **Write protection**: when a `PATCH`, `PUT` or `DELETE` (also inside `$batch`) carries an `If-Match` header that does not match the current ETag (another client modified the entity), the server returns `412 Precondition Failed` and changes nothing. So does a write whose `If-None-Match` matches the current ETag (`*` matches any existing entity).
+- **Requiring `If-Match`**: by default a write **without** `If-Match` is allowed, so clients that want the protection must send the header. Set `requireIfMatch: true` on an entity set's `forFeature()` item to answer such writes with `428 Precondition Required` (HTTP and `$batch`, also with write handlers); `$metadata` then advertises `Core.OptimisticConcurrency` on the entity set. See [CRUD: Requiring If-Match](./crud#requiring-if-match).
+- **Read optimization**: `GET` single entity supports `If-None-Match`. If the ETag matches (entity unchanged), the server returns `304 Not Modified` with no body. Collections carry `@odata.etag` on each entity.
 
 This prevents lost-update scenarios in concurrent environments without pessimistic locking.
 
@@ -166,6 +167,27 @@ export class Product {
   updatedAt: Date
 }
 ```
+
+::: warning Disable Express's own ETags
+Express's default `etag` setting adds a hash `ETag` to every JSON response, including `400`/`404`
+errors, collections and `$metadata`. Those are not OData ETags: a client that echoes one in
+`If-Match` always gets `412`. Call `app.set('etag', false)` on the Express application of an
+OData service. The library logs a warning at startup while the setting is on, but does not
+change it for you.
+:::
+
+## Write bodies
+
+Writes only persist properties of the entity type (OData 4.01 Part 1 §11.4.2):
+
+- a property that is not in the EDM, including columns hidden with `@ODataExclude` or
+  `select: false`, answers `400 Bad Request` and nothing is written, so hidden columns can't be
+  mass-assigned through POST, PATCH or PUT (or `$batch`);
+- computed properties (create/update timestamps, version and generated columns, annotated
+  `Core.Computed`) and, on PATCH/PUT, key properties are ignored: the URL key decides the row.
+
+`ignoreUnknownProperties: true` drops unknown properties instead of answering 400; they are
+still never persisted.
 
 ## Enriched error details
 

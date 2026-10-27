@@ -11,6 +11,18 @@ import { annotateEntity, annotateEntities } from './odata-annotation.builder.js'
 import type { AnnotationContext } from './odata-annotation.builder.js'
 import { ODATA_ROUTE_KEY } from '../decorators/metadata-keys.js'
 import { EdmRegistry } from '../edm/edm-registry.js'
+import { ODataEmptyResponse } from './odata-empty-response.js'
+import { resolveReturnPreference } from './prefer.js'
+
+/** Data modification operations whose response honours `Prefer: return=...` (§8.2.8.7). */
+const WRITE_OPERATIONS = new Set(['create', 'update', 'replace'])
+
+/** The parts of the platform request the interceptor reads. */
+interface HttpRequestLike {
+  readonly headers?: Record<string, string | string[] | undefined>
+  readonly originalUrl?: string
+  readonly url?: string
+}
 
 /** Metadata value shape set by @ODataGet() and CRUD decorators */
 interface ODataRouteMetadata {
@@ -78,6 +90,8 @@ export class ODataResponseInterceptor implements NestInterceptor {
     }
 
     const { entitySetName, operation, isSingleEntity } = metadata
+    const returnPreference =
+      operation && WRITE_OPERATIONS.has(operation) ? this.returnPreference(context) : undefined
 
     return next.handle().pipe(
       map((result: unknown) => {
@@ -85,15 +99,17 @@ export class ODataResponseInterceptor implements NestInterceptor {
         if (operation === 'create' && result !== null && typeof result === 'object') {
           const createResult = result as { entity?: unknown; locationUrl?: string }
           if (createResult.locationUrl) {
-            const httpResponse = context
-              .switchToHttp()
-              .getResponse<{ setHeader: (k: string, v: string) => void }>()
-            httpResponse.setHeader('Location', createResult.locationUrl)
+            setResponseHeader(context, 'Location', createResult.locationUrl)
           }
           const entity = applyETag(
             context,
             (createResult.entity ?? result) as Record<string, unknown>,
           )
+          if (returnPreference === 'minimal' && createResult.locationUrl) {
+            // §11.4.2 / §8.3.4: a 204 create still identifies the entity it created.
+            setResponseHeader(context, 'OData-EntityId', createResult.locationUrl)
+          }
+          applyReturnPreference(context, returnPreference)
           const contextUrl = buildContextUrl(
             this.options.serviceRoot,
             entitySetName,
@@ -116,16 +132,11 @@ export class ODataResponseInterceptor implements NestInterceptor {
           const entityResult = result as Record<string, unknown>
 
           // Handle 304 Not Modified — entity unchanged (If-None-Match matched)
-          if (entityResult['__notModified'] === true) {
-            const etag = entityResult['etag'] as string
-            const httpResponse = context.switchToHttp().getResponse<{
-              setHeader: (k: string, v: string) => void
-              status: (code: number) => { end: () => void }
-            }>()
-            httpResponse.setHeader('ETag', etag)
-            // Set 304 status and end the response directly — no body for 304
-            httpResponse.status(304).end()
-            return null
+          if (entityResult?.['__notModified'] === true) {
+            setResponseHeader(context, 'ETag', entityResult['etag'] as string)
+            // Nest would send the route's own status (200) for any returned value: the
+            // exception filter answers this signal with an empty 304 instead (#77).
+            throw new ODataEmptyResponse(304)
           }
 
           const contextUrl = buildContextUrl(
@@ -139,6 +150,7 @@ export class ODataResponseInterceptor implements NestInterceptor {
           const annotationCtx = this.resolveAnnotationContext(entitySetName)
 
           const entityToAnnotate = applyETag(context, entityResult)
+          applyReturnPreference(context, returnPreference)
 
           const annotatedEntity = annotationCtx
             ? annotateEntity(entityToAnnotate, annotationCtx)
@@ -182,9 +194,9 @@ export class ODataResponseInterceptor implements NestInterceptor {
 
         // Annotate each item in the collection (RESP-04, RESP-05, RESP-06)
         const annotationCtx = this.resolveAnnotationContext(entitySetName)
-        const items = annotationCtx
-          ? annotateEntities(queryResult.items as Record<string, unknown>[], annotationCtx)
-          : queryResult.items
+        // Adapters attach `__etag` to each item of an ETag-enabled entity set (JSON §4.5.10).
+        const withETags = (queryResult.items as Record<string, unknown>[]).map(itemETag)
+        const items = annotationCtx ? annotateEntities(withETags, annotationCtx) : withETags
 
         // Build response: only include optional keys when they have values (D-06, D-08)
         const response: Record<string, unknown> = {
@@ -204,6 +216,51 @@ export class ODataResponseInterceptor implements NestInterceptor {
       }),
     )
   }
+
+  /**
+   * The `return` preference to apply and report with `Preference-Applied`; `undefined` when the
+   * client expressed none, or asked for `minimal` with `$select`/`$expand` (§11.4.1.5).
+   */
+  private returnPreference(context: ExecutionContext): 'minimal' | 'representation' | undefined {
+    const http = context.switchToHttp()
+    const request = http?.getRequest?.<HttpRequestLike | undefined>()
+    const prefer = request?.headers?.['prefer']
+    const applied = resolveReturnPreference(prefer, request?.originalUrl ?? request?.url)
+    // `return=minimal` overridden by $select/$expand: answer with the entity, but do not report
+    // a preference the client did not express.
+    if (applied === 'representation' && resolveReturnPreference(prefer, undefined) !== applied) {
+      return undefined
+    }
+    return applied
+  }
+}
+
+function setResponseHeader(context: ExecutionContext, name: string, value: string): void {
+  context
+    .switchToHttp()
+    .getResponse<{ setHeader: (k: string, v: string) => void }>()
+    .setHeader(name, value)
+}
+
+/**
+ * Honour `Prefer: return=minimal` (204 No Content) or `return=representation` on a write, with
+ * `Preference-Applied` (OData-Protocol 4.01 §8.2.8.7). Headers already set (`ETag`, `Location`)
+ * are kept.
+ */
+function applyReturnPreference(
+  context: ExecutionContext,
+  preference: 'minimal' | 'representation' | undefined,
+): void {
+  if (!preference) return
+  setResponseHeader(context, 'Preference-Applied', `return=${preference}`)
+  if (preference === 'minimal') throw new ODataEmptyResponse(204)
+}
+
+/** A collection item's internal `__etag` as its `@odata.etag` annotation (no `ETag` header). */
+function itemETag(item: Record<string, unknown>): Record<string, unknown> {
+  if (!item || typeof item !== 'object' || typeof item['__etag'] !== 'string') return item
+  const { __etag: etag, ...rest } = item
+  return { '@odata.etag': etag, ...rest }
 }
 
 /**
@@ -216,9 +273,6 @@ function applyETag(
 ): Record<string, unknown> {
   if (!entity || typeof entity !== 'object' || typeof entity['__etag'] !== 'string') return entity
   const { __etag: etag, ...rest } = entity
-  context
-    .switchToHttp()
-    .getResponse<{ setHeader: (k: string, v: string) => void }>()
-    .setHeader('ETag', etag)
+  setResponseHeader(context, 'ETag', etag)
   return { '@odata.etag': etag, ...rest }
 }

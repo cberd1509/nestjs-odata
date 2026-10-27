@@ -237,14 +237,26 @@ both the bare-root and child-splat patterns. Pass an explicit value
 ```typescript
 // main.ts
 import { NestFactory } from '@nestjs/core'
+import type { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule)
+  const app = await NestFactory.create<NestExpressApplication>(AppModule)
+  // Express adds a hash ETag to every response (errors, collections, $metadata). It is not an
+  // OData ETag, and a client echoing it in If-Match gets 412: turn it off for OData services.
+  app.set('etag', false)
   await app.listen(3000)
 }
 bootstrap()
 ```
+
+The library never changes this application-wide setting itself; it logs a warning at startup
+while Express's `etag` setting is on. Entities with an ETag (`@ODataETag`, `@UpdateDateColumn` or
+an `etag` option) keep their own OData `ETag` header and `@odata.etag`.
+
+Entities are addressed by their canonical URL, `/odata/Products(1)` (composite keys:
+`/odata/OrderItems(orderId=1,productId=2)`); `/odata/Products/1` works too. See
+[Entity URLs](./crud#entity-urls).
 
 ## Step 4 — Query your endpoint
 

@@ -9,9 +9,9 @@ OData query pipeline.
 | ----------------------------------- | --------------------------------------- |
 | `POST /Set`                         | `create(body, ctx)`                     |
 | `POST /Set` with nested entities    | `deepInsert(body, ctx)` (else `create`) |
-| `PATCH /Set/:key`                   | `update(key, body, ctx)`                |
-| `PUT /Set/:key`                     | `replace(key, body, ctx)`               |
-| `DELETE /Set/:key`                  | `delete(key, ctx)`                      |
+| `PATCH /Set(key)`                   | `update(key, body, ctx)`                |
+| `PUT /Set(key)`                     | `replace(key, body, ctx)`               |
+| `DELETE /Set(key)`                  | `delete(key, ctx)`                      |
 | the same operations inside `$batch` | the same handlers                       |
 
 An entity set with write handlers **never falls back to the repository**. An operation without a
@@ -94,6 +94,8 @@ interface ODataWriteContext {
   operation: 'create' | 'deepInsert' | 'update' | 'replace' | 'delete'
   rawKey?: string // the key as written in the URL
   ifMatch?: string // the If-Match header
+  ifNoneMatch?: string // the If-None-Match header
+  requireIfMatch?: boolean // true when the entity set has requireIfMatch
   executionContext?: ExecutionContext // the route's (the $batch route's, in a batch)
   request?: unknown // the Express/Fastify request (the $batch request, in a batch)
   manager?: EntityManager // the transaction's manager: in a $batch changeset, or passed to handleDeepCreate
@@ -102,13 +104,17 @@ interface ODataWriteContext {
 ```
 
 - `key` is the parsed key: `{ id: 5 }`, or `{ orderId: 1, itemId: 2 }` for composite keys.
-- `body` is the parsed JSON body. Validate it: the library does not, and with handlers there is
-  no repository whitelist of columns.
+- `body` is the parsed JSON body, as sent. Validate it: the library does not, and with handlers
+  there is no repository whitelist of columns. (Without handlers, the repository path ignores
+  computed and key properties and refuses unknown ones with 400; `prepareWriteBody(entityType,
+body, operation)` from `@nestjs-odata/typeorm` applies the same rules if you want them.)
 - Return the entity to serialize. For `create`, its key properties build the `Location` header.
   A `deepInsert` handler should return the entity with the nested entities it created: OData
   4.01 Part 1 §11.4.2.2 expects a 201 response expanded to at least the depth of the request.
-- Responses always carry the representation (201 / 200). `Prefer: return=minimal` is not
-  applied, which the protocol allows (§8.2.8.7), and no `Preference-Applied` is sent.
+- Responses carry the representation (201 / 200) unless the client sends
+  `Prefer: return=minimal`: then the library answers 204 with `Preference-Applied` (and
+  `Location` / `OData-EntityId` for a create), over HTTP and in `$batch` parts. The handler runs
+  the same way either way.
   `create`, `deepInsert`, `update` and `replace` must return an object: a handler that returns
   nothing fails with 500 (and rolls back its `$batch` changeset), over HTTP and in `$batch`.
 - Throw to fail the write. An `HttpException` keeps its status, and other errors become 500.
@@ -128,15 +134,21 @@ interface ODataWriteContext {
 The value becomes a weak ETag (`W/"<base64>"`). A function may instead return a complete ETag
 (`W/"…"` or `"…"`), which is used as is. The ETag is sent:
 
-- as the `ETag` header and `@odata.etag` on `GET /Set/:key` (`If-None-Match` → 304),
+- as the `ETag` header and `@odata.etag` on `GET /Set(key)` (`If-None-Match` → 304),
+- as `@odata.etag` on each entity of a collection response,
 - on the responses of `POST`, `PATCH` and `PUT`, with or without write handlers,
 - as the `ETag` header and `@odata.etag` of `$batch` response parts (GET by key and writes).
 
 Every ETag, from an `etag` option or from `@ODataETag` / `@UpdateDateColumn`, is compared the
 same way: `*` matches any entity, and a comma-separated list matches when any entry does.
 
-With write handlers, the library passes `If-Match` to the handler as `ctx.ifMatch` and does not
-check it: compare it with the current version **in the same transaction as the write**. The
+With write handlers, the library passes `If-Match` and `If-None-Match` to the handler as
+`ctx.ifMatch` and `ctx.ifNoneMatch` and does not check them: compare them with the current
+version **in the same transaction as the write**. A matching `If-None-Match` (`*` matches any
+existing entity) must answer 412 with no change (OData 4.01 Part 1 §8.2.5). The only check the
+library does before calling the handler is `requireIfMatch`: a PATCH, PUT or DELETE without
+`If-Match` answers 428 and the handler isn't called (`ctx.requireIfMatch` is `true` for that
+entity set). The
 `etagMatches(ifMatch, currentEtag)` and `formatWeakETag(value)` helpers produce exactly the ETags
 the library sends, and `etagMatches` understands `*` and lists:
 
@@ -150,8 +162,8 @@ async rename(id: number, body: Record<string, unknown>, ifMatch?: string) {
 }
 ```
 
-Without write handlers, the repository path checks `If-Match` against the ETag itself and
-answers 412, over HTTP and in `$batch` parts.
+Without write handlers, the repository path checks `If-Match` and `If-None-Match` against the
+ETag itself and answers 412, over HTTP and in `$batch` parts.
 
 ## Row-level scopes
 

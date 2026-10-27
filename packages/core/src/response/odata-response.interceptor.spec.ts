@@ -460,13 +460,12 @@ describe('ODataResponseInterceptor', () => {
     expect(resp).not.toHaveProperty('@odata.etag')
   })
 
-  it('Test E3: entity with __notModified flag — sets 304 status, empty body, ETag header', async () => {
+  it('Test E3: entity with __notModified flag — sets ETag header and signals an empty 304', async () => {
     const result = { __notModified: true, etag: 'W/"abc123"' }
     mockHandler.handle.mockReturnValue(of(result))
     const reflector = makeReflector({ entitySetName: 'Products', isSingleEntity: true })
     const setHeader = vi.fn()
-    const end = vi.fn()
-    const status = vi.fn().mockReturnValue({ end })
+    const status = vi.fn()
     const ctx = {
       getHandler: vi.fn().mockReturnValue({}),
       switchToHttp: vi.fn().mockReturnValue({
@@ -480,12 +479,12 @@ describe('ODataResponseInterceptor', () => {
       makeProductsEdmRegistry(),
     )
 
-    const resp = await firstValueFrom(interceptor.intercept(ctx, handler))
-
+    // The exception filter answers the signal with an empty 304 (#77): the interceptor must not
+    // end the response itself, or Nest fails with "Cannot set headers after they are sent".
+    await expect(firstValueFrom(interceptor.intercept(ctx, handler))).rejects.toMatchObject({
+      status: 304,
+    })
     expect(setHeader).toHaveBeenCalledWith('ETag', 'W/"abc123"')
-    expect(status).toHaveBeenCalledWith(304)
-    expect(end).toHaveBeenCalled()
-    // Response should be empty (null/undefined)
-    expect(resp == null || resp === '').toBe(true)
+    expect(status).not.toHaveBeenCalled()
   })
 })

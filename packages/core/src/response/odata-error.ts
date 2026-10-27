@@ -29,6 +29,12 @@ export interface ODataErrorMapping {
   readonly details?: readonly ODataErrorDetail[]
   /** Service-defined debugging information. Do not put secrets or stack traces here. */
   readonly innererror?: Readonly<Record<string, unknown>>
+  /**
+   * Language of `message` as an RFC 5646 tag (`'es-CO'`), sent as the `Content-Language`
+   * response header (OData-Protocol 4.01 §9.4). Default: the `errorLanguage` module option,
+   * else `'en'`.
+   */
+  readonly language?: string
 }
 
 /** Where the exception being mapped was thrown. */
@@ -66,9 +72,11 @@ export type ODataErrorMapper = (
   context: ODataErrorMapperContext,
 ) => ODataErrorMapping | undefined | null
 
-/** The serialized OData error and its HTTP status. */
+/** The serialized OData error, its HTTP status and the language of its message. */
 export interface ODataErrorResponse {
   readonly status: number
+  /** Value of the `Content-Language` header: the language `message` is written in. */
+  readonly language: string
   readonly body: {
     readonly error: {
       readonly code: string
@@ -90,6 +98,7 @@ const STATUS_CODES: Record<number, string> = {
   410: 'Gone',
   412: 'PreconditionFailed',
   422: 'UnprocessableEntity',
+  428: 'PreconditionRequired',
   429: 'TooManyRequests',
   500: 'InternalServerError',
   501: 'NotImplemented',
@@ -105,6 +114,17 @@ export function httpStatusToODataCode(status: number): string {
 const INTERNAL_ERROR_MESSAGE = 'An unexpected error occurred.'
 
 const logger = new Logger('ODataErrorMapper')
+
+/** The language of the library's own error messages. */
+export const DEFAULT_ERROR_LANGUAGE = 'en'
+
+/**
+ * A well-formed RFC 5646 language tag (`en`, `es-CO`, `zh-Hant-TW`), checked loosely: letters,
+ * digits and hyphens only, so a mapper cannot inject header text.
+ */
+export function isLanguageTag(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/.test(value)
+}
 
 /** An OData error body: `{ error: { code, message, details } }`. */
 export function odataErrorBody(
@@ -131,8 +151,13 @@ function isErrorStatus(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 400 && value <= 599
 }
 
+/** An error response without its language (added by {@link buildODataErrorResponse}). */
+type UnlocalizedErrorResponse = Omit<ODataErrorResponse, 'language'> & {
+  readonly language?: string
+}
+
 /** An error response for `status`; 5xx messages are replaced by a generic one. */
-function statusResponse(status: number, message: string): ODataErrorResponse {
+function statusResponse(status: number, message: string): UnlocalizedErrorResponse {
   return {
     status,
     body: odataErrorBody(
@@ -146,7 +171,7 @@ function statusResponse(status: number, message: string): ODataErrorResponse {
  * The default mapping: OData parse/validation errors, HttpExceptions, errors carrying a
  * numeric `status`/`statusCode`, and 500 for the rest. 5xx messages are never sent.
  */
-function defaultErrorResponse(exception: unknown, depth = 0): ODataErrorResponse {
+function defaultErrorResponse(exception: unknown, depth = 0): UnlocalizedErrorResponse {
   if (exception instanceof ODataParseError) {
     return {
       status: HttpStatus.BAD_REQUEST,
@@ -194,13 +219,23 @@ function defaultErrorResponse(exception: unknown, depth = 0): ODataErrorResponse
     }
   }
   if (exception instanceof HttpException) {
-    // HttpExceptions built with an OData-shaped body ({ error: { message } }) keep its message.
-    const response = exception.getResponse() as { error?: { message?: unknown } } | string
-    const odataMessage =
-      typeof response === 'object' && typeof response?.error?.message === 'string'
-        ? response.error.message
-        : undefined
-    return statusResponse(exception.getStatus(), odataMessage ?? exception.message)
+    // HttpExceptions built with an OData-shaped body ({ error: { message, details? } }) keep
+    // its message and its valid details (4xx only: 5xx bodies are never sent).
+    const response = exception.getResponse() as
+      { error?: { message?: unknown; details?: unknown } } | string
+    const error = typeof response === 'object' ? response?.error : undefined
+    const odataMessage = typeof error?.message === 'string' ? error.message : undefined
+    const result = statusResponse(exception.getStatus(), odataMessage ?? exception.message)
+    const details = error?.details
+    if (
+      result.status < 500 &&
+      Array.isArray(details) &&
+      details.length > 0 &&
+      details.every(isErrorDetail)
+    ) {
+      return { ...result, body: { error: { ...result.body.error, details } } }
+    }
+    return result
   }
   // An error wrapped by application code (`new Error('…', { cause })`): map what it wraps.
   const cause = (exception as { cause?: unknown } | null)?.cause
@@ -241,9 +276,9 @@ function isErrorDetail(value: unknown): value is ODataErrorDetail {
 }
 
 /** The serialized response of a mapper result, or the reason it is invalid. */
-function fromMapping(mapping: unknown): ODataErrorResponse | string {
+function fromMapping(mapping: unknown): UnlocalizedErrorResponse | string {
   if (!isPlainObject(mapping)) return 'it is not an object'
-  const { status, code, message, target, details, innererror } = mapping
+  const { status, code, message, target, details, innererror, language } = mapping
   if (!isErrorStatus(status)) {
     return 'status is not an integer from 400 to 599'
   }
@@ -257,8 +292,12 @@ function fromMapping(mapping: unknown): ODataErrorResponse | string {
   if (innererror !== undefined && !isPlainObject(innererror)) {
     return 'innererror must be an object'
   }
+  if (language !== undefined && !isLanguageTag(language)) {
+    return 'language must be an RFC 5646 language tag'
+  }
   return {
     status,
+    ...(language !== undefined ? { language } : {}),
     body: {
       error: {
         code,
@@ -276,7 +315,7 @@ function runMapper(
   mapper: ODataErrorMapper,
   exception: unknown,
   context: ODataErrorMapperContext,
-): ODataErrorResponse | undefined {
+): UnlocalizedErrorResponse | undefined {
   try {
     const mapping: unknown = mapper(exception, context)
     if (mapping === undefined || mapping === null) return undefined
@@ -302,12 +341,16 @@ function runMapper(
 
 /**
  * Build the OData error response for an exception: the application's `errorMapper` first,
- * then the library's default mapping.
+ * then the library's default mapping. `language` is the mapping's own language, else
+ * `defaultLanguage` (the `errorLanguage` module option), else `'en'`.
  */
 export function buildODataErrorResponse(
   exception: unknown,
   mapper?: ODataErrorMapper,
   context: ODataErrorMapperContext = {},
+  defaultLanguage: string = DEFAULT_ERROR_LANGUAGE,
 ): ODataErrorResponse {
-  return (mapper && runMapper(mapper, exception, context)) ?? defaultErrorResponse(exception)
+  const response =
+    (mapper && runMapper(mapper, exception, context)) ?? defaultErrorResponse(exception)
+  return { ...response, language: response.language ?? defaultLanguage }
 }

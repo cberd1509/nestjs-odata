@@ -125,22 +125,23 @@ describe('OData PUT Full Replacement (e2e)', () => {
     expect(res.body).toHaveProperty('error')
   })
 
-  // ── Test 4: PUT with body key mismatch returns 400 ───────────────────────
+  // ── Test 4: PUT ignores a body key that differs from the URL key (OData §11.4.3) ──
 
-  it('PUT /odata/Orders/:key with different id in body returns 400', async () => {
+  it('PUT /odata/Orders/:key with different id in body replaces the URL entity', async () => {
     const orderId = await createOrder()
 
     const res = await request
       .put(`/odata/Orders/${orderId}`)
       .send({
-        id: orderId + 9999, // mismatch
+        id: orderId + 9999, // ignored: the URL key identifies the entity
         orderDate: '2024-06-01T00:00:00.000Z',
         totalAmount: 50,
         customerId,
       })
-      .expect(400)
+      .expect(200)
 
-    expect(res.body).toHaveProperty('error')
+    expect((res.body as { id: number }).id).toBe(orderId)
+    expect(Number((res.body as { totalAmount: number }).totalAmount)).toBe(50)
   })
 
   // ── Test 5: PUT preserves explicitly provided fields ─────────────────────

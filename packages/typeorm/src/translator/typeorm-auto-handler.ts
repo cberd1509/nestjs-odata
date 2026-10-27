@@ -11,11 +11,17 @@ import {
 } from '@nestjs-odata/core'
 import type { Repository, ObjectLiteral, EntityManager, DataSource } from 'typeorm'
 import { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
-import { bodyKeyMismatch, withoutKeyProperties } from '../utils/body-key.js'
 import { entityLocation } from '../utils/entity-key.js'
 import type { ODataWriteRegistry } from '../write/write-registry.js'
 import type { ODataWriteHandlers } from '../write/write.types.js'
-import { etagMatches, hasEntityETag, resolveEntityETag } from '../write/etag.js'
+import {
+  etagMatches,
+  hasEntityETag,
+  IF_MATCH_REQUIRED_MESSAGE,
+  preconditionFailure,
+  resolveEntityETag,
+} from '../write/etag.js'
+import { prepareWriteBody, type WriteBodyOperation } from '../write/body.js'
 import {
   assertHandlerEntity,
   buildWriteContext,
@@ -70,26 +76,52 @@ export class TypeOrmAutoHandler {
   }
 
   /**
-   * 412 unless `If-Match` is satisfied by the current entity: `*`, or a list containing its
-   * ETag. A no-op when the entity set has no ETag.
+   * The conditional headers of a write: `ifMatch` as passed by the controller, else the
+   * request's `If-Match`; `If-None-Match` from the request (OData-Protocol 4.01 §8.2.4, §8.2.5).
    */
-  private assertIfMatch(
+  private conditions(ifMatch: string | undefined): { ifMatch?: string; ifNoneMatch?: string } {
+    return {
+      ifMatch: ifMatch ?? requestHeader('if-match'),
+      ifNoneMatch: requestHeader('if-none-match'),
+    }
+  }
+
+  /** 428 when the entity set requires `If-Match` (`requireIfMatch`) and the write has none. */
+  private assertIfMatchPresent(entitySetName: string, ifMatch: string | undefined): void {
+    if (ifMatch || !this.writes?.requiresIfMatch(entitySetName)) return
+    throw new HttpException(
+      { error: { code: 'PreconditionRequired', message: IF_MATCH_REQUIRED_MESSAGE } },
+      428,
+    )
+  }
+
+  /**
+   * 412 unless the current entity satisfies the write's preconditions: `If-Match` is `*` or
+   * lists its ETag (ignored when the entity set has no ETag), and `If-None-Match` does not
+   * (`*` matches any existing entity).
+   */
+  private assertPreconditions(
     entitySetName: string,
-    ifMatch: string | undefined,
+    conditions: { ifMatch?: string; ifNoneMatch?: string },
     current: ObjectLiteral,
   ): void {
-    if (!ifMatch) return
-    const etag = this.etagOf(entitySetName, current)
-    if (etag === undefined || etagMatches(ifMatch, etag)) return
+    const failure = preconditionFailure(conditions, this.etagOf(entitySetName, current))
+    if (!failure) return
     throw new HttpException(
-      {
-        error: {
-          code: '412',
-          message: 'The ETag value does not match the current version of the entity',
-        },
-      },
-      412,
+      { error: { code: 'PreconditionFailed', message: failure.message } },
+      failure.status,
     )
+  }
+
+  /** {@link prepareWriteBody} with the module's `ignoreUnknownProperties` option. */
+  private prepareBody(
+    entityType: EdmEntityType,
+    body: Record<string, unknown>,
+    operation: WriteBodyOperation,
+  ): Record<string, unknown> {
+    return prepareWriteBody(entityType, body, operation, {
+      ignoreUnknown: this.options.ignoreUnknownProperties,
+    })
   }
 
   /** Run a POST through the entity set's write handlers. */
@@ -151,20 +183,6 @@ export class TypeOrmAutoHandler {
     const repo = this.resolveRepo(entitySetName)
     if (!this.scopes?.isScoped(entitySetName)) return work(repo)
     return repo.manager.transaction((manager) => work(manager.getRepository(repo.target), manager))
-  }
-
-  /** 400 when the body carries a key property whose value differs from the URL key. */
-  private assertBodyKeyMatches(
-    entityType: EdmEntityType,
-    body: Record<string, unknown>,
-    where: Record<string, unknown>,
-  ): void {
-    if (bodyKeyMismatch(entityType.keyProperties, body, where)) {
-      throw new HttpException(
-        { error: { code: '400', message: 'Key in body does not match URL key' } },
-        400,
-      )
-    }
   }
 
   /**
@@ -242,7 +260,13 @@ export class TypeOrmAutoHandler {
     const items = rawResult.items
     const hasMore = items.length > effectiveTop
 
-    const slicedItems = hasMore ? items.slice(0, effectiveTop) : items
+    const pageItems = hasMore ? items.slice(0, effectiveTop) : items
+    // Each entity of an ETag-enabled entity set carries its ETag (JSON §4.5.10); the response
+    // interceptor turns `__etag` into `@odata.etag`. Aggregated rows are not entities.
+    const slicedItems =
+      !rawResult.isAggregated && hasEntityETag(query.entitySetName, this.writes, this.etagProvider)
+        ? pageItems.map((item) => this.withETag(query.entitySetName, item as ObjectLiteral))
+        : pageItems
 
     let nextLink: string | undefined
     if (hasMore) {
@@ -384,7 +408,8 @@ export class TypeOrmAutoHandler {
     const currentEtag = this.etagOf(entitySetName, entity)
     if (!currentEtag) return entity
     // If-None-Match: return 304 signal when ETag matches (resource not modified)
-    if (ifNoneMatchHeader && etagMatches(ifNoneMatchHeader, currentEtag)) {
+    const ifNoneMatch = ifNoneMatchHeader ?? requestHeader('if-none-match')
+    if (ifNoneMatch && etagMatches(ifNoneMatch, currentEtag)) {
       return { __notModified: true, etag: currentEtag }
     }
     // Attach ETag to entity for interceptor to pick up
@@ -411,7 +436,7 @@ export class TypeOrmAutoHandler {
       )
     }
     const repo = this.resolveRepo(entitySetName)
-    const saved = await repo.save(repo.create(body as ObjectLiteral))
+    const saved = await repo.save(repo.create(this.prepareBody(entityType, body, 'create')))
     const locationUrl = entityLocation(
       this.options.serviceRoot,
       entitySetName,
@@ -468,7 +493,7 @@ export class TypeOrmAutoHandler {
     const scalarBody: Record<string, unknown> = {}
     const navData: Record<string, unknown[]> = {}
 
-    for (const [key, value] of Object.entries(body)) {
+    for (const [key, value] of Object.entries(this.prepareBody(entityType, body, 'create'))) {
       if (navPropNames.has(key) && Array.isArray(value)) {
         navData[key] = value as unknown[]
       } else if (!navPropNames.has(key)) {
@@ -550,7 +575,11 @@ export class TypeOrmAutoHandler {
       for (let index = 0; index < childItems.length; index++) {
         const childItem = childItems[index] as Record<string, unknown>
         // Inject FK from parent's PK — overrides any user-supplied value (T-10-09)
-        const childBody = { ...childItem, [fkColumnName]: parentKeyValue }
+        const childType = this.edmRegistry.getEntityType(childTypeName)
+        const childBody = {
+          ...(childType ? this.prepareBody(childType, childItem, 'create') : childItem),
+          [fkColumnName]: parentKeyValue,
+        }
 
         try {
           if (childEntityClass) {
@@ -625,14 +654,17 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+    const conditions = this.conditions(ifMatchHeader)
+    this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
+    // Key properties are ignored (OData §11.4.3: the URL key identifies the row), computed ones
+    // dropped and unknown ones refused (400) — before the row is touched.
+    const patch = this.prepareBody(entityType, body, 'update')
     const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
-    // ETag If-Match validation before update
-    this.assertIfMatch(entitySetName, ifMatchHeader, current)
+    // If-Match / If-None-Match validation before update
+    this.assertPreconditions(entitySetName, conditions, current)
 
     // Merge-patch onto the entity just loaded (no second SELECT, unlike preload()).
-    // Key properties in the body are ignored (OData §11.4.3): the URL key identifies the row.
-    const patch = withoutKeyProperties(entityType.keyProperties, body)
     return this.withETag(
       entitySetName,
       await repo.save(repo.merge(current, patch as ObjectLiteral)),
@@ -648,15 +680,16 @@ export class TypeOrmAutoHandler {
    *
    * Implementation:
    *  1. Parse key from URL
-   *  2. Validate body key matches URL key (reject 400 on mismatch)
+   *  2. Prepare the body: key properties are ignored (OData §11.4.3, the URL key decides the
+   *     row), computed properties dropped, unknown properties refused (400)
    *  3. Find existing entity — throw 404 if not found
-   *  4. Validate ETag If-Match (412 on mismatch)
+   *  4. Validate If-Match / If-None-Match (412), after 428 when If-Match is required
    *  5. Build full replacement using repo.metadata.columns:
    *     - Skip isPrimary, isCreateDate, isUpdateDate, isVersion columns
    *     - body value > column default > null (if nullable) > absent
    *  6. Save and return
    *
-   * Per T-10-01: body key mismatch rejected before DB write.
+   * Per T-10-01: a body key never redirects the write — the URL key is used.
    * Per T-10-02: repo.create() only maps declared entity columns — mass assignment safe.
    * Per T-10-03: managed columns (PK, timestamps, version) skipped.
    * Per T-10-04: ETag If-Match enforcement identical to handleUpdate().
@@ -671,15 +704,17 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+    const conditions = this.conditions(ifMatchHeader)
+    this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
 
-    // Validate key in body matches URL key (D-01 spec compliance — T-10-01)
-    this.assertBodyKeyMatches(entityType, body, where)
+    // Key properties in the body are ignored (OData §11.4.3, T-10-01): the URL key decides the row.
+    const values = this.prepareBody(entityType, body, 'replace')
 
     // Find existing entity to confirm it exists (rows outside the scope look absent: 404)
     const existing = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
 
-    // ETag If-Match validation (identical block to handleUpdate — T-10-04)
-    this.assertIfMatch(entitySetName, ifMatchHeader, existing)
+    // If-Match / If-None-Match validation (identical block to handleUpdate — T-10-04)
+    this.assertPreconditions(entitySetName, conditions, existing)
 
     // Build full replacement entity using column metadata (Pattern 1 from RESEARCH)
     // repo.metadata.columns gives us all column metadata without needing DataSource injection
@@ -695,8 +730,8 @@ export class TypeOrmAutoHandler {
       if (col.isCreateDate || col.isUpdateDate || col.isVersion) continue // TypeORM-managed
 
       const propName = col.propertyName
-      if (Object.prototype.hasOwnProperty.call(body, propName)) {
-        replacement[propName] = body[propName] // use body value
+      if (Object.prototype.hasOwnProperty.call(values, propName)) {
+        replacement[propName] = values[propName] // use body value
       } else if (col.default !== undefined) {
         replacement[propName] = col.default // reset to column default
       } else if (col.isNullable) {
@@ -725,13 +760,16 @@ export class TypeOrmAutoHandler {
   ): Promise<void> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
-    // Only load the row when the scope or an If-Match needs it; otherwise delete directly.
+    const conditions = this.conditions(ifMatchHeader)
+    this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
+    // Only load the row when the scope or a precondition needs it; otherwise delete directly.
     if (
       this.scopes?.isScoped(entitySetName) ||
-      (ifMatchHeader && hasEntityETag(entitySetName, this.writes, this.etagProvider))
+      conditions.ifNoneMatch ||
+      (conditions.ifMatch && hasEntityETag(entitySetName, this.writes, this.etagProvider))
     ) {
       const current = await this.findForWrite(entitySetName, keyStr, where, repo, manager)
-      this.assertIfMatch(entitySetName, ifMatchHeader, current)
+      this.assertPreconditions(entitySetName, conditions, current)
     }
 
     const result = await repo.delete(where)
@@ -742,8 +780,9 @@ export class TypeOrmAutoHandler {
 
   /**
    * Run a PATCH, PUT or DELETE through the entity set's write handlers. Rows outside the row-level
-   * scope answer 404 before the handler runs. The handler owns its transaction and If-Match
-   * check, so no lock is held while it runs.
+   * scope answer 404 before the handler runs, and a missing required `If-Match` 428. The
+   * handler owns its transaction and its If-Match / If-None-Match checks, so no lock is held
+   * while it runs.
    */
   private async writeWithHandlers(
     handlers: ODataWriteHandlers<any>,
@@ -755,12 +794,16 @@ export class TypeOrmAutoHandler {
   ): Promise<unknown> {
     const entityType = this.resolveEntityType(entitySetName)
     const where = parseODataKey(keyStr, entityType.keyProperties)
+    const conditions = this.conditions(ifMatchHeader)
+    this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
     if (this.scopes?.isScoped(entitySetName)) {
       await this.findForWrite(entitySetName, keyStr, where, this.resolveRepo(entitySetName))
     }
     const ctx = buildWriteContext(entitySetName, entityType, operation, {
       rawKey: keyStr,
-      ifMatch: ifMatchHeader,
+      ifMatch: conditions.ifMatch,
+      ifNoneMatch: conditions.ifNoneMatch,
+      requireIfMatch: this.writes?.requiresIfMatch(entitySetName) ?? false,
     })
     if (operation === 'delete') {
       if (!handlers.delete) throw writeNotAllowed(entitySetName, operation, handlers)
@@ -775,7 +818,8 @@ export class TypeOrmAutoHandler {
 
   /**
    * Handle OData PATCH — partial update (merge-patch semantics). See {@link update}.
-   * A key property in the body must match the URL key (400 otherwise).
+   * Key and computed properties in the body are ignored; unknown properties answer 400.
+   * `If-Match` defaults to the request's header; `If-None-Match` is read from the request.
    */
   async handleUpdate(
     keyStr: string,
@@ -825,6 +869,14 @@ export class TypeOrmAutoHandler {
       this.delete(keyStr, entitySetName, ifMatchHeader, repo, manager),
     )
   }
+}
+
+/** A header of the current OData request (`undefined` outside a request, or when absent). */
+function requestHeader(name: string): string | undefined {
+  const request = getODataRequestContext()?.request as
+    { headers?: Record<string, string | string[] | undefined> } | undefined
+  const value = request?.headers?.[name]
+  return Array.isArray(value) ? value.join(', ') : value || undefined
 }
 
 /**

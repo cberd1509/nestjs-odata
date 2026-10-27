@@ -53,6 +53,18 @@ interface ODataModuleOptions {
   errorMapper?: ODataErrorMapper
 
   /**
+   * RFC 5646 language of error messages, sent as Content-Language on every error response and
+   * $batch error part. Default: 'en'. A mapping's own `language` wins.
+   */
+  errorLanguage?: string
+
+  /**
+   * Drop write-body properties that are not in the entity type instead of answering
+   * 400 Bad Request (OData §11.4.2). Default: false.
+   */
+  ignoreUnknownProperties?: boolean
+
+  /**
    * @ODataController classes to register and path-patch with serviceRoot.
    * Controllers listed here have their route prefix set to `{serviceRoot}/{entitySetName}`.
    */
@@ -201,6 +213,8 @@ type ODataTypeOrmFeatureConfig = {
   readonly writeHandlers?: ODataWriteHandlersDefinition
   /** ETag source: a property name or `(entity) => value`. Overrides @ODataETag / @UpdateDateColumn */
   readonly etag?: ODataETagSource
+  /** PATCH/PUT/DELETE without If-Match answer 428; $metadata gets Core.OptimisticConcurrency */
+  readonly requireIfMatch?: boolean
 }
 type ODataTypeOrmFeatureItem = EntityClassOrSchema | ODataTypeOrmFeatureConfig
 ```

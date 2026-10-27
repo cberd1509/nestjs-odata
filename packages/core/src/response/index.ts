@@ -10,4 +10,11 @@ export type {
   ODataErrorMapping,
   ODataErrorResponse,
 } from './odata-error.js'
-export { buildODataErrorResponse, httpStatusToODataCode, odataErrorBody } from './odata-error.js'
+export {
+  buildODataErrorResponse,
+  DEFAULT_ERROR_LANGUAGE,
+  httpStatusToODataCode,
+  isLanguageTag,
+  odataErrorBody,
+} from './odata-error.js'
+export { resolveReturnPreference } from './prefer.js'

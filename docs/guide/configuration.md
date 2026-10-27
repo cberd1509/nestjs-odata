@@ -19,18 +19,20 @@ ODataModule.forRoot({
 
 ### Options reference
 
-| Option                 | Type                           | Default      | Description                                                                                                         |
-| ---------------------- | ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `serviceRoot`          | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                                                                     |
-| `namespace`            | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs                                                         |
-| `maxTop`               | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400                                                   |
-| `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                                                                 |
-| `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                                                                      |
-| `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive                                                |
-| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                                                                   |
-| `errorMapper`          | `ODataErrorMapper`             | —            | Maps any exception to an OData error (status, code, message, target, details). See [Error mapping](./error-mapping) |
-| `requireScope`         | `boolean`                      | `false`      | Fail closed when an entity set has no [row-level scope](./row-level-scopes)                                         |
-| `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot`                                            |
+| Option                    | Type                           | Default      | Description                                                                                                                      |
+| ------------------------- | ------------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `serviceRoot`             | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                                                                                  |
+| `namespace`               | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs                                                                      |
+| `maxTop`                  | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400                                                                |
+| `maxExpandDepth`          | `number`                       | `2`          | Maximum depth for `$expand` nesting                                                                                              |
+| `maxFilterDepth`          | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                                                                                   |
+| `unmappedTypeStrategy`    | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive                                                             |
+| `maxDeepInsertDepth`      | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                                                                                |
+| `errorMapper`             | `ODataErrorMapper`             | —            | Maps any exception to an OData error (status, code, message, target, details). See [Error mapping](./error-mapping)              |
+| `requireScope`            | `boolean`                      | `false`      | Fail closed when an entity set has no [row-level scope](./row-level-scopes)                                                      |
+| `errorLanguage`           | `string`                       | `'en'`       | RFC 5646 language of error messages, sent as `Content-Language` on errors. See [Error mapping](./error-mapping#content-language) |
+| `ignoreUnknownProperties` | `boolean`                      | `false`      | Drop write-body properties that are not in the entity type instead of answering 400. See [CRUD](./crud#request-bodies)           |
+| `controllers`             | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot`                                                         |
 
 ::: warning maxTop is a hard limit
 Unlike some OData implementations, `nestjs-odata` rejects `$top` values that exceed `maxTop` with HTTP 400. It does not silently clamp. This ensures clients know exactly what they are receiving.
@@ -109,11 +111,21 @@ ODataTypeOrmModule.forFeature([{ entity: Project, scope: ownRows }, Task], {
 
 `writeHandlers` on an item routes the entity set's POST, PATCH, PUT, DELETE and deep insert
 (also in `$batch`) through your own code, and `etag` sets where its ETag comes from (a property
-name or a function). See [Custom write handlers](./write-handlers).
+name or a function). See [Custom write handlers](./write-handlers). `requireIfMatch: true`
+makes PATCH, PUT and DELETE without `If-Match` answer `428 Precondition Required` and
+advertises `Core.OptimisticConcurrency` in `$metadata` (see
+[CRUD: Requiring If-Match](./crud#requiring-if-match)).
 
 ```typescript
 ODataTypeOrmModule.forFeature(
-  [{ entity: Account, writeHandlers: AccountWriteHandlers, etag: 'version' }],
+  [
+    {
+      entity: Account,
+      writeHandlers: AccountWriteHandlers,
+      etag: 'version',
+      requireIfMatch: true,
+    },
+  ],
   { imports: [AccountsModule] }, // modules the handlers class injects from
 )
 ```

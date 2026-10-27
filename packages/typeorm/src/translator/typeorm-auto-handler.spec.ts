@@ -731,7 +731,7 @@ describe('TypeOrmAutoHandler', () => {
 
   describe('handleDelete() with If-Match', () => {
     it('Test E4: handleDelete with stale If-Match throws PreconditionFailedException (412)', async () => {
-      const entity = { id: 1, name: 'Widget' }
+      const entity = { id: 1, name: 'Widget', updatedAt: new Date() }
       const { repo, findOne } = makeMockRepo()
       findOne.mockResolvedValue(entity)
 
@@ -806,15 +806,16 @@ describe('TypeOrmAutoHandler', () => {
       expect(result).toBeDefined()
     })
 
-    it('Test R3: body key mismatch returns 400 HttpException', async () => {
-      const { repo, findOne } = makeMockRepo(replaceColumns)
+    it('Test R3: a body key that differs from the URL key is ignored (OData §11.4.3)', async () => {
+      const { repo, findOne, create, save } = makeMockRepo(replaceColumns)
       findOne.mockResolvedValue({ id: 1, name: 'Widget', price: 10 })
+      create.mockImplementation((v: ObjectLiteral) => v)
+      save.mockImplementation((v: ObjectLiteral) => Promise.resolve(v))
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
-      // body has id=2 but URL key is 1 — should reject
-      await expect(
-        autoHandler.handleReplace('1', { id: 2, price: 50 }, 'Products'),
-      ).rejects.toMatchObject({ status: 400 })
+      // body has id=2 but URL key is 1 — the URL key decides the row
+      await autoHandler.handleReplace('1', { id: 2, price: 50 }, 'Products')
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: 1, price: 50 }))
     })
 
     it('Test R4: throws NotFoundException when entity does not exist', async () => {
@@ -890,7 +891,9 @@ describe('TypeOrmAutoHandler', () => {
       properties: [
         { name: 'id', type: 'Edm.Int32', nullable: false },
         { name: 'quantity', type: 'Edm.Int32', nullable: false },
+        { name: 'unitPrice', type: 'Edm.Decimal', nullable: false },
         { name: 'orderId', type: 'Edm.Int32', nullable: false },
+        { name: 'productId', type: 'Edm.Int32', nullable: false },
       ],
       navigationProperties: [],
       keyProperties: ['id'],

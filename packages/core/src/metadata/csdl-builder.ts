@@ -6,6 +6,10 @@ import type { EdmProperty, EdmNavigationProperty } from '../edm/edm-types.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleOptions } from '../odata.module.js'
 
+/** The OASIS Core vocabulary, referenced when `$metadata` uses one of its terms. */
+const CORE_VOCABULARY_URI =
+  'https://oasis-tcs.github.io/odata-vocabularies/vocabularies/Org.OData.Core.V1.xml'
+
 /**
  * CsdlBuilder — builds OData v4 CSDL XML from the EdmRegistry.
  *
@@ -40,9 +44,19 @@ export class CsdlBuilder {
     const entityTypes = Array.from(this.edmRegistry.getEntityTypes().values())
     const entitySets = Array.from(this.edmRegistry.getEntitySets().values())
 
+    const usesCore =
+      entityTypes.some((t) => t.properties.some((p) => p.computed)) ||
+      entitySets.some((s) => s.optimisticConcurrency !== undefined)
+
     const parts: string[] = []
     parts.push('<?xml version="1.0" encoding="UTF-8"?>')
     parts.push('<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">')
+    if (usesCore) {
+      // Core.Computed / Core.OptimisticConcurrency come from the Core vocabulary (CSDL XML §3.3).
+      parts.push(`  <edmx:Reference Uri="${CORE_VOCABULARY_URI}">`)
+      parts.push('    <edmx:Include Namespace="Org.OData.Core.V1" Alias="Core"/>')
+      parts.push('  </edmx:Reference>')
+    }
     parts.push('  <edmx:DataServices>')
     parts.push(
       `    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="${namespace}">`,
@@ -99,6 +113,10 @@ export class CsdlBuilder {
     if (prop.maxLength !== undefined) {
       xml += ` MaxLength="${prop.maxLength}"`
     }
+    if (prop.computed) {
+      // Computed by the service: clients' values are ignored on writes (Protocol §11.4.2).
+      return `${xml}>\n          <Annotation Term="Core.Computed" Bool="true"/>\n        </Property>`
+    }
     xml += '/>'
     return xml
   }
@@ -112,6 +130,24 @@ export class CsdlBuilder {
   }
 
   private buildEntitySetXml(entitySet: EdmEntitySet, namespace: string): string {
-    return `        <EntitySet Name="${entitySet.name}" EntityType="${namespace}.${entitySet.entityTypeName}"/>`
+    const open = `        <EntitySet Name="${entitySet.name}" EntityType="${namespace}.${entitySet.entityTypeName}"`
+    const paths = entitySet.optimisticConcurrency
+    if (paths === undefined) return `${open}/>`
+    // Writes require If-Match (428 otherwise): OData-Protocol 4.01 §11.4.1.1.
+    const collection =
+      paths.length === 0
+        ? '            <Collection/>'
+        : [
+            '            <Collection>',
+            ...paths.map((p) => `              <PropertyPath>${p}</PropertyPath>`),
+            '            </Collection>',
+          ].join('\n')
+    return [
+      `${open}>`,
+      '          <Annotation Term="Core.OptimisticConcurrency">',
+      collection,
+      '          </Annotation>',
+      '        </EntitySet>',
+    ].join('\n')
   }
 }

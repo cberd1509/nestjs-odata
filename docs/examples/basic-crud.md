@@ -184,15 +184,15 @@ curl 'http://localhost:3000/odata/Products?$filter=inStock eq true&$select=id,na
 curl 'http://localhost:3000/odata/Products/$count?$filter=inStock eq true'
 
 # Get single product
-curl http://localhost:3000/odata/Products/1
+curl 'http://localhost:3000/odata/Products(1)'
 
 # Update price
-curl -X PATCH http://localhost:3000/odata/Products/1 \
+curl -X PATCH 'http://localhost:3000/odata/Products(1)' \
   -H 'Content-Type: application/json' \
   -d '{"price":7.99}'
 
 # Delete product
-curl -X DELETE http://localhost:3000/odata/Products/1
+curl -X DELETE 'http://localhost:3000/odata/Products(1)'
 ```
 
 ## Expected responses

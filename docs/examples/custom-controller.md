@@ -129,9 +129,7 @@ import { HealthModule } from './health/health.module'
 
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      /* ... */
-    }),
+    TypeOrmModule.forRoot({/* ... */}),
     ODataModule.forRoot({
       serviceRoot: '/odata',
       namespace: 'Default',
@@ -153,7 +151,7 @@ Routes are completely isolated:
 | ---------------------------------- | -------------------- | ----------------------------------- |
 | `GET /odata/$metadata`             | Auto-generated       | CSDL XML                            |
 | `GET /odata/Products`              | `@ODataGet`          | OData collection with query options |
-| `GET /odata/Products/:key`         | `@ODataGetByKey`     | Single entity                       |
+| `GET /odata/Products(key)`         | `@ODataGetByKey`     | Single entity                       |
 | `POST /odata/Products`             | `@ODataPost`         | OData create                        |
 | `POST /odata/Products/bulk-import` | `@Post`              | Custom REST endpoint                |
 | `GET /odata/Products/featured`     | `@Get`               | Custom REST endpoint                |

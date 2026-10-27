@@ -55,7 +55,8 @@ Injectable service that handles OData requests automatically using the TypeORM r
 async handleGet(query: ODataQuery, requestUrl: string): Promise<ODataQueryResult>
 ```
 
-Handle an OData GET collection request.
+Handle an OData GET collection request. For an entity set with an ETag, each item carries it
+(sent as `@odata.etag` on each entity).
 
 - Resolves `EdmEntityType` via `EdmRegistry`
 - Clamps `$top` to the configured `maxTop` (default: 1000)
@@ -72,10 +73,14 @@ Handle an OData GET collection request.
 ### handleGetByKey()
 
 ```typescript
-async handleGetByKey(keyStr: string, entitySetName: string): Promise<unknown>
+async handleGetByKey(
+  keyStr: string,
+  entitySetName: string,
+  ifNoneMatch?: string, // default: the request's If-None-Match
+): Promise<unknown>
 ```
 
-Handle OData GET by key -- single entity retrieval. Throws `NotFoundException` (HTTP 404) if the entity does not exist.
+Handle OData GET by key -- single entity retrieval. Throws `NotFoundException` (HTTP 404) if the entity does not exist. A matching `If-None-Match` answers `304 Not Modified`.
 
 **Parameters:**
 
@@ -93,7 +98,7 @@ async handleCreate(
 ): Promise<{ entity: unknown; locationUrl: string }>
 ```
 
-Handle OData POST -- create a new entity. Returns the created entity and a `locationUrl` for the HTTP `Location` header. Unknown fields in the body are ignored (the entity class acts as a whitelist).
+Handle OData POST -- create a new entity. Returns the created entity and a `locationUrl` (the canonical `{serviceRoot}/{Set}({key})`) for the HTTP `Location` header. Computed properties in the body are ignored; a property that is not in the entity type answers `400` (or is dropped with `ignoreUnknownProperties`).
 
 **Parameters:**
 
@@ -108,11 +113,12 @@ Handle OData POST -- create a new entity. Returns the created entity and a `loca
 async handleUpdate(
   keyStr: string,
   body: Record<string, unknown>,
-  entitySetName: string
+  entitySetName: string,
+  ifMatch?: string, // default: the request's If-Match
 ): Promise<unknown>
 ```
 
-Handle OData PATCH -- partial update with merge-patch semantics. Only changed fields need to be sent. Throws `NotFoundException` if the entity does not exist.
+Handle OData PATCH -- partial update with merge-patch semantics. Only changed fields need to be sent. Throws `NotFoundException` if the entity does not exist. Key and computed properties in the body are ignored, unknown ones answer `400`. Preconditions: `If-Match` that doesn't match or `If-None-Match` (read from the request) that does → `412`; no `If-Match` on an entity set with `requireIfMatch` → `428`. `handleReplace(keyStr, body, entitySetName, ifMatch?)` (PUT) applies the same rules; a body key that differs from the URL key is ignored.
 
 **Parameters:**
 
@@ -125,10 +131,10 @@ Handle OData PATCH -- partial update with merge-patch semantics. Only changed fi
 ### handleDelete()
 
 ```typescript
-async handleDelete(keyStr: string, entitySetName: string): Promise<void>
+async handleDelete(keyStr: string, entitySetName: string, ifMatch?: string): Promise<void>
 ```
 
-Handle OData DELETE -- remove an entity. Returns `void` (HTTP 204 No Content). Throws `NotFoundException` if the entity does not exist.
+Handle OData DELETE -- remove an entity. Returns `void` (HTTP 204 No Content). Throws `NotFoundException` if the entity does not exist. Same `If-Match` / `If-None-Match` / `requireIfMatch` preconditions as `handleUpdate`.
 
 **Parameters:**
 
@@ -270,6 +276,19 @@ namespace from a navigation type) is exported by `@nestjs-odata/core`.
 See [Custom write handlers](../guide/write-handlers).
 
 ```typescript
+interface ODataWriteContext {
+  entitySetName: string
+  entityType: EdmEntityType
+  operation: ODataWriteOperation
+  rawKey?: string
+  ifMatch?: string
+  ifNoneMatch?: string
+  requireIfMatch?: boolean
+  executionContext?: ExecutionContext
+  request?: unknown
+  manager?: EntityManager
+  batch?: { contentId?: string; inChangeset: boolean }
+}
 interface ODataWriteHandlers<TEntity> {
   create?: (body, ctx: ODataWriteContext) => TEntity | Promise<TEntity>
   deepInsert?(body, ctx): TEntity | Promise<TEntity>
@@ -298,6 +317,14 @@ function resolveEntityETag(
   etagProvider: IETagProvider | undefined,
 ): string | undefined
 const ODATA_CHANGESET_RUNNER: symbol // DI token set by ODataTypeOrmModule.forRoot()
+// The repository path's body rules: drop computed (and, for update/replace, key) properties
+// and annotations, 400 for unknown properties unless ignoreUnknown.
+function prepareWriteBody(
+  entityType: EdmEntityType,
+  body: Record<string, unknown>,
+  operation: 'create' | 'update' | 'replace',
+  options?: { ignoreUnknown?: boolean },
+): Record<string, unknown>
 ```
 
 `TypeOrmAutoHandler.handleCreate`, `handleDeepCreate`, `handleUpdate`, `handleReplace` and
