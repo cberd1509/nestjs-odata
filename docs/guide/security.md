@@ -173,14 +173,32 @@ Validation and parse errors include additional context to help developers diagno
 ```json
 {
   "error": {
-    "code": "InvalidQueryOption",
-    "message": "Unknown property 'naem' in $select for entity set Products",
-    "details": {
-      "availableProperties": ["id", "name", "price", "inStock"]
-    }
+    "code": "BadRequest",
+    "message": "Property 'naem' not found on entity 'Product'",
+    "details": [
+      {
+        "code": "AvailableProperties",
+        "message": "Available properties: id, name, price, inStock",
+        "target": "availableProperties",
+        "value": ["id", "name", "price", "inStock"]
+      }
+    ]
   }
 }
 ```
+
+Every entry of `details` has a `code` and a `message` (OData JSON Format 4.01 §21.1); `value`
+is an extra, service-defined member. A parse error's detail is
+`{ "code": "QueryOption", "message": "Error near: …", "target": "…" }`.
+
+### Mapping your own errors
+
+Unknown exceptions become a generic 500, and the message of every 5xx error (including a
+`ServiceUnavailableException`'s) is replaced by a generic one, so internal details never leak.
+This holds for `$batch` parts too. To give clients
+meaningful errors for your own exception types (or for database errors such as unique
+violations), use the [`errorMapper`](./error-mapping) option. Whatever it returns is sent to the
+client as is.
 
 ## Parameterized queries
 

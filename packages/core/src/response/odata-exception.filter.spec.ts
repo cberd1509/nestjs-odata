@@ -94,7 +94,14 @@ describe('ODataExceptionFilter', () => {
 
     expect(res.status).toHaveBeenCalledWith(400)
     const body = res.json.mock.calls[0][0] as { error: { details: unknown[] } }
-    expect(body.error.details).toEqual([{ target: '...Price gtt 5...' }])
+    // JSON §21.1: every detail has a non-empty code and message.
+    expect(body.error.details).toEqual([
+      {
+        code: 'QueryOption',
+        message: 'Error near: ...Price gtt 5...',
+        target: '...Price gtt 5...',
+      },
+    ])
   })
 
   it('Test 12c: ODataParseError without queryContext has empty details', () => {
@@ -122,7 +129,12 @@ describe('ODataExceptionFilter', () => {
     expect(res.status).toHaveBeenCalledWith(400)
     const body = res.json.mock.calls[0][0] as { error: { details: unknown[] } }
     expect(body.error.details).toEqual([
-      { target: 'availableProperties', value: ['id', 'name', 'price'] },
+      {
+        code: 'AvailableProperties',
+        message: 'Available properties: id, name, price',
+        target: 'availableProperties',
+        value: ['id', 'name', 'price'],
+      },
     ])
   })
 

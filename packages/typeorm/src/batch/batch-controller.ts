@@ -22,6 +22,8 @@ import {
   Inject,
   HttpStatus,
   Optional,
+  NotFoundException,
+  UseFilters,
 } from '@nestjs/common'
 import type { IncomingMessage } from 'http'
 import { DataSource, type EntityManager, type ObjectLiteral } from 'typeorm'
@@ -46,7 +48,10 @@ export interface BatchResponse {
   json(body: unknown): this
 }
 import {
+  buildODataErrorResponse,
   EdmRegistry,
+  ODataExceptionFilter,
+  odataErrorBody,
   ETAG_PROVIDER,
   getODataRequestContext,
   ODATA_MODULE_OPTIONS,
@@ -93,60 +98,9 @@ class ChangesetOperationError extends Error {
 /** HTTP methods a write handler serves. */
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE'])
 
-/**
- * Build an OData error response body (T-05-05).
- * Never exposes stack traces or internal server details.
- */
-function buildODataError(code: string, message: string): string {
-  return JSON.stringify({
-    error: {
-      code,
-      message,
-      details: [],
-    },
-  })
-}
-
-/**
- * Map HTTP status to OData error code string.
- */
-function statusToCode(status: number): string {
-  const codes: Record<number, string> = {
-    400: 'BadRequest',
-    401: 'Unauthorized',
-    403: 'Forbidden',
-    404: 'NotFound',
-    405: 'MethodNotAllowed',
-    409: 'Conflict',
-    412: 'PreconditionFailed',
-    500: 'InternalServerError',
-  }
-  return codes[status] ?? 'Error'
-}
-
-/** 404 part for an entity that does not exist or is outside its row-level scope. */
-function notFoundPart(
-  contentId: string | undefined,
-  entitySetName: string,
-  keyStr: string,
-): BatchResponsePart {
-  return {
-    contentId,
-    statusCode: 404,
-    headers: {},
-    body: buildODataError('NotFound', `Entity '${entitySetName}' with key '${keyStr}' not found`),
-  }
-}
-
-/** The first HttpException in an error's `cause` chain (depth-limited). */
-function findHttpException(err: unknown): HttpException | undefined {
-  let current = err
-  for (let depth = 0; depth < 5 && current; depth++) {
-    if (current instanceof HttpException) return current
-    current = (current as { cause?: unknown }).cause
-  }
-  return undefined
-}
+/** Where a batch error came from, for the error mapper's context (part, or changeset). */
+type ErrorOrigin = Pick<BatchRequestPart, 'contentId'> &
+  Partial<Pick<BatchRequestPart, 'method' | 'url'>>
 
 /**
  * Parse entity set name and optional key from a sub-request URL.
@@ -186,6 +140,7 @@ function parseEntityUrl(url: string): { entitySetName: string; key?: string } | 
  * in ODataTypeOrmModule.forFeature().
  */
 @Controller()
+@UseFilters(ODataExceptionFilter)
 export class BatchController {
   constructor(
     private readonly dataSource: DataSource,
@@ -268,15 +223,11 @@ export class BatchController {
     if (!ifMatch) return undefined
     const etag = resolveEntityETag(entitySetName, entity, this.writes, this.etagProvider)
     if (etag === undefined || etagMatches(ifMatch, etag)) return undefined
-    return {
+    return this.errorPart(412, 'The ETag value does not match the current version of the entity', {
       contentId,
-      statusCode: 412,
-      headers: {},
-      body: buildODataError(
-        'PreconditionFailed',
-        'The ETag value does not match the current version of the entity',
-      ),
-    }
+      method: part.method,
+      url: part.url,
+    })
   }
 
   /**
@@ -322,19 +273,14 @@ export class BatchController {
     }
 
     if (key === undefined) {
-      return {
-        contentId: part.contentId,
-        statusCode: 400,
-        headers: {},
-        body: buildODataError('BadRequest', `${method} requires a key: ${part.url}`),
-      }
+      return this.errorPart(400, `${method} requires a key: ${part.url}`, part)
     }
     const where = parseODataKey(key, entityType.keyProperties)
     if (
       this.scopes?.isScoped(entitySetName) &&
       !(await this.findScoped(entitySetName, entityClass, where, manager, 'write'))
     ) {
-      return notFoundPart(part.contentId, entitySetName, key)
+      return this.notFound(entitySetName, key, part)
     }
 
     const ctxFor = (operation: 'update' | 'replace' | 'delete') =>
@@ -383,9 +329,7 @@ export class BatchController {
     try {
       rawBody = await this.extractRawBody(req)
     } catch (err) {
-      res
-        .status(HttpStatus.BAD_REQUEST)
-        .json({ error: { code: 'BadRequest', message: String(err), details: [] } })
+      res.status(HttpStatus.BAD_REQUEST).json(odataErrorBody('BadRequest', String(err)))
       return
     }
 
@@ -397,13 +341,14 @@ export class BatchController {
     try {
       boundary = extractBoundary(contentType)
     } catch {
-      res.status(HttpStatus.BAD_REQUEST).json({
-        error: {
-          code: 'BadRequest',
-          message: 'Missing or invalid boundary in Content-Type for $batch request',
-          details: [],
-        },
-      })
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json(
+          odataErrorBody(
+            'BadRequest',
+            'Missing or invalid boundary in Content-Type for $batch request',
+          ),
+        )
       return
     }
 
@@ -412,9 +357,7 @@ export class BatchController {
       parsed = parseBatchBody(rawBody, boundary)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Malformed batch body'
-      res
-        .status(HttpStatus.BAD_REQUEST)
-        .json({ error: { code: 'BadRequest', message: msg, details: [] } })
+      res.status(HttpStatus.BAD_REQUEST).json(odataErrorBody('BadRequest', msg))
       return
     }
 
@@ -497,7 +440,7 @@ export class BatchController {
       }
       return await this.dispatchWithManager(part, this.dataSource.manager)
     } catch (err) {
-      return this.buildErrorResponse(err, part.contentId)
+      return this.buildErrorResponse(err, part)
     }
   }
 
@@ -599,12 +542,7 @@ export class BatchController {
   ): Promise<BatchResponsePart> {
     const parsed = parseEntityUrl(part.url)
     if (!parsed) {
-      return {
-        contentId: part.contentId,
-        statusCode: 400,
-        headers: {},
-        body: buildODataError('BadRequest', `Cannot parse entity URL: ${part.url}`),
-      }
+      return this.errorPart(400, `Cannot parse entity URL: ${part.url}`, part)
     }
 
     const { entitySetName, key } = parsed
@@ -612,36 +550,18 @@ export class BatchController {
     // Resolve entity type from registry
     const entitySet = this.edmRegistry.getEntitySet(entitySetName)
     if (!entitySet) {
-      return {
-        contentId: part.contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError('NotFound', `Entity set '${entitySetName}' not found`),
-      }
+      return this.errorPart(404, `Entity set '${entitySetName}' not found`, part)
     }
 
     const entityType = this.edmRegistry.getEntityType(entitySet.entityTypeName)
     if (!entityType) {
-      return {
-        contentId: part.contentId,
-        statusCode: 404,
-        headers: {},
-        body: buildODataError('NotFound', `Entity type '${entitySet.entityTypeName}' not found`),
-      }
+      return this.errorPart(404, `Entity type '${entitySet.entityTypeName}' not found`, part)
     }
 
     // Resolve the TypeORM entity class for this entity set
     const entityClass = this.resolveEntityClass(entityType.name)
     if (!entityClass) {
-      return {
-        contentId: part.contentId,
-        statusCode: 500,
-        headers: {},
-        body: buildODataError(
-          'InternalServerError',
-          `Entity class not found for '${entityType.name}'`,
-        ),
-      }
+      return this.errorPart(500, `Entity class not found for '${entityType.name}'`, part)
     }
 
     const method = part.method.toUpperCase()
@@ -670,7 +590,7 @@ export class BatchController {
             entityType.keyProperties,
             entityClass,
             manager,
-            part.contentId,
+            part,
           )
         }
         // Collection GET — not supported in batch (read-only outside changeset)
@@ -685,12 +605,7 @@ export class BatchController {
         )
       } else if (method === 'PATCH') {
         if (key === undefined) {
-          return {
-            contentId: part.contentId,
-            statusCode: 400,
-            headers: {},
-            body: buildODataError('BadRequest', `PATCH requires a key: ${part.url}`),
-          }
+          return this.errorPart(400, `PATCH requires a key: ${part.url}`, part)
         }
         return await this.dispatchUpdate(
           key,
@@ -702,12 +617,7 @@ export class BatchController {
         )
       } else if (method === 'PUT') {
         if (key === undefined) {
-          return {
-            contentId: part.contentId,
-            statusCode: 400,
-            headers: {},
-            body: buildODataError('BadRequest', `PUT requires a key: ${part.url}`),
-          }
+          return this.errorPart(400, `PUT requires a key: ${part.url}`, part)
         }
         return await this.dispatchReplace(
           key,
@@ -719,12 +629,7 @@ export class BatchController {
         )
       } else if (method === 'DELETE') {
         if (key === undefined) {
-          return {
-            contentId: part.contentId,
-            statusCode: 400,
-            headers: {},
-            body: buildODataError('BadRequest', `DELETE requires a key: ${part.url}`),
-          }
+          return this.errorPart(400, `DELETE requires a key: ${part.url}`, part)
         }
         return await this.dispatchDelete(
           key,
@@ -737,14 +642,9 @@ export class BatchController {
         )
       }
 
-      return {
-        contentId: part.contentId,
-        statusCode: 405,
-        headers: {},
-        body: buildODataError('MethodNotAllowed', `Method '${method}' not supported in $batch`),
-      }
+      return this.errorPart(405, `Method '${method}' not supported in $batch`, part)
     } catch (err) {
-      return this.buildErrorResponse(err, part.contentId)
+      return this.buildErrorResponse(err, part)
     }
   }
 
@@ -755,11 +655,12 @@ export class BatchController {
     keyProperties: readonly string[],
     entityClass: EntityClass,
     manager: EntityManager,
-    contentId?: string,
+    part: BatchRequestPart,
   ): Promise<BatchResponsePart> {
+    const contentId = part.contentId
     const where = parseODataKey(keyStr, keyProperties)
     const entity = await this.findScoped(entitySetName, entityClass, where, manager, 'entity')
-    if (!entity) return notFoundPart(contentId, entitySetName, keyStr)
+    if (!entity) return this.notFound(entitySetName, keyStr, part)
     return this.entityPart(contentId, 200, entitySetName, entity)
   }
 
@@ -825,7 +726,7 @@ export class BatchController {
     const where = parseODataKey(keyStr, keyProperties)
     const EntityCls = entityClass as new () => ObjectLiteral
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
+    if (!existing) return this.notFound(entitySetName, keyStr, part)
     const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
     if (stale) return stale
     // Merge patch fields onto the existing entity, then save. Key properties in the body are
@@ -859,16 +760,11 @@ export class BatchController {
 
     // Validate key in body matches URL key (T-10-01)
     if (bodyKeyMismatch(entityType.keyProperties, body, where)) {
-      return {
-        contentId: part.contentId,
-        statusCode: 400,
-        headers: {},
-        body: buildODataError('BadRequest', 'Key in body does not match URL key'),
-      }
+      return this.errorPart(400, 'Key in body does not match URL key', part)
     }
 
     const existing = await this.findScoped(entitySetName, entityClass, where, manager, 'write')
-    if (!existing) return notFoundPart(part.contentId, entitySetName, keyStr)
+    if (!existing) return this.notFound(entitySetName, keyStr, part)
     const stale = this.preconditionFailed(part.contentId, entitySetName, existing, part)
     if (stale) return stale
 
@@ -912,7 +808,7 @@ export class BatchController {
     contentId?: string,
   ): Promise<BatchResponsePart> {
     const where = parseODataKey(keyStr, keyProperties)
-    const notFound = () => notFoundPart(contentId, entitySetName, keyStr)
+    const notFound = () => this.notFound(entitySetName, keyStr, part)
     const ifMatch = part.headers['if-match']
     // Load the row only when the scope or an If-Match needs it.
     if (
@@ -935,70 +831,40 @@ export class BatchController {
   }
 
   /**
-   * Build an OData error response part from an exception.
+   * Build an OData error response part from an exception, through the application's
+   * `errorMapper` (ODataModule.forRoot() option) and then the default mapping. The library's
+   * own errors (404, a missing key, 412, …) go through here too, so the mapper sees every
+   * failing part. Without `origin`, the error belongs to a changeset as a whole.
    * Never exposes stack traces (T-05-05).
    */
-  private buildErrorResponse(err: unknown, contentId?: string): BatchResponsePart {
-    // An HttpException carrying an OData error envelope (405 from write handlers, 412, …) keeps
-    // its code and message. Errors wrapped by application code are followed through `cause`.
-    const http = findHttpException(err)
-    if (http && http.getStatus() < 500) {
-      const response = http.getResponse() as { error?: { code?: unknown; message?: unknown } }
-      if (typeof response?.error?.message === 'string') {
-        return {
-          contentId,
-          statusCode: http.getStatus(),
-          // OData §9.2.2: a 405 lists the allowed methods.
-          headers: http instanceof WriteNotAllowedException ? { allow: http.allow } : {},
-          body: JSON.stringify({ error: response.error }),
-        }
-      }
-    }
-    if (http) err = http
-    if (err instanceof Error) {
-      // Check for NestJS NotFoundException
-      if (
-        err.constructor.name === 'NotFoundException' ||
-        (err as { status?: number }).status === 404
-      ) {
-        return {
-          contentId,
-          statusCode: 404,
-          headers: {},
-          body: buildODataError('NotFound', err.message),
-        }
-      }
-      // Check for bad request / validation errors
-      if (
-        err.constructor.name === 'ODataValidationError' ||
-        err.constructor.name === 'ODataParseError' ||
-        (err as { status?: number }).status === 400
-      ) {
-        return {
-          contentId,
-          statusCode: 400,
-          headers: {},
-          body: buildODataError('BadRequest', err.message),
-        }
-      }
-    }
-
-    const status = (err as { status?: number })?.status
-    if (typeof status === 'number' && status >= 400 && status < 500) {
-      return {
-        contentId,
-        statusCode: status,
-        headers: {},
-        body: buildODataError(statusToCode(status), (err as Error).message ?? 'Request error'),
-      }
-    }
-
+  private buildErrorResponse(err: unknown, origin?: ErrorOrigin): BatchResponsePart {
+    const { status, body } = buildODataErrorResponse(err, this.options.errorMapper, {
+      request: getODataRequestContext()?.request,
+      batch: origin
+        ? { method: origin.method, url: origin.url, contentId: origin.contentId }
+        : { changeset: true },
+    })
+    // OData §9.2.2: a 405 lists the allowed methods.
+    const notAllowed = err instanceof WriteNotAllowedException ? err : undefined
     return {
-      contentId,
-      statusCode: 500,
-      headers: {},
-      body: buildODataError('InternalServerError', 'An unexpected error occurred.'),
+      contentId: origin?.contentId,
+      statusCode: status,
+      headers: notAllowed && status === 405 ? { allow: notAllowed.allow } : {},
+      body: JSON.stringify(body),
     }
+  }
+
+  /** An error part raised by the library itself (`HttpException(message, status)`). */
+  private errorPart(status: number, message: string, origin: ErrorOrigin): BatchResponsePart {
+    return this.buildErrorResponse(new HttpException(message, status), origin)
+  }
+
+  /** 404 part for an entity that does not exist or is outside its row-level scope. */
+  private notFound(entitySetName: string, keyStr: string, origin: ErrorOrigin): BatchResponsePart {
+    return this.buildErrorResponse(
+      new NotFoundException(`Entity '${entitySetName}' with key '${keyStr}' not found`),
+      origin,
+    )
   }
 
   /**

@@ -1,22 +1,16 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common'
-import { ODataParseError } from '../parser/errors.js'
-import { ODataValidationError } from '../query/odata-validation.error.js'
+import { ArgumentsHost, Catch, ExceptionFilter, Inject, Injectable, Optional } from '@nestjs/common'
+import { ODATA_MODULE_OPTIONS } from '../tokens.js'
+import type { ODataModuleResolvedOptions } from '../odata.module.js'
+import { buildODataErrorResponse } from './odata-error.js'
 
 /** Minimal shape of an HTTP response object (Express or Fastify compatible) */
 interface HttpResponse {
   status(code: number): this
   json(body: unknown): this
-}
-
-/**
- * OData v4 error response body shape (per OData v4 Part 1 section 9.4).
- */
-interface ODataErrorBody {
-  error: {
-    code: string
-    message: string
-    details: unknown[]
-  }
+  /** Express (and Node) */
+  setHeader?(name: string, value: string): unknown
+  /** Fastify */
+  header?(name: string, value: string): unknown
 }
 
 /**
@@ -25,90 +19,42 @@ interface ODataErrorBody {
  * Per D-09: all errors are formatted as { error: { code, message, details } }.
  * Per D-11, T-03-08: never includes stack traces or internal server details.
  *
- * Handled exception types:
+ * The application's `errorMapper` (ODataModule.forRoot() option) runs first and may map any
+ * exception to an OData error (code, message, status, target, details). When it returns
+ * `undefined`, the default mapping applies:
  *   - ODataParseError    -> HTTP 400, code 'BadRequest', user message
  *   - ODataValidationError -> HTTP 400, code 'BadRequest', user message
  *   - HttpException      -> uses exception's HTTP status code, generic OData code
  *   - All others         -> HTTP 500, code 'InternalServerError', generic message (no details leaked)
  *
+ * Applied by the OData route decorators (`@ODataGet`, `@ODataPost`, …), to `$metadata` and to
+ * `$batch`. Other routes, including plain Nest routes on an `@ODataController` class, keep the
+ * application's own (global) filters; add `@UseFilters(ODataExceptionFilter)` to opt one in.
+ *
  * Zero TypeORM imports — per PKG-01 architecture constraint.
  */
 @Catch()
+@Injectable()
 export class ODataExceptionFilter implements ExceptionFilter {
+  constructor(
+    @Optional()
+    @Inject(ODATA_MODULE_OPTIONS)
+    private readonly options?: Pick<ODataModuleResolvedOptions, 'errorMapper'>,
+  ) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp()
-    const response = ctx.getResponse<HttpResponse>()
-
-    let status: number
-    let body: ODataErrorBody
-
-    if (exception instanceof ODataParseError) {
-      status = HttpStatus.BAD_REQUEST
-      const details: unknown[] = exception.queryContext ? [{ target: exception.queryContext }] : []
-      body = {
-        error: {
-          code: 'BadRequest',
-          message: exception.message,
-          details,
-        },
-      }
-    } else if (exception instanceof ODataValidationError) {
-      status = HttpStatus.BAD_REQUEST
-      const details: unknown[] =
-        exception.availableProperties && exception.availableProperties.length > 0
-          ? [{ target: 'availableProperties', value: [...exception.availableProperties] }]
-          : []
-      body = {
-        error: {
-          code: 'BadRequest',
-          message: exception.message,
-          details,
-        },
-      }
-    } else if (exception instanceof HttpException) {
-      status = exception.getStatus()
-      const code = httpStatusToODataCode(status)
-      body = {
-        error: {
-          code,
-          message: exception.message,
-          details: [],
-        },
-      }
-    } else {
-      // Generic error — never leak internal details (T-03-08)
-      status = HttpStatus.INTERNAL_SERVER_ERROR
-      body = {
-        error: {
-          code: 'InternalServerError',
-          message: 'An unexpected error occurred.',
-          details: [],
-        },
-      }
+    const http = host.switchToHttp()
+    const response = http.getResponse<HttpResponse>()
+    const { status, body } = buildODataErrorResponse(exception, this.options?.errorMapper, {
+      host,
+      request: http.getRequest?.(),
+    })
+    // A route may have set another Content-Type (e.g. text/plain on /$count) before failing.
+    if (typeof response.setHeader === 'function') {
+      response.setHeader('Content-Type', 'application/json; charset=utf-8')
+    } else if (typeof response.header === 'function') {
+      response.header('Content-Type', 'application/json; charset=utf-8')
     }
-
     response.status(status).json(body)
   }
-}
-
-/**
- * Map HTTP status code to an OData error code string.
- * Only covers the most common HTTP status codes.
- */
-function httpStatusToODataCode(status: number): string {
-  const codes: Record<number, string> = {
-    400: 'BadRequest',
-    401: 'Unauthorized',
-    403: 'Forbidden',
-    404: 'NotFound',
-    405: 'MethodNotAllowed',
-    409: 'Conflict',
-    410: 'Gone',
-    422: 'UnprocessableEntity',
-    429: 'TooManyRequests',
-    500: 'InternalServerError',
-    501: 'NotImplemented',
-    503: 'ServiceUnavailable',
-  }
-  return codes[status] ?? 'Error'
 }

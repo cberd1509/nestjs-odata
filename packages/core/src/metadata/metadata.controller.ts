@@ -1,4 +1,5 @@
-import { Controller, Get, Header, Inject } from '@nestjs/common'
+import { Controller, Get, Header, Inject, UseFilters } from '@nestjs/common'
+import { ODataExceptionFilter } from '../response/odata-exception.filter.js'
 import { CsdlBuilder } from './csdl-builder.js'
 import { ServiceDocumentBuilder } from './service-document-builder.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
@@ -20,6 +21,7 @@ import type { ODataModuleOptions } from '../odata.module.js'
  * '/$metadata' and '/' respectively. This is the most NestJS-idiomatic approach.
  */
 @Controller()
+@UseFilters(ODataExceptionFilter)
 export class MetadataController {
   constructor(
     private readonly csdlBuilder: CsdlBuilder,

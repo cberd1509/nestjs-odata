@@ -19,6 +19,7 @@ OData v4 for NestJS with zero double-declaration. Define your entities once in T
 - **Row-level scopes** — Per-entity-set `scope` hooks restrict every read, `$count`, `$expand`, lambda, `$apply`, `$batch` and write check; `requireScope` fails closed.
 - **Custom write handlers** — Route POST/PATCH/PUT/DELETE and deep insert (also in `$batch`) through your own services, with configurable ETags and a changeset transaction hook.
 - **NestJS 10, 11 and 12** — Peer ranges cover NestJS 10–12 and TypeORM 0.3 or 1.x; developed and tested on NestJS 12 and TypeORM 1, including ESM (`"type": "module"`, NodeNext) apps.
+- **Error mapping** — One `errorMapper` option turns any exception (your own error types, database errors) into an OData error with status, code, message, target and details, on every OData-decorated route and `$batch` operation.
 - **Security built-in** — `maxTop`, `maxExpandDepth`, `maxFilterDepth` limits enforced server-side. Parameterized queries prevent SQL injection.
 
 ## Quick start

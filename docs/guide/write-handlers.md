@@ -112,8 +112,8 @@ interface ODataWriteContext {
   `create`, `deepInsert`, `update` and `replace` must return an object: a handler that returns
   nothing fails with 500 (and rolls back its `$batch` changeset), over HTTP and in `$batch`.
 - Throw to fail the write. An `HttpException` keeps its status, and other errors become 500.
-  In `$batch`, an `HttpException` wrapped by your code as an error's `cause` keeps its status
-  too. Your own error types can be mapped with the error-mapping option.
+  An `HttpException` (4xx) wrapped by your code as an error's `cause` keeps its status too,
+  over HTTP and in `$batch`. Your own error types can be mapped with the error-mapping option.
 
 ## ETags and `If-Match`
 
