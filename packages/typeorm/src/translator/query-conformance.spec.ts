@@ -289,6 +289,23 @@ describe('OData query conformance (TypeORM, SQLite)', () => {
     })
   })
 
+  describe('$filter null comparisons and property comparisons', () => {
+    it('renders eq null / ne null as IS NULL / IS NOT NULL, also on navigation paths', async () => {
+      expect(ids(await get('Stores', { $filter: 'regionId eq null' }))).toEqual([3])
+      expect(ids(await get('Stores', { $filter: 'regionId ne null' }))).toEqual([1, 2])
+      // Region 2 is B's: for A, store 2's region is outside the scope and reads as null.
+      expect(ids(await get('Stores', { $filter: 'region/name eq null' }, 'A'))).toEqual([2, 3])
+      expect(
+        ids(await get('Regions', { $filter: 'stores/any(s: s/regionId ne null)' }, 'A')),
+      ).toEqual([1])
+    })
+
+    it('compares two properties', async () => {
+      expect(ids(await get('Items', { $filter: 'qty gt storeId mul 5' }))).toEqual([1, 3, 5])
+      expect(ids(await get('Stores', { $filter: 'minQty gt $it/id' }))).toEqual([1, 2])
+    })
+  })
+
   describe('$filter or', () => {
     it('matches rows satisfying either side (not both)', async () => {
       expect(ids(await get('Items', { $filter: 'qty lt 3 or qty gt 50' }))).toEqual([5, 6])
@@ -302,6 +319,13 @@ describe('OData query conformance (TypeORM, SQLite)', () => {
     it('accepts ANY and ALL', async () => {
       expect(ids(await get('Stores', { $filter: 'items/ANY(i: i/qty gt 15)' }))).toEqual([2])
       expect(ids(await get('Stores', { $filter: 'items/ALL(i: i/qty gt 5)' }))).toEqual([2])
+    })
+
+    it('negates a lambda with not', async () => {
+      expect(ids(await get('Stores', { $filter: 'not items/any(i: i/qty gt 15)' }))).toEqual([1, 3])
+      expect(
+        ids(await get('Items', { $filter: "not labels/any(l: l/name eq 'sale') and qty gt 2" })),
+      ).toEqual([2, 3])
     })
 
     it('binds $it to the outer entity inside a lambda', async () => {

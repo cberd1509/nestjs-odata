@@ -110,6 +110,14 @@ describe('OData query conformance — test app (e2e)', () => {
       expect(ids(res)).toEqual([2, 3])
     })
 
+    it('treats a missing related entity as null (eq null)', async () => {
+      const res = await http
+        .get('/odata/Products')
+        .query({ $filter: 'category/name eq null' })
+        .expect(200)
+      expect(ids(res)).toEqual([4])
+    })
+
     it('rejects a collection-valued navigation without any/all (400)', async () => {
       const res = await http
         .get('/odata/Products')
@@ -158,6 +166,14 @@ describe('OData query conformance — test app (e2e)', () => {
         .query({ $filter: "tags/any(t:t/name eq 'sale')" })
         .expect(200)
       expect(ids(res)).toEqual([1, 3])
+    })
+
+    it('negates a many-to-many lambda with not', async () => {
+      const res = await http
+        .get('/odata/Products')
+        .query({ $filter: "not tags/any(t:t/name eq 'sale')" })
+        .expect(200)
+      expect(ids(res)).toEqual([2, 4])
     })
 
     it('supports all over a many-to-many navigation', async () => {

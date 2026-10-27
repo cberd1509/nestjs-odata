@@ -1,5 +1,6 @@
 import {
   Brackets,
+  NotBrackets,
   type EntityManager,
   type SelectQueryBuilder,
   type ObjectLiteral,
@@ -172,6 +173,24 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     if (sqlOp) {
       this.pendingParams = {}
       const leftExpr = this.resolveExpression(left)
+      const nullCheck = nullComparison(operator, right)
+      if (nullCheck) {
+        // `eq null` / `ne null` (P2 §5.1.1.1.1): SQL `= NULL` is never true.
+        const params = this.pendingParams
+        this.pendingParams = {}
+        this.qb.andWhere(`${leftExpr} ${nullCheck}`, params)
+        this.currentDepth--
+        return
+      }
+      if (right.kind !== 'Literal') {
+        // Comparing two expressions (`qty gt minQty`, `price gt $it/cost`).
+        const rightExpr = this.resolveExpression(right)
+        const params = this.pendingParams
+        this.pendingParams = {}
+        this.qb.andWhere(`${leftExpr} ${sqlOp} ${rightExpr}`, params)
+        this.currentDepth--
+        return
+      }
       const paramName = this.nextParam()
       const literalValue = this.extractLiteralValue(right)
       const allParams = { ...this.pendingParams, [paramName]: literalValue }
@@ -186,6 +205,28 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
   }
 
   visitUnaryExpr(node: UnaryExprNode): void {
+    if (node.operator === 'not' && containsLambda(node.operand)) {
+      // `not items/any(...)`: lambdas render through this visitor (EXISTS subqueries), so the
+      // operand is visited into its own bracket and negated as a whole.
+      this.qb.andWhere(
+        new NotBrackets((qb) => {
+          const visitor = new TypeOrmFilterVisitor(
+            qb as SelectQueryBuilder<ObjectLiteral>,
+            this.alias,
+            this.entityType,
+            this.maxFilterDepth,
+            this.dialect,
+            this.repo,
+            this.lambdaScope,
+          )
+          visitor.paramCount = this.paramCount
+          visitor.currentDepth = this.currentDepth
+          acceptVisitor(node.operand, visitor)
+          this.paramCount = visitor.paramCount
+        }),
+      )
+      return
+    }
     if (node.operator === 'not') {
       const root = this.rootBinding()
       const innerVisitor = new InnerFilterExprBuilder(
@@ -606,6 +647,8 @@ class InnerFilterExprBuilder {
       const sqlOp = COMPARISON_OPS[node.operator]
       if (sqlOp) {
         const left = this.buildExpr(node.left)
+        const nullCheck = nullComparison(node.operator, node.right)
+        if (nullCheck) return `${left} ${nullCheck}`
         const right = this.buildExpr(node.right)
         return `${left} ${sqlOp} ${right}`
       }
@@ -753,4 +796,26 @@ function renderPath(
     )
   }
   return renderNavigationPath(context.manager, binding, path, context.scope)
+}
+
+/** True when a filter expression contains a lambda (`any`/`all`) outside lambda predicates. */
+function containsLambda(node: FilterNode): boolean {
+  switch (node.kind) {
+    case 'LambdaExpr':
+      return true
+    case 'BinaryExpr':
+      return containsLambda(node.left) || containsLambda(node.right)
+    case 'UnaryExpr':
+      return containsLambda(node.operand)
+    default:
+      return false
+  }
+}
+
+/** `IS NULL` / `IS NOT NULL` for `eq null` / `ne null`, otherwise undefined. */
+function nullComparison(operator: string, right: FilterNode): string | undefined {
+  if (right.kind !== 'Literal' || right.value !== null) return undefined
+  if (operator === 'eq') return 'IS NULL'
+  if (operator === 'ne') return 'IS NOT NULL'
+  return undefined
 }

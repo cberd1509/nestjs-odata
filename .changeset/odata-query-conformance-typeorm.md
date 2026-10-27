@@ -14,4 +14,7 @@ Fixes:
 
 - `$filter` with `or` was rendered as `AND` (`a or b` returned the rows matching both). It now renders `(a) OR (b)`.
 - A nested `$orderby` inside `$expand` replaced the ordering of the parent rows (`$orderby=id&$expand=items($orderby=qty)`); it is now appended after it.
+- `not` applied to a lambda (`not items/any(...)`) produced invalid SQL; it now negates the `EXISTS`.
+- `eq null` / `ne null` rendered `= NULL` / `!= NULL`, which never match; they now render `IS NULL` / `IS NOT NULL`.
+- Comparing two properties at the top level of `$filter` (`qty gt minQty`) compared against `NULL`; the right-hand expression is now rendered.
 - `contains`/`startswith`/`endswith` keep the parameters of their property expression.
