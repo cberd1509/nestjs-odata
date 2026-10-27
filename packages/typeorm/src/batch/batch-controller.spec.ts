@@ -433,10 +433,14 @@ describe('BatchController', () => {
     const { text } = await run(controller, [
       op('GET', 'Products(1)/Supplier'),
       op('GET', 'Products?$expand=Supplier'),
+      // Query option names are case-insensitive for the route: so for the allow-list.
+      op('GET', 'Products?$EXPAND=Supplier'),
+      op('GET', 'Products?%24Expand=Supplier'),
+      op('GET', 'Products?$top=1&$expand=Supplier&$EXPAND=Supplier'),
       op('GET', 'Products(1)/id'),
       op('GET', 'Products?$top=1'),
     ])
-    expect(statuses(text)).toEqual(['403', '403', '200', '200'])
+    expect(statuses(text)).toEqual(['403', '403', '403', '403', '403', '200', '200'])
     const both = await makeController({ entitySets: ['Products', 'Suppliers'] })
     routes['GET /odata/Products(1)/Supplier'] = () => ({ status: 200, body: { id: 3 } })
     expect(statuses((await run(both, [op('GET', 'Products(1)/Supplier')])).text)).toEqual(['200'])

@@ -38,7 +38,14 @@ import { Test } from '@nestjs/testing'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import supertest from 'supertest'
 import { tap } from 'rxjs'
-import { Column, DataSource, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
+import {
+  Column,
+  DataSource,
+  Entity,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm'
 import {
   getODataBatchPart,
   ODataController,
@@ -58,6 +65,15 @@ import {
   type ODataTypeOrmRootOptions,
 } from '@nestjs-odata/typeorm'
 
+@Entity({ name: 'bc_tickets' })
+class Ticket {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'varchar', length: 100 })
+  subject: string
+}
+
 @Entity({ name: 'bc_notes' })
 class Note {
   @PrimaryGeneratedColumn()
@@ -74,15 +90,12 @@ class Note {
 
   @UpdateDateColumn()
   updatedAt: Date
-}
 
-@Entity({ name: 'bc_tickets' })
-class Ticket {
-  @PrimaryGeneratedColumn()
-  id: number
+  @Column({ type: 'integer', nullable: true })
+  ticketId: number | null
 
-  @Column({ type: 'varchar', length: 100 })
-  subject: string
+  @ManyToOne(() => Ticket, { nullable: true })
+  ticket: Ticket | null
 }
 
 /** Lets a request through only with `x-role: admin` (inherited from the `$batch` request). */
@@ -505,7 +518,7 @@ describe('$batch conformance (e2e)', () => {
       // The hidden note is outside the row-level scope: not counted.
       expect(got.json['@odata.count']).toBeGreaterThanOrEqual(2)
       expect(got.json.value).toHaveLength(1)
-      const keys = Object.keys(got.json.value[0]).filter((k) => !k.startsWith('@'))
+      const keys = Object.keys(got.json.value[0]).filter((k) => !k.includes('@'))
       // The key is always selected, like the standalone request.
       expect(keys.sort()).toEqual(['id', 'price', 'title'])
       expect(got.json['@odata.nextLink']).toContain('$skip=1')
@@ -690,6 +703,19 @@ describe('$batch options of ODataTypeOrmModule.forRoot()', () => {
       ])
       expect(single(ticketPart).status).toBe(200)
       expect(single(notePart).status).toBe(403)
+
+      // $expand into a set outside the allow-list, however the option name is spelled.
+      const notesOnly = await createApp({ batch: { entitySets: ['Notes'] } })
+      try {
+        const parts = await postBatch(notesOnly, [
+          op({ method: 'GET', url: 'Notes?$expand=ticket' }),
+          op({ method: 'GET', url: 'Notes?$EXPAND=ticket' }),
+          op({ method: 'GET', url: 'Notes?$top=1' }),
+        ])
+        expect(parts.map((p) => single(p).status)).toEqual([403, 403, 200])
+      } finally {
+        await notesOnly.close()
+      }
     } finally {
       await app.close()
     }

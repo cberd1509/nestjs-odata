@@ -514,7 +514,8 @@ export class BatchController {
   /**
    * True when every entity set the operation reaches is in the `entitySets` allow-list: the
    * entity set of the resource path (`Products(1)`), the targets of navigation segments
-   * (`Products(1)/Supplier`) and of `$expand` (nested too). `path` is relative to the service root. Unknown
+   * (`Products(1)/Supplier`) and of `$expand` (nested too, whatever the case of the option
+   * name, parsed like the route parses it). `path` is relative to the service root. Unknown
    * resources (`$metadata`, a segment the EDM does not know) are refused.
    */
   private isAllowed(path: readonly string[], query: URLSearchParams): boolean {
@@ -535,15 +536,18 @@ export class BatchController {
         return false
       }
     }
-    const expandValue = query.get('$expand')
-    if (expandValue === null) return true
-    let expand: ExpandNode | undefined
-    try {
-      expand = parseQuery(`$expand=${expandValue}`).expand
-    } catch {
-      return true // the route refuses an invalid $expand itself (400)
+    // Every $expand option, whatever its case (`$EXPAND`) or how often it is repeated.
+    for (const [name, value] of query) {
+      if (name.toLowerCase() !== '$expand') continue
+      let expand: ExpandNode | undefined
+      try {
+        expand = parseQuery(`$expand=${value}`).expand
+      } catch {
+        continue // the route refuses an invalid $expand itself (400)
+      }
+      if (!this.expandAllowed(type, expand)) return false
     }
-    return this.expandAllowed(type, expand)
+    return true
   }
 
   /** True when every `$expand` target (nested ones too) is an allow-listed entity set. */
