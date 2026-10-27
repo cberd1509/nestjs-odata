@@ -19,17 +19,18 @@ ODataModule.forRoot({
 
 ### Options reference
 
-| Option                 | Type                           | Default      | Description                                                                 |
-| ---------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------- |
-| `serviceRoot`          | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                             |
-| `namespace`            | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs                 |
-| `maxTop`               | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400           |
-| `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                         |
-| `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                              |
-| `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive        |
-| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                           |
-| `requireScope`         | `boolean`                      | `false`      | Fail closed when an entity set has no [row-level scope](./row-level-scopes) |
-| `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot`    |
+| Option                 | Type                           | Default      | Description                                                                                                         |
+| ---------------------- | ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `serviceRoot`          | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                                                                     |
+| `namespace`            | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs                                                         |
+| `maxTop`               | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400                                                   |
+| `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                                                                 |
+| `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                                                                      |
+| `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive                                                |
+| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                                                                   |
+| `errorMapper`          | `ODataErrorMapper`             | —            | Maps any exception to an OData error (status, code, message, target, details). See [Error mapping](./error-mapping) |
+| `requireScope`         | `boolean`                      | `false`      | Fail closed when an entity set has no [row-level scope](./row-level-scopes)                                         |
+| `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot`                                            |
 
 ::: warning maxTop is a hard limit
 Unlike some OData implementations, `nestjs-odata` rejects `$top` values that exceed `maxTop` with HTTP 400. It does not silently clamp. This ensures clients know exactly what they are receiving.
@@ -59,6 +60,25 @@ import { ConfigModule, ConfigService } from '@nestjs/config'
 })
 export class AppModule {}
 ```
+
+## Error mapping
+
+`errorMapper` maps any exception thrown by an OData route or a `$batch` operation to an OData
+error. Return `undefined` to keep the default mapping:
+
+```typescript
+ODataModule.forRoot({
+  serviceRoot: '/odata',
+  errorMapper: (err) =>
+    err instanceof AppError
+      ? { status: err.httpStatus, code: err.code, message: err.publicMessage }
+      : undefined,
+})
+```
+
+The mapper must be synchronous. It runs on the OData route decorators' routes, `$metadata` and
+`$batch`; plain routes keep your global filters unless they opt in with
+`@UseFilters(ODataExceptionFilter)`. See [Error mapping](./error-mapping) for the full API.
 
 ## ODataTypeOrmModule.forFeature() options
 

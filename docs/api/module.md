@@ -47,6 +47,12 @@ interface ODataModuleOptions {
   requireScope?: boolean
 
   /**
+   * Maps any exception thrown by an OData route or a $batch operation to an OData error.
+   * Synchronous; return undefined for the default mapping. See the "Error mapping" guide.
+   */
+  errorMapper?: ODataErrorMapper
+
+  /**
    * @ODataController classes to register and path-patch with serviceRoot.
    * Controllers listed here have their route prefix set to `{serviceRoot}/{entitySetName}`.
    */

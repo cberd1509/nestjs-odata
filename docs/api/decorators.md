@@ -10,6 +10,8 @@
 
 Marks a class as an OData controller for the given entity set. Sets the initial route prefix to `{entitySetName}`, which is then patched to `{serviceRoot}/{entitySetName}` by `ODataModule.forRoot()`.
 
+It does not apply `ODataExceptionFilter` to the class: the OData route decorators (`@ODataGet`, `@ODataPost`, …) apply it per route, and plain Nest routes keep the application's own filters. Add `@UseFilters(ODataExceptionFilter)` to a plain route to give it OData errors and the [`errorMapper`](../guide/error-mapping).
+
 **Parameters:**
 
 | Parameter       | Type                      | Description                                   |

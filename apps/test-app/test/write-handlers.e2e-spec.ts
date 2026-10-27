@@ -621,7 +621,8 @@ describe('Custom write handlers (e2e)', () => {
   })
 
   it('keeps the status of errors wrapped by application code', async () => {
-    await http.post('/odata/Accounts').send({ name: 'wrapped' }).expect(500)
+    // The default mapping follows `cause`, over HTTP and in $batch.
+    await http.post('/odata/Accounts').send({ name: 'wrapped' }).expect(409)
     const text = await postBatch(
       batchBody([batchRequest('POST', '/odata/Accounts', '{"name":"wrapped"}')]),
     )

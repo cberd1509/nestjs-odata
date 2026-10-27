@@ -10,6 +10,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core'
 import { ODataRequestContextInterceptor } from './context/odata-request-context.js'
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
+import type { ODataErrorMapper } from './response/odata-error.js'
 import { EdmRegistry } from './edm/edm-registry.js'
 import { EdmFeatureInitializer } from './edm/edm-feature-initializer.js'
 import { EDM_ENTITY_CONFIGS, ODATA_MODULE_OPTIONS } from './tokens.js'
@@ -55,6 +56,12 @@ export interface ODataModuleOptions {
    */
   requireScope?: boolean
   /**
+   * Maps any exception thrown by an OData route (or a `$batch` operation) to an OData error:
+   * HTTP status, code, message and optional target, details and innererror. Return
+   * `undefined` to use the default mapping. See {@link ODataErrorMapper}.
+   */
+  errorMapper?: ODataErrorMapper
+  /**
    * OData controller classes decorated with @ODataController().
    * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
    * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
@@ -76,6 +83,8 @@ export interface ODataModuleResolvedOptions {
   maxDeepInsertDepth: number
   /** Fail closed when an entity set has no row-level scope. Default: false. */
   requireScope: boolean
+  /** Application exception-to-OData-error mapping, if any. */
+  errorMapper?: ODataErrorMapper
 }
 
 const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {

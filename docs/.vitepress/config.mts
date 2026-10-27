@@ -36,6 +36,7 @@ export default defineConfig({
         { text: 'Security', link: '/guide/security' },
         { text: 'Row-level scopes', link: '/guide/row-level-scopes' },
         { text: 'Custom write handlers', link: '/guide/write-handlers' },
+        { text: 'Error mapping', link: '/guide/error-mapping' },
         { text: 'Request Validation', link: '/guide/validation' },
         { text: 'Troubleshooting', link: '/guide/troubleshooting' },
       ],

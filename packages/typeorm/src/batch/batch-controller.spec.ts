@@ -7,6 +7,7 @@
 import 'reflect-metadata'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Test } from '@nestjs/testing'
+import { runWithODataRequestContext } from '@nestjs-odata/core'
 import { DataSource } from 'typeorm'
 import { EdmRegistry, ODATA_MODULE_OPTIONS } from '@nestjs-odata/core'
 import { BatchController, type BatchRequest, type BatchResponse } from './batch-controller.js'
@@ -523,6 +524,48 @@ describe('BatchController dispatch', () => {
 
     expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled()
     expect(mockRes.status).toHaveBeenCalledWith(200)
+  })
+
+  it('Test 16b: maps changeset-level failures with batch context and the batch request', async () => {
+    const boundary = 'batch_changeset'
+    const changesetBoundary = 'changeset_inner'
+    const body = [
+      `--${boundary}`,
+      `Content-Type: multipart/mixed; boundary=${changesetBoundary}`,
+      '',
+      `--${changesetBoundary}`,
+      'Content-Type: application/http',
+      'Content-Transfer-Encoding: binary',
+      '',
+      'POST /odata/Products HTTP/1.1',
+      'Content-Type: application/json',
+      '',
+      '{"name":"Widget","price":9.99}',
+      `--${changesetBoundary}--`,
+      `--${boundary}--`,
+    ].join('\r\n')
+    // The commit itself fails: no single part is to blame.
+    mockQueryRunner.commitTransaction.mockRejectedValueOnce(new Error('commit failed'))
+    const errorMapper = vi.fn(() => ({ status: 409, code: 'COMMIT', message: 'retry' }))
+    ;(controller as unknown as { options: Record<string, unknown> }).options = {
+      ...mockOptions,
+      errorMapper,
+    }
+    mockReq = { body, headers: { 'content-type': `multipart/mixed; boundary=${boundary}` } }
+
+    // The request comes from the OData request context (set by the global interceptor).
+    await runWithODataRequestContext({ request: mockReq }, () =>
+      controller.handleBatch(
+        mockReq as unknown as BatchRequest,
+        mockRes as unknown as BatchResponse,
+      ),
+    )
+
+    expect(errorMapper).toHaveBeenCalledWith(expect.any(Error), {
+      request: mockReq,
+      batch: { changeset: true },
+    })
+    expect(String(mockRes.send.mock.calls[0][0])).toContain('HTTP/1.1 409')
   })
 
   it('Test 17: reads body from stream when req.body is empty', async () => {
