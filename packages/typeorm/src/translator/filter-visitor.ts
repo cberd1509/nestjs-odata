@@ -582,7 +582,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     const paramName = this.nextParam()
     const params = { ...this.pendingParams, [paramName]: pattern }
     this.pendingParams = {}
-    this.qb.andWhere(`${prop} LIKE :${paramName}`, params)
+    this.qb.andWhere(`${prop} LIKE :${paramName}${likeEscapeClause(this.dialect)}`, params)
   }
 
   /**
@@ -670,7 +670,7 @@ class InnerFilterExprBuilder {
         this.paramCount++
         const paramName = `p${this.paramCount}`
         this.params[paramName] = pattern
-        return `${prop} LIKE :${paramName}`
+        return `${prop} LIKE :${paramName}${likeEscapeClause(this.dialect)}`
       }
       const dateResult = this.resolveDateFunction(name, node)
       if (dateResult !== null) return dateResult
@@ -810,6 +810,15 @@ function containsLambda(node: FilterNode): boolean {
     default:
       return false
   }
+}
+
+/**
+ * The `ESCAPE` clause that makes the backslashes of an escaped LIKE pattern work. SQLite has no
+ * default LIKE escape character; PostgreSQL and MySQL already use backslash (and MySQL would read
+ * `'\'` as an unterminated string), so they get none.
+ */
+export function likeEscapeClause(dialect: SqlDialect): string {
+  return dialect === 'sqlite' ? " ESCAPE '\\'" : ''
 }
 
 /** `IS NULL` / `IS NOT NULL` for `eq null` / `ne null`, otherwise undefined. */

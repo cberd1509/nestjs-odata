@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import type { DataSource } from 'typeorm'
+import { likeEscapeClause } from './filter-visitor.js'
+import { sqlDialectOf } from './sql-dialect.js'
 import { EdmRegistry, ODataValidationError, getSearchableProperties } from '@nestjs-odata/core'
 import type {
   ISearchProvider,
@@ -100,7 +102,10 @@ export class TypeOrmSearchProvider implements ISearchProvider {
     const escaped = this.escapeLike(node.value)
     params[paramName] = `%${escaped}%`
 
-    const likeParts = searchableFields.map((field) => `${alias}.${field} LIKE :${paramName}`)
+    const escape = likeEscapeClause(sqlDialectOf(this.dataSource.options.type))
+    const likeParts = searchableFields.map(
+      (field) => `${alias}.${field} LIKE :${paramName}${escape}`,
+    )
     const inner = `(${likeParts.join(' OR ')})`
 
     return node.negated ? `NOT ${inner}` : inner
