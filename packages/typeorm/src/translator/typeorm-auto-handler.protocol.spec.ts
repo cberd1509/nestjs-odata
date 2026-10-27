@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest'
 import type { EntityManager, ObjectLiteral, Repository } from 'typeorm'
 import type { EdmEntityType, ODataModuleResolvedOptions } from '@nestjs-odata/core'
 import { EdmRegistry, runWithODataBatchPart, runWithODataRequestContext } from '@nestjs-odata/core'
-import { runInODataChangeset } from '../batch/changeset-context.js'
 import { TypeOrmAutoHandler } from './typeorm-auto-handler.js'
 import type { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import { ODataWriteRegistry } from '../write/write-registry.js'
@@ -246,6 +245,16 @@ describe('@odata.etag on collection items (#81)', () => {
 })
 
 describe('$batch changesets (#67): operations join the changeset transaction', () => {
+  /** A batch operation of a changeset whose transaction runs on `manager`. */
+  const inChangeset = (manager: unknown) => ({
+    method: 'POST',
+    url: 'Products',
+    contentId: '4',
+    inChangeset: true,
+    batchRequest: {},
+    changeset: manager as EntityManager,
+  })
+
   it('reads and writes through the changeset entity manager', async () => {
     const { handler, repo } = setup()
     const txRepo = {
@@ -253,7 +262,7 @@ describe('$batch changesets (#67): operations join the changeset transaction', (
       save: vi.fn((v: ObjectLiteral) => Promise.resolve({ ...current, ...v, tx: true })),
     }
     const manager = { getRepository: vi.fn().mockReturnValue(txRepo) }
-    const created = await runInODataChangeset(manager as unknown as EntityManager, () =>
+    const created = await runWithODataBatchPart(inChangeset(manager), () =>
       handler.handleCreate({ name: 'x', price: 1, version: 1 }, 'Products'),
     )
     expect(manager.getRepository).toHaveBeenCalled()
@@ -272,12 +281,8 @@ describe('$batch changesets (#67): operations join the changeset transaction', (
     }
     const { handler } = setup({ handlers })
     const manager = { getRepository: vi.fn() } as unknown as EntityManager
-    await runWithODataBatchPart(
-      { method: 'POST', url: 'Products', contentId: '4', inChangeset: true, batchRequest: {} },
-      () =>
-        runInODataChangeset(manager, () =>
-          handler.handleCreate({ name: 'x', price: 1, version: 1 }, 'Products'),
-        ),
+    await runWithODataBatchPart(inChangeset(manager), () =>
+      handler.handleCreate({ name: 'x', price: 1, version: 1 }, 'Products'),
     )
     expect(seen[0]?.manager).toBe(manager)
     expect(seen[0]?.batch).toEqual({ contentId: '4', inChangeset: true })

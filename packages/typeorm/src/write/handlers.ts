@@ -1,6 +1,5 @@
 import { HttpException, HttpStatus, InternalServerErrorException } from '@nestjs/common'
 import { getODataBatchPart, getODataRequestContext, type EdmEntityType } from '@nestjs-odata/core'
-import { getODataChangesetManager } from '../batch/changeset-context.js'
 import type { ODataWriteContext, ODataWriteHandlers, ODataWriteOperation } from './write.types.js'
 
 /**
@@ -108,7 +107,10 @@ export function createHandlerFor(
   return { operation, handler }
 }
 
-/** The context handed to a write handler, with the current request's execution context. */
+/**
+ * The context handed to a write handler, with the current request's execution context and, for
+ * a `$batch` operation, `batch`. `undefined` values in `extra` are left out.
+ */
 export function buildWriteContext(
   entitySetName: string,
   entityType: EdmEntityType,
@@ -116,18 +118,17 @@ export function buildWriteContext(
   extra: Partial<ODataWriteContext> = {},
 ): ODataWriteContext {
   const request = getODataRequestContext()
-  // A `$batch` operation runs through its route: describe it, and inside a changeset hand the
-  // handler the changeset's entity manager.
   const part = getODataBatchPart()
-  const manager = getODataChangesetManager()
+  const defined = Object.fromEntries(
+    Object.entries(extra).filter(([, value]) => value !== undefined),
+  ) as Partial<ODataWriteContext>
   return {
     entitySetName,
     entityType,
     operation,
     executionContext: request?.executionContext,
     request: request?.request,
-    ...(manager ? { manager } : {}),
     ...(part ? { batch: { contentId: part.contentId, inChangeset: part.inChangeset } } : {}),
-    ...extra,
+    ...defined,
   }
 }

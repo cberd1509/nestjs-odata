@@ -9,11 +9,10 @@
  * called with a real `IncomingMessage` / `ServerResponse` pair, or Fastify's `inject()`), in
  * process, without opening a socket.
  *
- * The injection runs inside the caller's async context, so `AsyncLocalStorage` stores set by the
- * caller (the current batch part, a changeset's transaction) are visible to the route. Because
+ * The operation's {@link ODataBatchPartContext} travels two ways: in an `AsyncLocalStorage` (the
+ * injection runs inside it) and, on Express, on the injected request object, which is read first:
  * middleware may resume `next()` from another async context (a session store, a callback-based
- * auth library), the caller can also attach values to the injected request object
- * (`attach`), which the library reads first (see {@link getODataBatchRequestValue}).
+ * auth library), where the async store is lost or belongs to another request.
  *
  * Zero ORM imports — per PKG-01 architecture constraint.
  */
@@ -36,34 +35,20 @@ export interface ODataBatchPartContext {
   readonly inChangeset: boolean
   /** The platform request of the enclosing `$batch` request. */
   readonly batchRequest: unknown
+  /**
+   * The changeset's unit of work, set by the adapter for operations of a changeset (for the
+   * TypeORM adapter, the transaction's `EntityManager`; see `getODataChangesetManager()`).
+   */
+  readonly changeset?: unknown
 }
 
 const partStorage = new AsyncLocalStorage<ODataBatchPartContext>()
 
 /**
  * Request property (a symbol) holding the {@link ODataBatchPartContext} of a `$batch` operation
- * on the request injected for it.
+ * on the request injected for it (Express adapter).
  */
 export const ODATA_BATCH_PART: unique symbol = Symbol.for('@nestjs-odata/batch-part')
-
-/**
- * A value the `$batch` controller attached to the request of the operation being handled
- * (`request[key]`, or `request.raw[key]` for Fastify), from `request` or else the request of the
- * current OData request context. `undefined` when there is none (the caller then falls back to
- * its `AsyncLocalStorage`). A value attached as `null` means "explicitly none".
- *
- * The request is the reliable carrier: an `AsyncLocalStorage` store can be lost, or replaced by
- * another request's, when middleware resumes `next()` from a foreign async context.
- */
-export function getODataBatchRequestValue<T>(key: symbol, request?: unknown): T | null | undefined {
-  const req = (request ?? getODataRequestContext()?.request) as
-    (Record<symbol, unknown> & { raw?: Record<symbol, unknown> }) | undefined
-  if (!req || typeof req !== 'object') return undefined
-  if (key in req) return req[key] as T | null
-  const raw = req.raw
-  if (raw && typeof raw === 'object' && key in raw) return raw[key] as T | null
-  return undefined
-}
 
 /**
  * The `$batch` operation being handled, or `undefined` for a request that is not part of a
@@ -75,8 +60,9 @@ export function getODataBatchRequestValue<T>(key: symbol, request?: unknown): T 
  * else from the async context.
  */
 export function getODataBatchPart(request?: unknown): ODataBatchPartContext | undefined {
-  const attached = getODataBatchRequestValue<ODataBatchPartContext>(ODATA_BATCH_PART, request)
-  if (attached !== undefined) return attached ?? undefined
+  const req = (request ?? getODataRequestContext()?.request) as
+    Partial<Record<typeof ODATA_BATCH_PART, ODataBatchPartContext>> | undefined
+  if (req && typeof req === 'object' && ODATA_BATCH_PART in req) return req[ODATA_BATCH_PART]
   return partStorage.getStore()
 }
 
@@ -85,14 +71,28 @@ export function runWithODataBatchPart<T>(part: ODataBatchPartContext, fn: () => 
   return partStorage.run(part, fn)
 }
 
+/** What the error mapper is told about a failing `$batch` operation. */
+export function batchErrorContext(
+  part: Pick<ODataBatchPartContext, 'method' | 'url' | 'contentId'>,
+): {
+  readonly method: string
+  readonly url: string
+  readonly contentId?: string
+} {
+  return { method: part.method, url: part.url, contentId: part.contentId }
+}
+
+/** The first value of a header (`string[]` for repeated headers). */
+export function headerValue(value: string | readonly string[] | undefined): string | undefined {
+  return typeof value === 'string' ? value : value?.[0]
+}
+
 /**
  * Headers of the batch request that operations never inherit: the body and transport headers
  * of the multipart envelope, batch-level preferences (`Prefer`, OData-Protocol §8.2.8.3,
  * §8.2.8.8) and conditional headers, which MUST NOT be sent on a batch request (§8.2.4, §8.2.5).
  */
 const NOT_INHERITED = new Set([
-  // The response is read in process: the operation always gets an unencoded body.
-  'accept-encoding',
   'content-type',
   'content-length',
   'content-encoding',
@@ -116,18 +116,14 @@ const NOT_INHERITED = new Set([
 ])
 
 /**
- * The headers of one batch operation: the headers of the `$batch` request (credentials such as
- * `Authorization` and `Cookie`, `Accept-Language`, `OData-MaxVersion`, custom headers), except the
- * ones in {@link NOT_INHERITED}, overridden by the operation's own headers. Parts MUST NOT carry
- * authentication headers (§11.7.7.1), so the credentials of the batch request apply to every
- * operation. An operation with a body and no `Content-Type` is sent as `application/json`.
- * HTTP/2 pseudo-headers (`:path`, `:authority`, ...) are never inherited, and the operation asks
- * for `Accept-Encoding: identity`.
+ * The headers of the `$batch` request that its operations inherit (compute once per batch):
+ * credentials such as `Authorization` and `Cookie`, `Accept-Language`, `OData-MaxVersion`,
+ * custom headers — not the ones in {@link NOT_INHERITED}, nor HTTP/2 pseudo-headers (`:path`).
+ * Parts MUST NOT carry authentication headers (§11.7.7.1), so the credentials of the batch
+ * request apply to every operation.
  */
-export function batchOperationHeaders(
+export function inheritedBatchHeaders(
   batchHeaders: Readonly<Record<string, string | string[] | undefined>>,
-  partHeaders: Readonly<Record<string, string>>,
-  hasBody: boolean,
 ): Record<string, string> {
   const headers: Record<string, string> = {}
   for (const [name, value] of Object.entries(batchHeaders)) {
@@ -135,25 +131,47 @@ export function batchOperationHeaders(
     if (value === undefined || key.startsWith(':') || NOT_INHERITED.has(key)) continue
     headers[key] = Array.isArray(value) ? value.join(', ') : value
   }
+  return headers
+}
+
+/**
+ * The request headers of one batch operation: the {@link inheritedBatchHeaders inherited} ones,
+ * overridden by the operation's own. `Content-Length` is never taken from either (the body may
+ * have been rewritten; the dispatcher sets it from the real body) and pseudo-headers are ignored.
+ * An operation with a body and no `Content-Type` is sent as `application/json`. The operation
+ * always asks for `Accept-Encoding: identity`: its response is read in process.
+ */
+export function batchOperationHeaders(
+  inherited: Readonly<Record<string, string>>,
+  partHeaders: Readonly<Record<string, string>>,
+  hasBody: boolean,
+): Record<string, string> {
+  const headers: Record<string, string> = { ...inherited }
   for (const [name, value] of Object.entries(partHeaders)) {
     const key = name.toLowerCase()
-    if (key.startsWith(':')) continue
-    headers[key] = value
+    if (!key.startsWith(':')) headers[key] = value
   }
+  delete headers['content-length']
   if (hasBody && !headers['content-type']) headers['content-type'] = 'application/json'
   headers['accept-encoding'] = 'identity'
   return headers
 }
 
+/** Base for parsing the path-only URLs of a `$batch` request (only path and query are used). */
+const BATCH_URL_BASE = 'http://batch.invalid'
+
+/** The `$batch` request URL (a path, e.g. `req.originalUrl`), parsed. */
+export function parseBatchUrl(batchUrl: string): URL {
+  return new URL(batchUrl, BATCH_URL_BASE)
+}
+
 /**
- * The path and query a batch operation's URL targets. OData-Protocol §11.7.7.1 allows an
- * absolute URI, an absolute path, or a path relative to the batch request URL (that is, to the
- * service root).
+ * The URL a batch operation targets (use its `pathname` and `search`). OData-Protocol §11.7.7.1
+ * allows an absolute URI, an absolute path, or a path relative to the batch request URL (that
+ * is, to the service root). Throws on an unparsable URL.
  */
-export function resolveBatchOperationUrl(operationUrl: string, batchUrl: string): string {
-  const base = new URL(batchUrl, 'http://batch.invalid')
-  const target = new URL(operationUrl, base)
-  return `${target.pathname}${target.search}`
+export function resolveBatchOperationUrl(operationUrl: string, batchUrl: URL | string): URL {
+  return new URL(operationUrl, typeof batchUrl === 'string' ? parseBatchUrl(batchUrl) : batchUrl)
 }
 
 /** An operation to run through the application. */
@@ -161,15 +179,11 @@ export interface BatchOperationRequest {
   readonly method: string
   /** Path and query, e.g. `/odata/Products?$top=1`. */
   readonly url: string
+  /** Request headers, as built by {@link batchOperationHeaders}. */
   readonly headers: Readonly<Record<string, string>>
   readonly body?: string
   /** Client address of the `$batch` request, so IP-based policies see the real client. */
   readonly remoteAddress?: string
-  /**
-   * Properties (symbol keys) set on the injected request object before it is handled, read back
-   * with {@link getODataBatchRequestValue}. Not supported by Fastify's `inject()`.
-   */
-  readonly attach?: Readonly<Record<symbol, unknown>>
   /**
    * Milliseconds to wait for the operation's response; then the dispatch rejects with
    * {@link BatchOperationTimeoutError}. Default: no limit.
@@ -194,14 +208,14 @@ export interface BatchOperationResponse {
    * (`Set-Cookie`) keep one entry per value.
    */
   readonly headers: Readonly<Record<string, string | readonly string[]>>
-  /**
-   * Response body, `undefined` when empty: a string for textual content (JSON, XML, `text/*`,
-   * or a `charset`), else the raw bytes.
-   */
-  readonly body?: string | Buffer
+  /** Response body bytes, `undefined` when empty. */
+  readonly body?: Buffer
 }
 
-/** Response headers that describe the connection or the envelope, not the operation. */
+/**
+ * Response headers that describe the connection or the envelope, not the operation: the only
+ * filter applied to operation responses.
+ */
 const DROPPED_RESPONSE_HEADERS = new Set([
   'content-length',
   'transfer-encoding',
@@ -213,18 +227,6 @@ const DROPPED_RESPONSE_HEADERS = new Set([
   'content-encoding',
 ])
 
-/** True for a body to hand over as text (no content type, JSON, XML, `text/*`, a charset). */
-function isTextual(contentType: string | undefined): boolean {
-  if (!contentType) return true
-  const type = contentType.toLowerCase()
-  return (
-    type.startsWith('text/') ||
-    type.includes('charset=') ||
-    /^application\/([\w.-]+\+)?(json|xml)\b/.test(type) ||
-    type.startsWith('application/x-www-form-urlencoded')
-  )
-}
-
 /** Minimal shape of Nest's `HttpAdapterHost.httpAdapter`. */
 export interface BatchHttpAdapter {
   getInstance(): unknown
@@ -233,15 +235,14 @@ export interface BatchHttpAdapter {
 interface InjectResponse {
   readonly statusCode: number
   readonly headers: Readonly<Record<string, string | string[] | number | undefined>>
-  readonly payload: string
   /** The body bytes (Fastify's `inject()` response has them too). */
-  readonly rawPayload?: Buffer
+  readonly rawPayload: Buffer
 }
 
 interface InjectOptions {
   method: string
   url: string
-  headers: Record<string, string>
+  headers: Readonly<Record<string, string>>
   payload?: string
   remoteAddress?: string
 }
@@ -281,17 +282,28 @@ function nullSocket(remoteAddress: string | undefined): Socket {
   return socket as unknown as Socket
 }
 
+/** A response chunk as a Buffer, without copying the bytes. */
+function toBuffer(chunk: unknown, encoding?: unknown): Buffer | undefined {
+  if (Buffer.isBuffer(chunk)) return chunk
+  if (typeof chunk === 'string') {
+    return Buffer.from(chunk, typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf-8')
+  }
+  if (chunk instanceof Uint8Array)
+    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+  return undefined
+}
+
 /**
  * Call a Node request handler with a real `IncomingMessage` / `ServerResponse` pair, in the
  * caller's async context, and collect the response. The response methods that emit the body
  * are overridden on the instance (not on a shared prototype, so the application's real
  * requests are not affected): the platform may replace the prototype of both objects, as
- * Express does.
+ * Express does. `part` is attached to the request as an own property, which survives that.
  */
 function injectIntoHandler(
   handler: RequestHandler,
   options: InjectOptions,
-  attach: Readonly<Record<symbol, unknown>> | undefined,
+  part: ODataBatchPartContext | undefined,
 ): Promise<InjectResponse> {
   return new Promise<InjectResponse>((resolve, reject) => {
     const socket = nullSocket(options.remoteAddress)
@@ -302,33 +314,23 @@ function injectIntoHandler(
     req.httpVersionMajor = 1
     req.httpVersionMinor = 1
     const body = options.payload !== undefined ? Buffer.from(options.payload, 'utf-8') : undefined
-    const headers: Record<string, string> = { ...options.headers }
-    if (body) headers['content-length'] = String(body.length)
-    else delete headers['content-length']
-    req.headers = headers
-    req.rawHeaders = Object.entries(headers).flat()
+    req.headers = body
+      ? { ...options.headers, 'content-length': String(body.length) }
+      : { ...options.headers }
+    req.rawHeaders = Object.entries(req.headers).flat() as string[]
     if (body) req.push(body)
     req.push(null)
     req.once('end', () => {
       req.complete = true
     })
-    // Own properties survive the platform replacing the request's prototype (Express does).
-    for (const key of Object.getOwnPropertySymbols(attach ?? {})) {
-      Object.defineProperty(req, key, { value: attach?.[key], enumerable: false })
-    }
+    if (part) Object.defineProperty(req, ODATA_BATCH_PART, { value: part, enumerable: false })
 
     const res = new ServerResponse(req)
     res.assignSocket(socket)
     const chunks: Buffer[] = []
     const collect = (chunk: unknown, encoding?: unknown): void => {
-      if (chunk === undefined || chunk === null || typeof chunk === 'function') return
-      if (typeof chunk === 'string') {
-        chunks.push(
-          Buffer.from(chunk, typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf-8'),
-        )
-      } else if (chunk instanceof Uint8Array) {
-        chunks.push(Buffer.from(chunk))
-      }
+      const buffer = toBuffer(chunk, encoding)
+      if (buffer) chunks.push(buffer)
     }
     // The platform's own end(), whatever prototype it gives `res` (Express replaces it).
     const end = (cb?: () => void): void => {
@@ -355,12 +357,10 @@ function injectIntoHandler(
     let done = false
     res.once('finish', () => {
       done = true
-      const rawPayload = Buffer.concat(chunks)
       resolve({
         statusCode: res.statusCode,
         headers: res.getHeaders(),
-        payload: rawPayload.toString('utf-8'),
-        rawPayload,
+        rawPayload: Buffer.concat(chunks),
       })
     })
     res.once('close', () => {
@@ -377,62 +377,56 @@ function injectIntoHandler(
 
 /**
  * Run one operation through the application's HTTP stack, in process: the Fastify instance's
- * `inject()`, else the Express application (a Node request handler).
+ * `inject()`, else the Express application (a Node request handler). When `part` is given, the
+ * operation runs as that `$batch` operation: in its async context and, on Express, with `part`
+ * attached to the request (see {@link getODataBatchPart}). Fastify's `inject()` cannot carry
+ * request properties: there the async context is the only carrier.
  */
 export async function dispatchBatchOperation(
   adapter: BatchHttpAdapter,
   operation: BatchOperationRequest,
+  part?: ODataBatchPartContext,
 ): Promise<BatchOperationResponse> {
   const instance = adapter.getInstance()
-  const headers = { ...operation.headers }
-  // The body may have been rewritten ($<Content-ID> substitution): the platform computes it.
-  delete headers['content-length']
   const options: InjectOptions = {
     method: operation.method.toUpperCase(),
     url: operation.url,
-    headers,
+    headers: operation.headers,
     ...(operation.body !== undefined && operation.body !== '' ? { payload: operation.body } : {}),
     ...(operation.remoteAddress ? { remoteAddress: operation.remoteAddress } : {}),
   }
-  let pending: Promise<InjectResponse>
-  if (hasInject(instance)) {
-    pending = instance.inject(options)
-  } else if (typeof instance === 'function') {
-    pending = injectIntoHandler(instance as RequestHandler, options, operation.attach)
-  } else {
-    throw new Error('$batch: the HTTP adapter instance cannot dispatch requests in process')
+  const run = (): Promise<InjectResponse> => {
+    if (hasInject(instance)) return instance.inject(options)
+    if (typeof instance === 'function') {
+      return injectIntoHandler(instance as RequestHandler, options, part)
+    }
+    return Promise.reject(
+      new Error('$batch: the HTTP adapter instance cannot dispatch requests in process'),
+    )
   }
-  const response = await withTimeout(pending, operation.timeoutMs)
-  const responseHeaders: Record<string, string | readonly string[]> = {}
+  const response = await withTimeout(
+    part ? runWithODataBatchPart(part, run) : run(),
+    operation.timeoutMs,
+  )
+  const headers: Record<string, string | readonly string[]> = {}
   for (const [name, value] of Object.entries(response.headers)) {
     const key = name.toLowerCase()
     if (value === undefined || DROPPED_RESPONSE_HEADERS.has(key)) continue
-    responseHeaders[key] = Array.isArray(value) ? value.map(String) : String(value)
+    headers[key] = Array.isArray(value) ? value.map(String) : String(value)
   }
-  const contentType = responseHeaders['content-type']
-  const textual = isTextual(typeof contentType === 'string' ? contentType : contentType?.[0])
-  const bytes = response.rawPayload ?? Buffer.from(response.payload, 'utf-8')
   return {
     statusCode: response.statusCode,
-    headers: responseHeaders,
-    body: bytes.length === 0 ? undefined : textual ? bytes.toString('utf-8') : bytes,
+    headers,
+    body: response.rawPayload.length === 0 ? undefined : response.rawPayload,
   }
 }
 
 /** `pending`, or a {@link BatchOperationTimeoutError} after `timeoutMs` (no limit when unset). */
 function withTimeout<T>(pending: Promise<T>, timeoutMs: number | undefined): Promise<T> {
   if (timeoutMs === undefined || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) return pending
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new BatchOperationTimeoutError(timeoutMs)), timeoutMs)
-    pending.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (err: unknown) => {
-        clearTimeout(timer)
-        reject(err instanceof Error ? err : new Error(String(err)))
-      },
-    )
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new BatchOperationTimeoutError(timeoutMs)), timeoutMs)
   })
+  return Promise.race([pending, timeout]).finally(() => clearTimeout(timer))
 }

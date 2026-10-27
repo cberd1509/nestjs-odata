@@ -43,6 +43,18 @@ export function rewriteCanonicalKeyUrl(
   return undefined
 }
 
+/**
+ * Split a resource path segment into its name and key predicate: `Products(1)` gives
+ * `{ name: 'Products', key: '1' }`, `Products` gives `{ name: 'Products' }`. Plain string
+ * scanning (the segment is untrusted input).
+ */
+export function splitKeyPredicate(segment: string): { name: string; key?: string } {
+  const open = segment.indexOf('(')
+  if (open === -1) return { name: segment }
+  const close = segment.endsWith(')') ? segment.length - 1 : segment.length
+  return { name: segment.slice(0, open), key: segment.slice(open + 1, close) }
+}
+
 function trimSlashes(value: string): string {
   let start = 0
   let end = value.length

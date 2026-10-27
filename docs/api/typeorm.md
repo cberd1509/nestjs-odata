@@ -382,11 +382,8 @@ See [$batch](../guide/batch).
 // The entity manager of the $batch changeset being executed (undefined outside one).
 // TypeOrmAutoHandler, scopes and write handlers (ctx.manager) use it automatically; use it in
 // your own route code that writes, so the writes commit or roll back with the changeset.
-// Read from the operation's request (`request`, else the OData request context's) first:
-// the manager is attached as request[ODATA_CHANGESET_MANAGER]; then from AsyncLocalStorage.
+// It is the `changeset` of getODataBatchPart(request) (see @nestjs-odata/core).
 function getODataChangesetManager(request?: unknown): EntityManager | undefined
-function runInODataChangeset<T>(manager: EntityManager, fn: () => T): T
-const ODATA_CHANGESET_MANAGER: unique symbol
 
 interface ODataBatchOptions {
   enabled?: boolean // default true; false answers 404

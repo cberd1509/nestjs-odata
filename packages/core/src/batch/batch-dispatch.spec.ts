@@ -6,6 +6,7 @@ import {
   BatchOperationTimeoutError,
   batchOperationHeaders,
   dispatchBatchOperation,
+  inheritedBatchHeaders,
   getODataBatchPart,
   ODATA_BATCH_PART,
   resolveBatchOperationUrl,
@@ -36,9 +37,16 @@ function echoHandler(req: IncomingMessage, res: ServerResponse): void {
 
 const adapter = (instance: unknown) => ({ getInstance: () => instance })
 
+/** The headers of an operation of a batch request carrying `batch` headers. */
+const ops = (
+  batch: Record<string, string | string[]>,
+  part: Record<string, string>,
+  hasBody: boolean,
+) => batchOperationHeaders(inheritedBatchHeaders(batch), part, hasBody)
+
 describe('batchOperationHeaders', () => {
   it('inherits the batch request headers, lets the part override them', () => {
-    const headers = batchOperationHeaders(
+    const headers = ops(
       {
         authorization: 'Bearer t',
         'x-tenant': 'a',
@@ -59,7 +67,7 @@ describe('batchOperationHeaders', () => {
   })
 
   it('never inherits body, batch-level and conditional headers', () => {
-    const headers = batchOperationHeaders(
+    const headers = ops(
       {
         'content-type': 'multipart/mixed; boundary=b',
         'content-length': '512',
@@ -81,12 +89,12 @@ describe('batchOperationHeaders', () => {
   })
 
   it('joins array-valued headers and defaults a body to application/json', () => {
-    expect(batchOperationHeaders({ 'x-a': ['1', '2'] }, {}, true)).toEqual({
+    expect(ops({ 'x-a': ['1', '2'] }, {}, true)).toEqual({
       'x-a': '1, 2',
       'content-type': 'application/json',
       'accept-encoding': 'identity',
     })
-    expect(batchOperationHeaders({}, { 'content-type': 'text/plain' }, true)).toEqual({
+    expect(ops({}, { 'content-type': 'text/plain', 'content-length': '9' }, true)).toEqual({
       'content-type': 'text/plain',
       'accept-encoding': 'identity',
     })
@@ -94,20 +102,21 @@ describe('batchOperationHeaders', () => {
 })
 
 describe('resolveBatchOperationUrl', () => {
+  const target = (operationUrl: string, batchUrl: string) => {
+    const url = resolveBatchOperationUrl(operationUrl, batchUrl)
+    return `${url.pathname}${url.search}`
+  }
+
   it('resolves a path relative to the $batch URL (the service root)', () => {
-    expect(resolveBatchOperationUrl('Products(1)', '/odata/$batch')).toBe('/odata/Products(1)')
-    expect(resolveBatchOperationUrl('Products?$top=1', '/api/odata/$batch?x=1')).toBe(
-      '/api/odata/Products?$top=1',
-    )
+    expect(target('Products(1)', '/odata/$batch')).toBe('/odata/Products(1)')
+    expect(target('Products?$top=1', '/api/odata/$batch?x=1')).toBe('/api/odata/Products?$top=1')
   })
 
   it('keeps an absolute path and takes the path and query of an absolute URI', () => {
-    expect(resolveBatchOperationUrl('/odata/Products(1)', '/odata/$batch')).toBe(
-      '/odata/Products(1)',
+    expect(target('/odata/Products(1)', '/odata/$batch')).toBe('/odata/Products(1)')
+    expect(target('https://h.example/odata/Products?$filter=a eq 1', '/odata/$batch')).toBe(
+      '/odata/Products?$filter=a%20eq%201',
     )
-    expect(
-      resolveBatchOperationUrl('https://h.example/odata/Products?$filter=a eq 1', '/odata/$batch'),
-    ).toBe('/odata/Products?$filter=a%20eq%201')
   })
 })
 
@@ -120,7 +129,7 @@ describe('dispatchBatchOperation', () => {
       body: '{"name":"x"}',
     })
     expect(res.statusCode).toBe(200)
-    const echoed = JSON.parse(res.body ?? '{}') as {
+    const echoed = JSON.parse(String(res.body ?? '{}')) as {
       method: string
       url: string
       body: string
@@ -167,7 +176,7 @@ describe('dispatchBatchOperation', () => {
       { method: 'GET', url: '/x', contentId: '4', inChangeset: false, batchRequest: {} },
       () => dispatchBatchOperation(adapter(echoHandler), { method: 'GET', url: '/x', headers: {} }),
     )
-    expect((JSON.parse(res.body ?? '{}') as { part: string }).part).toBe('4')
+    expect((JSON.parse(String(res.body ?? '{}')) as { part: string }).part).toBe('4')
     expect(getODataBatchPart()).toBeUndefined()
   })
 
@@ -179,7 +188,7 @@ describe('dispatchBatchOperation', () => {
         return Promise.resolve({
           statusCode: 201,
           headers: { location: '/odata/P(1)' },
-          payload: '{}',
+          rawPayload: Buffer.from('{}'),
         })
       },
     }
@@ -197,7 +206,11 @@ describe('dispatchBatchOperation', () => {
         payload: '{}',
       },
     ])
-    expect(res).toEqual({ statusCode: 201, headers: { location: '/odata/P(1)' }, body: '{}' })
+    expect(res).toEqual({
+      statusCode: 201,
+      headers: { location: '/odata/P(1)' },
+      body: Buffer.from('{}'),
+    })
   })
 
   it('never passes a stale Content-Length to inject() (body rewritten by $N substitution)', async () => {
@@ -205,13 +218,13 @@ describe('dispatchBatchOperation', () => {
     const fastifyLike = {
       inject: (opts: { headers: Record<string, string> }) => {
         calls.push(opts)
-        return Promise.resolve({ statusCode: 204, headers: {}, payload: '' })
+        return Promise.resolve({ statusCode: 204, headers: {}, rawPayload: Buffer.alloc(0) })
       },
     }
     await dispatchBatchOperation(adapter(fastifyLike), {
       method: 'PATCH',
       url: '/odata/P(1)',
-      headers: { 'content-type': 'application/json', 'content-length': '3' },
+      headers: ops({}, { 'content-type': 'application/json', 'content-length': '3' }, true),
       body: '{"ref":"/odata/P(1)"}',
     })
     expect(calls[0]?.headers['content-length']).toBeUndefined()
@@ -244,7 +257,7 @@ describe('dispatchBatchOperation', () => {
     const res = await dispatchBatchOperation(adapter(handler), {
       method: 'GET',
       url: '/',
-      headers: batchOperationHeaders({ 'accept-encoding': 'gzip, br' }, {}, false),
+      headers: ops({ 'accept-encoding': 'gzip, br' }, {}, false),
     })
     expect(acceptEncoding).toBe('identity')
     expect(res.headers['content-encoding']).toBeUndefined()
@@ -277,20 +290,18 @@ describe('dispatchBatchOperation', () => {
     ).rejects.toBeInstanceOf(BatchOperationTimeoutError)
   })
 
-  it('attaches values to the injected request so they survive a lost async context', async () => {
-    const key = Symbol('k')
-    let seen: unknown
+  it('runs as the given batch part: in its async context and attached to the request', async () => {
+    const part = { method: 'GET', url: '/', contentId: '3', inChangeset: true, batchRequest: {} }
+    let attached: unknown
+    let fromContext: unknown
     const handler = (req: IncomingMessage, res: ServerResponse) => {
-      seen = (req as unknown as Record<symbol, unknown>)[key]
+      attached = (req as unknown as Record<symbol, unknown>)[ODATA_BATCH_PART]
+      fromContext = getODataBatchPart({})
       res.end()
     }
-    await dispatchBatchOperation(adapter(handler), {
-      method: 'GET',
-      url: '/',
-      headers: {},
-      attach: { [key]: 'value' },
-    })
-    expect(seen).toBe('value')
+    await dispatchBatchOperation(adapter(handler), { method: 'GET', url: '/', headers: {} }, part)
+    expect(attached).toBe(part)
+    expect(fromContext).toBe(part)
   })
 })
 
@@ -309,10 +320,6 @@ describe('getODataBatchPart', () => {
     ).toBe(part)
   })
 
-  it('reads the platform raw request (Fastify request.raw)', () => {
-    expect(getODataBatchPart({ raw: { [ODATA_BATCH_PART]: part } })).toBe(part)
-  })
-
   it('falls back to the async context', () => {
     expect(runWithODataBatchPart(part, () => getODataBatchPart({}))).toBe(part)
   })
@@ -321,7 +328,7 @@ describe('getODataBatchPart', () => {
 describe('batchOperationHeaders: HTTP/2 pseudo-headers', () => {
   it('never inherits pseudo-headers', () => {
     expect(
-      batchOperationHeaders({ ':authority': 'h', ':path': '/odata/$batch', 'x-a': '1' }, {}, false),
+      ops({ ':authority': 'h', ':path': '/odata/$batch', 'x-a': '1' }, { ':method': 'GET' }, false),
     ).toEqual({ 'x-a': '1', 'accept-encoding': 'identity' })
   })
 })

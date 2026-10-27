@@ -129,10 +129,11 @@ TypeORM `QueryRunner` transaction, or your `changesetRunner`). If one fails (4xx
 transaction is rolled back and the remaining operations do not run. Operations outside
 changesets are independent — a failure in one does not affect others.
 
-The changeset's `EntityManager` is propagated to every operation of the changeset: it is
-attached to the operation's request object, and kept in an `AsyncLocalStorage` as a fallback
-(the request is read first, so middleware that resumes `next()` from another async context — a
-session store, a callback-based auth library — cannot detach an operation from its changeset).
+The changeset's `EntityManager` is propagated to every operation of the changeset, as the
+`changeset` of its batch part (see `getODataBatchPart()` below): on Express the part is attached
+to the operation's request object, which is read first, so middleware that resumes `next()` from
+another async context — a session store, a callback-based auth library — cannot detach an
+operation from its changeset; it is also kept in an `AsyncLocalStorage`.
 `TypeOrmAutoHandler`, row-level scopes and write handlers (`ctx.manager`) use it automatically. **Code of your own that writes to the database from an OData route** (a
 custom controller method, a service it calls) must use it too, or its writes are not part of the
 changeset:
@@ -290,9 +291,10 @@ Fastify's `inject()`), inside the `$batch` request's async context, without open
   is available as `getODataBatchPart()?.batchRequest`.
 
 `getODataBatchPart(request?)` (from `@nestjs-odata/core`) describes the operation being
-handled — `{ method, url, contentId, inChangeset, batchRequest }` — and is `undefined` for
-requests that are not part of a batch. The description is attached to the operation's request
-(`request[ODATA_BATCH_PART]`) and kept in an `AsyncLocalStorage`; pass the request from guards
+handled — `{ method, url, contentId, inChangeset, batchRequest, changeset }` — and is
+`undefined` for requests that are not part of a batch. The description is attached to the
+operation's request (`request[ODATA_BATCH_PART]`, Express) and kept in an `AsyncLocalStorage`;
+pass the request from guards
 and middleware (they run before the OData request context is set). Use it for a batch-specific
 policy:
 
@@ -308,8 +310,9 @@ export class NoBulkDeleteGuard implements CanActivate {
 }
 ```
 
-On Fastify, operations are injected with `fastify.inject()`, which cannot carry these request
-properties: there they rely on the `AsyncLocalStorage` alone.
+On Fastify, operations are injected with `fastify.inject()`, which cannot carry request
+properties: there the batch part (and the changeset's manager) travels in the
+`AsyncLocalStorage` alone, so middleware that leaves the async context loses it.
 
 Each operation counts as a request for global guards such as rate limiters.
 
@@ -350,7 +353,8 @@ answers `504 Gateway Timeout`.
 
 **Changeset failure**: the changeset is rolled back and answered with a **single**
 `application/http` error response in place of the changeset (OData 4.01 Part 1 §11.7.7.5): the
-failing operation's status and OData error body, with its `Content-ID` and `Content-Language`.
+failing operation's response as its route sent it (status, headers, OData error body), with its
+`Content-ID`.
 Operations after the failing one are not executed. Your `changesetRunner` may wrap or replace
 the error it sees; the client still gets the failing operation's status. When the transaction
 itself fails (for example at commit), the response is the mapped error with no `Content-ID`.

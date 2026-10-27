@@ -3,7 +3,7 @@ import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import { buildODataErrorResponse } from './odata-error.js'
 import { ODataEmptyResponse } from './odata-empty-response.js'
-import { getODataBatchPart } from '../batch/batch-dispatch.js'
+import { batchErrorContext, getODataBatchPart } from '../batch/batch-dispatch.js'
 
 /** Minimal shape of an HTTP response object (Express or Fastify compatible) */
 interface HttpResponse {
@@ -75,9 +75,7 @@ export class ODataExceptionFilter implements ExceptionFilter {
       {
         host,
         request: http.getRequest?.(),
-        ...(part
-          ? { batch: { method: part.method, url: part.url, contentId: part.contentId } }
-          : {}),
+        ...(part ? { batch: batchErrorContext(part) } : {}),
       },
       this.options?.errorLanguage,
     )

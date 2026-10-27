@@ -84,5 +84,5 @@ export type BatchResponseItem = BatchResponsePart | BatchChangesetResponse
  */
 export interface BatchResponse {
   readonly boundary: string
-  readonly parts: readonly BatchResponseItem[]
+  readonly parts: readonly BatchResponsePart[]
 }

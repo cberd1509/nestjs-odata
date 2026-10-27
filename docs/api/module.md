@@ -295,25 +295,26 @@ interface ODataBatchPartContext {
   contentId?: string
   inChangeset: boolean
   batchRequest: unknown // the platform request of the enclosing $batch request
+  changeset?: unknown // the changeset's unit of work (TypeORM: its EntityManager)
 }
 
 getODataBatchPart(request?) // ODataBatchPartContext | undefined (not in a $batch)
 ```
 
-The operation is attached to its request (`request[ODATA_BATCH_PART]`, also read from
-`request.raw`) and kept in an `AsyncLocalStorage`. `getODataBatchPart(request?)` reads `request`
-(else the request of the OData request context) first, then the async context: pass the request
-from guards and middleware. `getODataBatchRequestValue(key, request?)` reads any value the batch
-controller attached (`null` means "explicitly none").
+The operation is attached to its request (`request[ODATA_BATCH_PART]`, Express adapter) and kept
+in an `AsyncLocalStorage` (the only carrier on Fastify). `getODataBatchPart(request?)` reads
+`request` (else the request of the OData request context) first, then the async context: pass the
+request from guards and middleware.
 
 Lower-level helpers used by the adapter's `BatchController`, exported for other adapters:
-`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress?, attach?, timeoutMs? })`
-(runs one operation through the Express application or Fastify's `inject()`, in process; `attach`
-sets symbol properties on the injected request; rejects with `BatchOperationTimeoutError` after
-`timeoutMs`; the response's headers keep multi-valued headers as arrays and a binary body as a
-`Buffer`),
-`batchOperationHeaders(batchHeaders, partHeaders, hasBody)` (the headers an operation inherits),
-`resolveBatchOperationUrl(operationUrl, batchUrl)` and `runWithODataBatchPart(part, fn)`.
+`dispatchBatchOperation(httpAdapter, { method, url, headers, body?, remoteAddress?, timeoutMs? }, part?)`
+(runs one operation through the Express application or Fastify's `inject()`, in process, as the
+batch operation `part`; rejects with `BatchOperationTimeoutError` after `timeoutMs`; the
+response's headers keep multi-valued headers as arrays, its body is a `Buffer`),
+`inheritedBatchHeaders(batchHeaders)` and `batchOperationHeaders(inherited, partHeaders, hasBody)`
+(the headers an operation gets), `parseBatchUrl(batchUrl)`,
+`resolveBatchOperationUrl(operationUrl, batchUrl)` (a `URL`), `batchErrorContext(part)`,
+`headerValue(value)` and `runWithODataBatchPart(part, fn)`.
 
 ## Injection tokens
 

@@ -98,15 +98,19 @@ const STATUS_CODES: Record<number, string> = {
   403: 'Forbidden',
   404: 'NotFound',
   405: 'MethodNotAllowed',
+  406: 'NotAcceptable',
   409: 'Conflict',
   410: 'Gone',
   412: 'PreconditionFailed',
+  413: 'PayloadTooLarge',
+  415: 'UnsupportedMediaType',
   422: 'UnprocessableEntity',
   428: 'PreconditionRequired',
   429: 'TooManyRequests',
   500: 'InternalServerError',
   501: 'NotImplemented',
   503: 'ServiceUnavailable',
+  504: 'GatewayTimeout',
 }
 
 /** Map an HTTP status to the OData error code the library uses by default. */

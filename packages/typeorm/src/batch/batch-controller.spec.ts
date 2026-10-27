@@ -7,6 +7,7 @@ import 'reflect-metadata'
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { BadRequestException, HttpException } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { HttpAdapterHost } from '@nestjs/core'
 import { DataSource } from 'typeorm'
@@ -19,7 +20,7 @@ import {
   runWithODataRequestContext,
 } from '@nestjs-odata/core'
 import { BatchController, type BatchRequest } from './batch-controller.js'
-import { getODataChangesetManager, ODATA_CHANGESET_MANAGER } from './changeset-context.js'
+import { getODataChangesetManager } from './changeset-context.js'
 import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch-options.js'
 
 interface Seen {
@@ -31,7 +32,6 @@ interface Seen {
   part: ReturnType<typeof getODataBatchPart>
   /** Set on the injected request (survives a lost async context). */
   attachedPart?: ReturnType<typeof getODataBatchPart>
-  attachedManager?: unknown
 }
 
 /** What the fake application answers for one `METHOD url`. */
@@ -57,6 +57,36 @@ const mockDataSource = {
 }
 
 const mockOptions = { serviceRoot: '/odata', errorLanguage: 'en' }
+
+/** Products (with a `Supplier` navigation property) and Suppliers. */
+function productsEdm(): EdmRegistry {
+  const edm = new EdmRegistry()
+  edm.register(
+    {
+      name: 'Product',
+      namespace: 'Default',
+      keyProperties: ['id'],
+      isReadOnly: false,
+      properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+      navigationProperties: [
+        { name: 'Supplier', type: 'Default.Supplier', nullable: true, isCollection: false },
+      ],
+    },
+    { name: 'Products', entityTypeName: 'Product', namespace: 'Default', isReadOnly: false },
+  )
+  edm.register(
+    {
+      name: 'Supplier',
+      namespace: 'Default',
+      keyProperties: ['id'],
+      isReadOnly: false,
+      properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
+      navigationProperties: [],
+    },
+    { name: 'Suppliers', entityTypeName: 'Supplier', namespace: 'Default', isReadOnly: false },
+  )
+  return edm
+}
 
 function mockResponse() {
   return {
@@ -84,7 +114,6 @@ describe('BatchController', () => {
         manager: getODataChangesetManager(),
         part: getODataBatchPart(),
         attachedPart: (req as unknown as Record<symbol, Seen['part']>)[ODATA_BATCH_PART],
-        attachedManager: (req as unknown as Record<symbol, unknown>)[ODATA_CHANGESET_MANAGER],
       }
       seen.push(s)
       const route = routes[`${req.method} ${req.url}`]
@@ -107,12 +136,12 @@ describe('BatchController', () => {
 
   async function makeController(
     batchOptions?: ODataBatchOptions,
-    edm?: EdmRegistry,
+    edm: EdmRegistry = productsEdm(),
   ): Promise<BatchController> {
     const module = await Test.createTestingModule({
       controllers: [BatchController],
       providers: [
-        ...(edm ? [{ provide: EdmRegistry, useValue: edm }] : []),
+        { provide: EdmRegistry, useValue: edm },
         { provide: HttpAdapterHost, useValue: { httpAdapter: { getInstance: () => app } } },
         { provide: DataSource, useValue: mockDataSource },
         { provide: ODATA_MODULE_OPTIONS, useValue: mockOptions },
@@ -164,8 +193,14 @@ describe('BatchController', () => {
       originalUrl: batchUrl,
       headers: { 'content-type': 'multipart/mixed; boundary=b', ...headers },
     }
-    await controller.handleBatch(req as unknown as BatchRequest, res)
-    const sent: unknown = res.send.mock.calls[0]?.[0] ?? JSON.stringify(res.json.mock.calls[0]?.[0])
+    try {
+      await controller.handleBatch(req as unknown as BatchRequest, res)
+    } catch (err) {
+      // Errors of the $batch request itself are thrown, for ODataExceptionFilter to answer.
+      if (!(err instanceof HttpException)) throw err
+      return { status: err.getStatus(), text: JSON.stringify(err.getResponse()) }
+    }
+    const sent: unknown = res.send.mock.calls[0]?.[0]
     return { status: res.status.mock.calls[0]?.[0] as number, text: String(sent) }
   }
 
@@ -318,18 +353,18 @@ describe('BatchController', () => {
     const controller = await makeController({ enabled: false })
     const { status, text } = await run(controller, [op('GET', '/odata/Products(1)')])
     expect(status).toBe(404)
-    expect(text).toContain('"code":"NotFound"')
+    expect(text).toContain('The $batch endpoint is disabled')
     expect(seen).toHaveLength(0)
   })
 
   it('returns 400 when the content-type boundary is missing', async () => {
     const controller = await makeController()
-    const res = mockResponse()
-    await controller.handleBatch(
-      { body: 'x', headers: { 'content-type': 'multipart/mixed' } } as unknown as BatchRequest,
-      res,
-    )
-    expect(res.status).toHaveBeenCalledWith(400)
+    await expect(
+      controller.handleBatch(
+        { body: 'x', headers: { 'content-type': 'multipart/mixed' } } as unknown as BatchRequest,
+        mockResponse(),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException)
   })
 
   it('reads the body from the stream when req.body is empty', async () => {
@@ -375,7 +410,7 @@ describe('BatchController', () => {
     const controller = await makeController()
     await run(controller, [changeset([op('POST', '/odata/Products', { cid: '1', body: {} })])])
     expect(seen[0]?.attachedPart?.contentId).toBe('1')
-    expect(seen[0]?.attachedManager).toBe(mockQueryRunner.manager)
+    expect(seen[0]?.attachedPart?.changeset).toBe(mockQueryRunner.manager)
   })
 
   it('fails an operation that does not answer in time, rolling back its changeset (504)', async () => {
@@ -393,33 +428,8 @@ describe('BatchController', () => {
   })
 
   it('entitySets: refuses navigation and $expand into entity sets outside the allow-list', async () => {
-    const edm = new EdmRegistry()
-    edm.register(
-      {
-        name: 'Product',
-        namespace: 'Default',
-        keyProperties: ['id'],
-        isReadOnly: false,
-        properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
-        navigationProperties: [
-          { name: 'Supplier', type: 'Default.Supplier', nullable: true, isCollection: false },
-        ],
-      },
-      { name: 'Products', entityTypeName: 'Product', namespace: 'Default', isReadOnly: false },
-    )
-    edm.register(
-      {
-        name: 'Supplier',
-        namespace: 'Default',
-        keyProperties: ['id'],
-        isReadOnly: false,
-        properties: [{ name: 'id', type: 'Edm.Int32', nullable: false }],
-        navigationProperties: [],
-      },
-      { name: 'Suppliers', entityTypeName: 'Supplier', namespace: 'Default', isReadOnly: false },
-    )
     routes['GET /odata/Products(1)/id'] = () => ({ status: 200, body: { value: 1 } })
-    const controller = await makeController({ entitySets: ['Products'] }, edm)
+    const controller = await makeController({ entitySets: ['Products'] })
     const { text } = await run(controller, [
       op('GET', 'Products(1)/Supplier'),
       op('GET', 'Products?$expand=Supplier'),
@@ -427,7 +437,7 @@ describe('BatchController', () => {
       op('GET', 'Products?$top=1'),
     ])
     expect(statuses(text)).toEqual(['403', '403', '200', '200'])
-    const both = await makeController({ entitySets: ['Products', 'Suppliers'] }, edm)
+    const both = await makeController({ entitySets: ['Products', 'Suppliers'] })
     routes['GET /odata/Products(1)/Supplier'] = () => ({ status: 200, body: { id: 3 } })
     expect(statuses((await run(both, [op('GET', 'Products(1)/Supplier')])).text)).toEqual(['200'])
   })
@@ -453,8 +463,8 @@ describe('BatchController', () => {
     }
     const { text } = await run(controller, [op('GET', '/odata/Products(2)')])
     expect(statuses(text)).toEqual(['401'])
-    expect(text).toContain('www-authenticate: Bearer realm="odata"')
-    expect(text).toContain('retry-after: 5')
+    expect(text).toContain('WWW-Authenticate: Bearer realm="odata"')
+    expect(text).toContain('Retry-After: 5')
     expect(text).toContain('{"message":"login first"}')
     expect(errorMapper).not.toHaveBeenCalled()
   })
