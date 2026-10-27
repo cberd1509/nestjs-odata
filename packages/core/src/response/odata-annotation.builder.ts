@@ -24,10 +24,7 @@ export interface AnnotationContext {
  * @param entity - The entity object
  * @param keyProperties - The key property names from the EDM entity type
  */
-function buildKeyString(
-  entity: Record<string, unknown>,
-  keyProperties: readonly string[],
-): string {
+function buildKeyString(entity: Record<string, unknown>, keyProperties: readonly string[]): string {
   if (keyProperties.length === 1) {
     const keyName = keyProperties[0]
     const keyValue = entity[keyName]

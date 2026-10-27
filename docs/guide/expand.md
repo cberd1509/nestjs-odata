@@ -155,3 +155,11 @@ When exceeded, the response is:
   }
 }
 ```
+
+## Nested query options and row-level scopes
+
+`$filter`, `$select`, `$orderby` and `$expand` inside `$expand(...)` are validated against the
+related entity type (unknown or excluded properties give 400) and apply to the related rows only: a nested
+`$filter` that matches nothing yields an empty collection (or `null`), never a missing parent.
+When the target entity set has a [row-level scope](./row-level-scopes), it restricts the expanded
+rows in the same way, at every depth.

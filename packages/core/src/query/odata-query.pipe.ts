@@ -7,6 +7,7 @@ import { EdmRegistry } from '../edm/edm-registry.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQuery } from './odata-query.types.js'
+import { navigationTargetTypeName } from '../edm/navigation.js'
 import type { EdmEntityType } from '../edm/edm-entity-type.js'
 import type { FilterNode, SelectItem, ExpandNode, SearchNode, ApplyNode } from '../parser/ast.js'
 import { ODataValidationError } from './odata-validation.error.js'
@@ -124,9 +125,18 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
    * Per D-10: validates property references before any DB query is constructed.
    * Per T-03-01: unknown properties throw ODataValidationError (not a generic error).
    */
-  private validateFilterNode(node: FilterNode, entityType: EdmEntityType): void {
+  private validateFilterNode(
+    node: FilterNode,
+    entityType: EdmEntityType,
+    lambda?: { readonly variable: string; readonly targetType: EdmEntityType },
+  ): void {
     switch (node.kind) {
       case 'PropertyAccess': {
+        // Inside a lambda predicate, `t/title` refers to the collection's entity type.
+        if (lambda && node.path.length > 1 && node.path[0] === lambda.variable) {
+          this.validateFilterNode({ ...node, path: node.path.slice(1) }, lambda.targetType)
+          break
+        }
         const propertyName = node.path[0]
         if (!propertyName) break
         const knownNames = entityType.properties.map((p) => p.name)
@@ -141,26 +151,42 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
         break
       }
       case 'BinaryExpr':
-        this.validateFilterNode(node.left, entityType)
-        this.validateFilterNode(node.right, entityType)
+        this.validateFilterNode(node.left, entityType, lambda)
+        this.validateFilterNode(node.right, entityType, lambda)
         break
       case 'UnaryExpr':
-        this.validateFilterNode(node.operand, entityType)
+        this.validateFilterNode(node.operand, entityType, lambda)
         break
       case 'FunctionCall':
         for (const arg of node.args) {
-          this.validateFilterNode(arg, entityType)
+          this.validateFilterNode(arg, entityType, lambda)
         }
         break
-      case 'LambdaExpr':
-        if (node.predicate) {
+      case 'LambdaExpr': {
+        if (!node.predicate) break
+        const navProp = entityType.navigationProperties.find(
+          (np) => np.name.toLowerCase() === node.collection.toLowerCase(),
+        )
+        const targetType = navProp ? this.navigationTargetType(navProp.type) : undefined
+        if (node.variable && targetType) {
+          this.validateFilterNode(node.predicate, entityType, {
+            variable: node.variable,
+            targetType,
+          })
+        } else {
           this.validateFilterNode(node.predicate, entityType)
         }
         break
+      }
       case 'Literal':
         // Literals have no property references to validate
         break
     }
+  }
+
+  /** Resolve `Default.X` / `Collection(Default.X)` to the registered entity type `X`. */
+  private navigationTargetType(navType: string): EdmEntityType | undefined {
+    return this.edmRegistry.getEntityType(navigationTargetTypeName(navType))
   }
 
   /**
@@ -174,7 +200,10 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
   private validateExpandNode(expandNode: ExpandNode, entityType: EdmEntityType): void {
     for (const item of expandNode.items) {
       const navNames = entityType.navigationProperties.map((np) => np.name)
-      if (!navNames.includes(item.navigationProperty)) {
+      const navProp = entityType.navigationProperties.find(
+        (np) => np.name === item.navigationProperty,
+      )
+      if (!navProp) {
         throw new ODataValidationError(
           `Navigation property '${item.navigationProperty}' not found on entity '${entityType.name}'`,
           entityType.name,
@@ -182,6 +211,18 @@ export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODa
           navNames,
         )
       }
+      // Nested options ($select, $filter, $orderby, $expand) are validated against the target
+      // type, so they can only reference its exposed properties.
+      const targetType = this.navigationTargetType(navProp.type)
+      if (!targetType) continue
+      for (const selectItem of item.select?.items ?? []) {
+        this.validateSelectItem(selectItem, targetType)
+      }
+      if (item.filter) this.validateFilterNode(item.filter, targetType)
+      for (const orderItem of item.orderBy ?? []) {
+        this.validateFilterNode(orderItem.expression, targetType)
+      }
+      if (item.expand) this.validateExpandNode(item.expand, targetType)
     }
   }
 

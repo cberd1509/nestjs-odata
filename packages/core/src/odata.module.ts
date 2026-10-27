@@ -6,6 +6,8 @@ import {
   Module,
 } from '@nestjs/common'
 import { PATH_METADATA } from '@nestjs/common/constants.js'
+import { APP_INTERCEPTOR } from '@nestjs/core'
+import { ODataRequestContextInterceptor } from './context/odata-request-context.js'
 import type { UnmappedTypeStrategy } from './edm/edm-types.js'
 import type { EdmEntityConfig } from './edm/edm-entity-set.js'
 import { EdmRegistry } from './edm/edm-registry.js'
@@ -44,6 +46,15 @@ export interface ODataModuleOptions {
    */
   maxDeepInsertDepth?: number
   /**
+   * Fail closed when an entity set has no row-level scope. Default: false.
+   *
+   * When true, adapters that support row-level scopes (the TypeORM adapter's `scope` option)
+   * refuse to start when an entity set they register has no scope, and refuse at request time
+   * to read or write an entity set without one, including entity sets reached through
+   * `$expand` or a lambda (`any`/`all`) in `$filter`.
+   */
+  requireScope?: boolean
+  /**
    * OData controller classes decorated with @ODataController().
    * Per D-17: forRoot() patches each controller's PATH_METADATA to prepend serviceRoot synchronously,
    * before NestJS compiles the module. Controllers not listed here will NOT have serviceRoot applied.
@@ -63,6 +74,8 @@ export interface ODataModuleResolvedOptions {
   unmappedTypeStrategy: UnmappedTypeStrategy
   /** Maximum nesting depth for deep insert POST bodies. Default: 5. */
   maxDeepInsertDepth: number
+  /** Fail closed when an entity set has no row-level scope. Default: false. */
+  requireScope: boolean
 }
 
 const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
@@ -72,6 +85,7 @@ const DEFAULT_OPTIONS: Omit<ODataModuleResolvedOptions, 'serviceRoot'> = {
   maxFilterDepth: 10,
   unmappedTypeStrategy: 'skip',
   maxDeepInsertDepth: 5,
+  requireScope: false,
 }
 
 const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } =
@@ -91,6 +105,15 @@ const resolvedOptionsProvider = {
     ...raw,
   }),
   inject: [RAW_OPTIONS_TOKEN],
+}
+
+/**
+ * Registers {@link ODataRequestContextInterceptor} globally so adapters can hand application
+ * hooks the current request (see `getODataRequestContext()`).
+ */
+const requestContextInterceptorProvider = {
+  provide: APP_INTERCEPTOR,
+  useClass: ODataRequestContextInterceptor,
 }
 
 /**
@@ -169,6 +192,7 @@ export class ODataModule extends ConfigurableModuleClass {
       providers: [
         ...(parent.providers ?? []),
         resolvedOptionsProvider,
+        requestContextInterceptorProvider,
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],
@@ -223,6 +247,7 @@ export class ODataModule extends ConfigurableModuleClass {
       providers: [
         ...(parent.providers ?? []),
         resolvedOptionsProvider,
+        requestContextInterceptorProvider,
         CsdlBuilder,
         ServiceDocumentBuilder,
       ],

@@ -31,16 +31,14 @@ function makeEdmRegistry(entityTypeName: string): EdmRegistry {
     getEntitySet: vi
       .fn()
       .mockReturnValue({ name: entityTypeName + 's', entityTypeName, namespace: 'Default' }),
-    getEntityType: vi
-      .fn()
-      .mockReturnValue({
-        name: entityTypeName,
-        namespace: 'Default',
-        properties: [],
-        navigationProperties: [],
-        keyProperties: ['id'],
-        isReadOnly: false,
-      }),
+    getEntityType: vi.fn().mockReturnValue({
+      name: entityTypeName,
+      namespace: 'Default',
+      properties: [],
+      navigationProperties: [],
+      keyProperties: ['id'],
+      isReadOnly: false,
+    }),
   } as unknown as EdmRegistry
 }
 

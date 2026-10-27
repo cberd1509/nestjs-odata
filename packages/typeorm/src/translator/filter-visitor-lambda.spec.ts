@@ -82,7 +82,8 @@ function makeBinary(
   prop: string,
   value: number | string | boolean,
 ): BinaryExprNode {
-  const left: PropertyAccessNode = { kind: 'PropertyAccess', path: [prop] }
+  // `c/value` is the parser's shape for a lambda-variable path: ['c', 'value']
+  const left: PropertyAccessNode = { kind: 'PropertyAccess', path: prop.split('/') }
   const right: LiteralNode = { kind: 'Literal', value }
   return { kind: 'BinaryExpr', operator, left, right }
 }
@@ -128,7 +129,7 @@ describe('lambda any/all (FILT-01, FILT-02)', () => {
     const parentRepo = dataSource.getRepository(ParentEntity) as Repository<ObjectLiteral>
     const qb = parentRepo.createQueryBuilder('entity')
 
-    const node = makeLambda('any', 'children', 'c', makeBinary('gt', 'value', 100))
+    const node = makeLambda('any', 'children', 'c', makeBinary('gt', 'c/value', 100))
 
     const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite', parentRepo)
     visitor.visit(node)
@@ -143,7 +144,7 @@ describe('lambda any/all (FILT-01, FILT-02)', () => {
     const parentRepo = dataSource.getRepository(ParentEntity) as Repository<ObjectLiteral>
     const qb = parentRepo.createQueryBuilder('entity')
 
-    const node = makeLambda('all', 'children', 'c', makeBinary('gt', 'value', 40))
+    const node = makeLambda('all', 'children', 'c', makeBinary('gt', 'c/value', 40))
 
     const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite', parentRepo)
     visitor.visit(node)

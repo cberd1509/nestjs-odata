@@ -106,12 +106,14 @@ function makeMockRepo(columns: MockColumnMetadata[] = []) {
   const save = vi.fn()
   const preload = vi.fn()
   const deleteMethod = vi.fn()
+  const merge = vi.fn((target: ObjectLiteral, patch: ObjectLiteral) => ({ ...target, ...patch }))
 
   const repo = {
     findOne,
     create,
     save,
     preload,
+    merge,
     delete: deleteMethod,
     metadata: { columns },
   } as unknown as Repository<ObjectLiteral>
@@ -165,6 +167,8 @@ describe('TypeOrmAutoHandler', () => {
         // In the unit fixture there's no DataSource so it falls back to the
         // injected default repo.
         expect.anything(),
+        // Fourth arg is the row-level scope plan; none without a TypeOrmScopeService.
+        undefined,
       )
       expect(result.items).toBeDefined()
     })
@@ -363,10 +367,10 @@ describe('TypeOrmAutoHandler', () => {
   })
 
   describe('handleUpdate()', () => {
-    it('Test 13: calls repo.preload + repo.save and returns merged entity', async () => {
+    it('Test 13: loads the entity, merges the body onto it and saves (one SELECT)', async () => {
       const mergedEntity = { id: 1, name: 'Updated', price: 20.0 }
-      const { repo, preload, save } = makeMockRepo()
-      preload.mockResolvedValue(mergedEntity)
+      const { repo, findOne, preload, save } = makeMockRepo()
+      findOne.mockResolvedValue({ id: 1, name: 'Old', price: 10.0 })
       save.mockResolvedValue(mergedEntity)
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
@@ -376,14 +380,15 @@ describe('TypeOrmAutoHandler', () => {
         'Products',
       )
 
-      expect(preload).toHaveBeenCalledWith({ id: 1, name: 'Updated', price: 20.0 })
+      expect(findOne).toHaveBeenCalledTimes(1)
+      expect(preload).not.toHaveBeenCalled()
       expect(save).toHaveBeenCalledWith(mergedEntity)
       expect(result).toEqual(mergedEntity)
     })
 
-    it('Test 14: throws NotFoundException when repo.preload returns undefined (entity not found)', async () => {
-      const { repo, preload } = makeMockRepo()
-      preload.mockResolvedValue(undefined)
+    it('Test 14: throws NotFoundException when the entity does not exist', async () => {
+      const { repo, findOne } = makeMockRepo()
+      findOne.mockResolvedValue(null)
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
 
       await expect(autoHandler.handleUpdate('999', { name: 'Ghost' }, 'Products')).rejects.toThrow(
@@ -508,7 +513,7 @@ describe('TypeOrmAutoHandler', () => {
 
       // The translator should have been called with the injected default repo
       // (3rd argument), proving the no-DataSource branch returned `this.repo`.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo, undefined)
     })
 
     it('Test R2: falls back to default repo when the entity set is unknown', async () => {
@@ -536,7 +541,7 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
 
       // No entity class matched — the fallback branch should pass the default repo.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, repo, undefined)
     })
 
     it('Test R3: looks up Repository from DataSource when entity class matches', async () => {
@@ -563,7 +568,12 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleGet(makeQuery(), 'http://localhost/odata/Products')
 
       // The DataSource-resolved repo should win over the default one.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), entityType, resolvedRepo)
+      expect(translateMock).toHaveBeenCalledWith(
+        expect.anything(),
+        entityType,
+        resolvedRepo,
+        undefined,
+      )
     })
 
     it('Test R4: falls back to default repo when entity set is not in EdmRegistry but resolveEntityType would have thrown — short-circuit safety', async () => {
@@ -595,7 +605,12 @@ describe('TypeOrmAutoHandler', () => {
       await autoHandler.handleCount(makeQuery({ entitySetName: 'Others' }))
 
       // Walked entityMetadatas, found no match → returned default repo.
-      expect(translateMock).toHaveBeenCalledWith(expect.anything(), otherEntityType, repo)
+      expect(translateMock).toHaveBeenCalledWith(
+        expect.anything(),
+        otherEntityType,
+        repo,
+        undefined,
+      )
     })
   })
 
@@ -659,8 +674,8 @@ describe('TypeOrmAutoHandler', () => {
 
     it('Test E3: handleUpdate without If-Match header on ETag-enabled entity proceeds (no enforcement)', async () => {
       const entity = { id: 1, name: 'Widget' }
-      const { repo, preload, save } = makeMockRepo()
-      preload.mockResolvedValue(entity)
+      const { repo, findOne, save } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
       save.mockResolvedValue({ ...entity, name: 'Updated' })
 
       const etagProvider = {

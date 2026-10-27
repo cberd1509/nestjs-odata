@@ -16,6 +16,7 @@ OData v4 for NestJS with zero double-declaration. Define your entities once in T
 - **NestJS native** — Works with NestJS decorators, guards, pipes, and interceptors. Mix OData and REST routes freely.
 - **Rich query support** — `$filter`, `$select`, `$orderby`, `$top`, `$skip`, `$count`, `$expand`, lambda `any`/`all`, arithmetic, date/time and string functions.
 - **$batch support** — Multi-operation batch requests with atomic changesets.
+- **Row-level scopes** — Per-entity-set `scope` hooks restrict every read, `$count`, `$expand`, lambda, `$apply`, `$batch` and write check; `requireScope` fails closed.
 - **Security built-in** — `maxTop`, `maxExpandDepth`, `maxFilterDepth` limits enforced server-side. Parameterized queries prevent SQL injection.
 
 ## Quick start

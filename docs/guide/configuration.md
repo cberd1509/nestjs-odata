@@ -19,16 +19,17 @@ ODataModule.forRoot({
 
 ### Options reference
 
-| Option                 | Type                           | Default      | Description                                                              |
-| ---------------------- | ------------------------------ | ------------ | ------------------------------------------------------------------------ |
-| `serviceRoot`          | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                          |
-| `namespace`            | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs              |
-| `maxTop`               | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400        |
-| `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                      |
-| `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                           |
-| `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive     |
-| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                        |
-| `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot` |
+| Option                 | Type                           | Default      | Description                                                                 |
+| ---------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------- |
+| `serviceRoot`          | `string`                       | — (required) | Base path for all OData routes, e.g. `'/odata'`                             |
+| `namespace`            | `string`                       | `'Default'`  | EDM namespace used in `$metadata` and `@odata.context` URLs                 |
+| `maxTop`               | `number`                       | `1000`       | Maximum value for `$top`. Requests exceeding this return HTTP 400           |
+| `maxExpandDepth`       | `number`                       | `2`          | Maximum depth for `$expand` nesting                                         |
+| `maxFilterDepth`       | `number`                       | `10`         | Maximum nesting depth of `$filter` expressions                              |
+| `unmappedTypeStrategy` | `'skip' \| 'error'`            | `'skip'`     | Behavior when a TypeScript type cannot be mapped to an EDM primitive        |
+| `maxDeepInsertDepth`   | `number`                       | `5`          | Maximum nesting depth for deep insert POST bodies                           |
+| `requireScope`         | `boolean`                      | `false`      | Fail closed when an entity set has no [row-level scope](./row-level-scopes) |
+| `controllers`          | `(new (...args) => unknown)[]` | `[]`         | `@ODataController` classes to register and path-patch with `serviceRoot`    |
 
 ::: warning maxTop is a hard limit
 Unlike some OData implementations, `nestjs-odata` rejects `$top` values that exceed `maxTop` with HTTP 400. It does not silently clamp. This ensures clients know exactly what they are receiving.
@@ -70,6 +71,18 @@ The `serviceRoot` option in `forFeature()` is **optional**. It defaults to the v
 ```typescript
 // Explicit override (rarely needed)
 ODataTypeOrmModule.forFeature([Product], { serviceRoot: '/api/v2' })
+```
+
+### Row-level scopes
+
+Each item can carry a `scope`, and `defaultScope` covers the rest of the feature's entities.
+`imports` lists the modules that class-based scopes inject from. See
+[Row-level scopes](./row-level-scopes).
+
+```typescript
+ODataTypeOrmModule.forFeature([{ entity: Project, scope: ownRows }, Task], {
+  defaultScope: ownRows,
+})
 ```
 
 ### Custom entity-set names

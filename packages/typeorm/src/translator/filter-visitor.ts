@@ -11,6 +11,14 @@ import type {
   EdmEntityType,
 } from '@nestjs-odata/core'
 import { acceptVisitor, ODataValidationError } from '@nestjs-odata/core'
+import type { ScopedSubquery } from '../scope/scope.types.js'
+import { scopeInCondition } from '../scope/typeorm-scope.service.js'
+
+/**
+ * Looks up the row-level scope of the entity set a lambda (`any`/`all`) ranges over, by the
+ * navigation property name of the collection. See `TypeOrmScopeService.prepare()`.
+ */
+export type LambdaScopeLookup = (navigationProperty: string) => ScopedSubquery | undefined
 
 /** Map of OData comparison operators to SQL operators */
 const COMPARISON_OPS: Record<string, string> = {
@@ -88,6 +96,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     private readonly maxFilterDepth: number = 10,
     private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
     private readonly repo?: Repository<ObjectLiteral>,
+    private readonly lambdaScope?: LambdaScopeLookup,
   ) {}
 
   /** Entry point: dispatch the root FilterNode to the appropriate visit method */
@@ -124,6 +133,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.maxFilterDepth,
             this.dialect,
             this.repo,
+            this.lambdaScope,
           )
           leftVisitor.paramCount = this.paramCount
           leftVisitor.currentDepth = depthAtEntry
@@ -137,6 +147,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
             this.maxFilterDepth,
             this.dialect,
             this.repo,
+            this.lambdaScope,
           )
           rightVisitor.paramCount = this.paramCount
           rightVisitor.currentDepth = depthAtEntry
@@ -225,10 +236,20 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       'id'
     const pkCol = this.repo.metadata.primaryColumns[0]?.databaseName ?? 'id'
 
+    // Row-level scope of the target entity set: only rows inside it count for any/all.
+    const escapeColumn = (name: string): string => this.repo!.manager.connection.driver.escape(name)
+    const scoped = this.lambdaScope?.(relation.propertyName)
+    const scope = scoped
+      ? {
+          sql: ` AND ${scopeInCondition(scoped, (c) => `${subAlias}.${escapeColumn(c.databaseName)}`)}`,
+          params: scoped.params,
+        }
+      : { sql: '', params: {} }
+
     if (node.operator === 'any') {
-      this.buildAnyClause(node, subAlias, targetTable, fkCol, pkCol)
+      this.buildAnyClause(node, subAlias, targetTable, fkCol, pkCol, scope)
     } else {
-      this.buildAllClause(node, subAlias, targetTable, fkCol, pkCol)
+      this.buildAllClause(node, subAlias, targetTable, fkCol, pkCol, scope)
     }
   }
 
@@ -238,12 +259,16 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     targetTable: string,
     fkCol: string,
     pkCol: string,
+    scope: { sql: string; params: Readonly<Record<string, unknown>> },
   ): void {
-    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}`
+    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}${scope.sql}`
 
     if (!node.predicate) {
       // any() — check collection is non-empty
-      this.qb.andWhere(`EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate})`)
+      this.qb.andWhere(
+        `EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate})`,
+        scope.params,
+      )
       return
     }
 
@@ -252,13 +277,15 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       this.entityType,
       this.paramCount,
       this.dialect,
+      node.variable,
+      this.alias,
     )
     const result = builder.build(node.predicate)
     this.paramCount = result.finalCount
 
     this.qb.andWhere(
       `EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND ${result.expr})`,
-      result.params,
+      { ...scope.params, ...result.params },
     )
   }
 
@@ -268,6 +295,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     targetTable: string,
     fkCol: string,
     pkCol: string,
+    scope: { sql: string; params: Readonly<Record<string, unknown>> },
   ): void {
     // node.predicate is guaranteed non-null here (vacuous truth handled above)
     const builder = new InnerFilterExprBuilder(
@@ -275,14 +303,17 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
       this.entityType,
       this.paramCount,
       this.dialect,
+      node.variable,
+      this.alias,
     )
     const result = builder.build(node.predicate!)
     this.paramCount = result.finalCount
 
-    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}`
+    // all() ranges over the rows inside the scope only.
+    const correlate = `${subAlias}.${fkCol} = ${this.alias}.${pkCol}${scope.sql}`
     this.qb.andWhere(
       `NOT EXISTS (SELECT 1 FROM "${targetTable}" ${subAlias} WHERE ${correlate} AND NOT (${result.expr}))`,
-      result.params,
+      { ...scope.params, ...result.params },
     )
   }
 
@@ -447,6 +478,13 @@ class InnerFilterExprBuilder {
     private readonly entityType: EdmEntityType,
     startCount: number,
     private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
+    /** Lambda range variable (`t` in `any(t: t/title eq 'x')`); `t/title` maps to `alias.title`. */
+    private readonly lambdaVariable: string | null = null,
+    /**
+     * Alias of the entity the lambda is evaluated on. Inside a lambda, a path without the range
+     * variable (`ownerId` in `any(t: t/done eq true and ownerId eq 5)`) refers to that entity.
+     */
+    private readonly outerAlias?: string,
   ) {
     this.paramCount = startCount
   }
@@ -457,6 +495,13 @@ class InnerFilterExprBuilder {
   }
 
   private buildExpr(node: FilterNode): string {
+    if (node.kind === 'BinaryExpr' && (node.operator === 'and' || node.operator === 'or')) {
+      const op = node.operator === 'and' ? 'AND' : 'OR'
+      return `(${this.buildExpr(node.left)} ${op} ${this.buildExpr(node.right)})`
+    }
+    if (node.kind === 'UnaryExpr' && node.operator === 'not') {
+      return `NOT (${this.buildExpr(node.operand)})`
+    }
     if (node.kind === 'BinaryExpr') {
       const sqlArith = ARITH_OPS[node.operator]
       if (sqlArith) {
@@ -501,7 +546,11 @@ class InnerFilterExprBuilder {
       }
     }
     if (node.kind === 'PropertyAccess') {
-      return `${this.alias}.${node.path[0]}`
+      if (!this.lambdaVariable) return `${this.alias}.${node.path[0]}`
+      if (node.path.length > 1 && node.path[0] === this.lambdaVariable) {
+        return `${this.alias}.${node.path[1]}`
+      }
+      return `${this.outerAlias ?? this.alias}.${node.path[0]}`
     }
     if (node.kind === 'Literal') {
       this.paramCount++

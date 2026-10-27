@@ -16,6 +16,8 @@ import { TypeOrmPaginationVisitor } from './pagination-visitor.js'
 import { TypeOrmExpandVisitor } from './expand-visitor.js'
 import { TypeOrmApplyVisitor } from './apply-visitor.js'
 import { applyExpandPagination } from './expand-pagination.js'
+import type { TypeOrmScopePlan } from '../scope/scope.types.js'
+import { applyScopeToQuery, lookupScope } from '../scope/typeorm-scope.service.js'
 
 /**
  * Translation result from translate() — includes the QueryBuilder and the
@@ -63,15 +65,30 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
    * entity set being queried. When omitted, falls back to the constructor-
    * injected default (first-registered entity), which is correct for
    * single-entity forFeature() callers.
+   *
+   * `scopes` is the request's row-level scope plan from `TypeOrmScopeService.prepare()`. It
+   * restricts the root rows, every `$expand` JOIN and every lambda in `$filter`. When the
+   * module runs with `requireScope: true`, translating without a plan throws.
    */
   translate(
     query: ODataQuery,
     entityType: EdmEntityType,
     entityRepo?: Repository<ObjectLiteral>,
+    scopes?: TypeOrmScopePlan,
   ): TranslateResult {
+    if (!scopes && this.options.requireScope) {
+      throw new Error(
+        `TypeOrmQueryTranslator: requireScope is enabled; pass the scope plan from ` +
+          `TypeOrmScopeService.prepare() to translate '${query.entitySetName}'`,
+      )
+    }
     const repo = entityRepo ?? this.repo
     const alias = 'entity'
     const qb = repo.createQueryBuilder(alias)
+    const lambdaScope = scopes ? (nav: string) => lookupScope(scopes, 'lambda', [nav]) : undefined
+
+    // 0. Row-level scope of the requested entity set
+    applyScopeToQuery(qb, alias, scopes?.root)
 
     const dbType = repo.manager.connection.options.type as 'sqlite' | 'postgres' | 'ansi'
     const dialect: 'sqlite' | 'postgres' | 'ansi' =
@@ -86,6 +103,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
         this.options.maxFilterDepth,
         dialect,
         repo,
+        lambdaScope,
       ).visit(query.filter)
     }
 
@@ -112,6 +130,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
         this.options.maxFilterDepth,
         dialect,
         repo,
+        lambdaScope,
       )
       applyProperties = applyVisitor.apply(query.apply)
     }
@@ -138,6 +157,7 @@ export class TypeOrmQueryTranslator implements IQueryTranslator<TranslateResult>
         qb,
         this.edmRegistry,
         this.options.maxExpandDepth,
+        { scopes, manager: repo.manager, maxFilterDepth: this.options.maxFilterDepth, dialect },
       )
       expandVisitor.apply(query.expand, alias, entityType, 0)
       expandPaginationMap = expandVisitor.expandPaginationMap

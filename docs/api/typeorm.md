@@ -10,10 +10,13 @@ The main module class. Wraps `TypeOrmModule.forFeature()` and wires up EDM deriv
 
 ```typescript
 ODataTypeOrmModule.forFeature(
-  entities: EntityClassOrSchema[],
-  options?: { serviceRoot?: string }
+  items: ODataTypeOrmFeatureItem[],
+  options?: ODataTypeOrmFeatureOptions
 ): DynamicModule
 ```
+
+See [Module API](./module#odatatypeormmodule-forfeature) for the item and option shapes,
+including the `scope` / `defaultScope` row-level scope options.
 
 Register TypeORM entity classes for OData auto-derivation.
 
@@ -159,10 +162,18 @@ Implements `IQueryTranslator<SelectQueryBuilder<ObjectLiteral>>`.
 ### translate()
 
 ```typescript
-translate(query: ODataQuery, entityType: EdmEntityType): TranslateResult
+translate(
+  query: ODataQuery,
+  entityType: EdmEntityType,
+  entityRepo?: Repository<ObjectLiteral>,
+  scopes?: TypeOrmScopePlan,
+): TranslateResult
 ```
 
 Translate an `ODataQuery` AST into a TypeORM `SelectQueryBuilder`. Does not execute the query.
+`scopes` is the plan from `TypeOrmScopeService.prepare()` (see
+[Row-level scopes](../guide/row-level-scopes)); with `requireScope: true`, calling without it
+throws.
 
 Visitor application order:
 
@@ -200,6 +211,46 @@ Execute the translated query builder and return structured results. Applies post
 | `includeCount`    | `boolean`         | If `true`, uses `getManyAndCount()` to include total count |
 
 ---
+
+## TypeOrmScopeService
+
+Resolves and renders [row-level scopes](../guide/row-level-scopes). `TypeOrmAutoHandler` and the
+`$batch` controller use it; inject it in custom controllers.
+
+```typescript
+class TypeOrmScopeService {
+  isScoped(entitySetName: string): boolean
+  prepare(
+    query: ODataQuery,
+    operation: ODataScopeOperation,
+    manager?: EntityManager,
+  ): Promise<TypeOrmScopePlan>
+  findOne(
+    entitySetName: string,
+    where: Record<string, unknown>,
+    operation: ODataScopeOperation,
+    manager?: EntityManager,
+    options?: { lock?: boolean }, // SELECT ... FOR UPDATE where the driver supports it
+  ): Promise<ObjectLiteral | undefined>
+  subqueryFor(
+    entitySetName: string,
+    operation: ODataScopeOperation,
+    navigationPath?: readonly string[],
+    manager?: EntityManager,
+  ): Promise<ScopedSubquery | undefined>
+}
+
+function applyScopeToQuery(
+  qb: SelectQueryBuilder<ObjectLiteral>,
+  alias: string,
+  sub: ScopedSubquery | undefined,
+): void
+```
+
+Related exports: `ODataScopeFn`, `ODataScope`, `ODataScopeDefinition`, `ODataScopeContext`,
+`ODataScopeOperation`, `ScopedSubquery`, `TypeOrmScopePlan`, `ODataScopeRegistry`,
+`scopeInCondition`, `lookupScope`. `navigationTargetTypeName` (strip `Collection()` and the
+namespace from a navigation type) is exported by `@nestjs-odata/core`.
 
 ## TypeOrmEdmDeriver
 

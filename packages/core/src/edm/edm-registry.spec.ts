@@ -79,3 +79,31 @@ describe('EdmRegistry', () => {
     expect(registry.getEntityType('Unknown')).toBeUndefined()
   })
 })
+
+describe('EdmRegistry.getEntitySetByTypeName', () => {
+  it('returns the first entity set registered for a type', () => {
+    const registry = new EdmRegistry()
+    const type = {
+      name: 'Thing',
+      namespace: 'Default',
+      properties: [],
+      navigationProperties: [],
+      keyProperties: ['id'],
+      isReadOnly: false,
+    }
+    registry.register(type, {
+      name: 'Things',
+      entityTypeName: 'Thing',
+      namespace: 'Default',
+      isReadOnly: false,
+    })
+    registry.register(type, {
+      name: 'Others',
+      entityTypeName: 'Thing',
+      namespace: 'Default',
+      isReadOnly: false,
+    })
+    expect(registry.getEntitySetByTypeName('Thing')?.name).toBe('Things')
+    expect(registry.getEntitySetByTypeName('Nope')).toBeUndefined()
+  })
+})

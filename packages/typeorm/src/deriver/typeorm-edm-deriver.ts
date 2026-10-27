@@ -93,51 +93,55 @@ export class TypeOrmEdmDeriver implements IEdmDeriver {
       { type: string; precision?: number; scale?: number; maxLength?: number }
     >,
   ): readonly EdmProperty[] {
-    return meta.columns
-      .filter((col) => !excludedProps.has(col.propertyName))
-      .reduce<EdmProperty[]>((acc, col) => {
-        const override = edmTypeOverrides[col.propertyName]
+    return (
+      meta.columns
+        // `select: false` columns (password hashes, secrets) are not loaded by TypeORM by default;
+        // keep them out of the EDM so $select, $filter and $orderby cannot reach them either.
+        .filter((col) => !excludedProps.has(col.propertyName) && col.isSelect !== false)
+        .reduce<EdmProperty[]>((acc, col) => {
+          const override = edmTypeOverrides[col.propertyName]
 
-        if (override) {
+          if (override) {
+            acc.push({
+              name: col.propertyName,
+              type: override.type as EdmPrimitiveType,
+              nullable: col.isNullable,
+              ...(override.precision !== undefined ? { precision: override.precision } : {}),
+              ...(override.scale !== undefined ? { scale: override.scale } : {}),
+              ...(override.maxLength !== undefined ? { maxLength: override.maxLength } : {}),
+            })
+            return acc
+          }
+
+          const isConstructor = typeof col.type === 'function'
+          const columnType = typeof col.type === 'string' ? col.type : ''
+          const designType = isConstructor
+            ? (col.type as new (...args: unknown[]) => unknown)
+            : undefined
+
+          const edmType = mapColumnTypeToEdm(columnType, designType, this.unmappedTypeStrategy)
+          if (edmType === undefined) {
+            // strategy is 'skip' — omit this property
+            return acc
+          }
+
           acc.push({
             name: col.propertyName,
-            type: override.type as EdmPrimitiveType,
+            type: edmType,
             nullable: col.isNullable,
-            ...(override.precision !== undefined ? { precision: override.precision } : {}),
-            ...(override.scale !== undefined ? { scale: override.scale } : {}),
-            ...(override.maxLength !== undefined ? { maxLength: override.maxLength } : {}),
+            ...(col.precision !== undefined && col.precision !== null
+              ? { precision: col.precision }
+              : {}),
+            ...(col.scale !== undefined && col.scale !== null ? { scale: col.scale } : {}),
+            ...(col.length
+              ? {
+                  maxLength: typeof col.length === 'string' ? parseInt(col.length, 10) : col.length,
+                }
+              : {}),
           })
           return acc
-        }
-
-        const isConstructor = typeof col.type === 'function'
-        const columnType = typeof col.type === 'string' ? col.type : ''
-        const designType = isConstructor
-          ? (col.type as new (...args: unknown[]) => unknown)
-          : undefined
-
-        const edmType = mapColumnTypeToEdm(columnType, designType, this.unmappedTypeStrategy)
-        if (edmType === undefined) {
-          // strategy is 'skip' — omit this property
-          return acc
-        }
-
-        acc.push({
-          name: col.propertyName,
-          type: edmType,
-          nullable: col.isNullable,
-          ...(col.precision !== undefined && col.precision !== null
-            ? { precision: col.precision }
-            : {}),
-          ...(col.scale !== undefined && col.scale !== null ? { scale: col.scale } : {}),
-          ...(col.length
-            ? {
-                maxLength: typeof col.length === 'string' ? parseInt(col.length, 10) : col.length,
-              }
-            : {}),
-        })
-        return acc
-      }, [])
+        }, [])
+    )
   }
 
   private deriveNavigationProperties(meta: EntityMetadata): readonly EdmNavigationProperty[] {

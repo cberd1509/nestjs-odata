@@ -34,6 +34,7 @@ export default defineConfig({
         { text: '$expand', link: '/guide/expand' },
         { text: '$batch', link: '/guide/batch' },
         { text: 'Security', link: '/guide/security' },
+        { text: 'Row-level scopes', link: '/guide/row-level-scopes' },
         { text: 'Request Validation', link: '/guide/validation' },
         { text: 'Troubleshooting', link: '/guide/troubleshooting' },
       ],

@@ -14,6 +14,7 @@ import type { ODataEntitySecurityOptions } from '../query/odata-query.types.js'
 export class EdmRegistry {
   private readonly entityTypes = new Map<string, EdmEntityType>()
   private readonly entitySets = new Map<string, EdmEntitySet>()
+  private readonly entitySetsByType = new Map<string, EdmEntitySet>()
   /** Per-entity security option overrides keyed by entitySetName (per D-07) */
   private readonly entitySecurityOptions = new Map<string, ODataEntitySecurityOptions>()
 
@@ -34,6 +35,17 @@ export class EdmRegistry {
     }
     this.entityTypes.set(entityType.name, entityType)
     this.entitySets.set(entitySet.name, entitySet)
+    if (!this.entitySetsByType.has(entitySet.entityTypeName)) {
+      this.entitySetsByType.set(entitySet.entityTypeName, entitySet)
+    }
+  }
+
+  /**
+   * The entity set of an entity type (the first one registered for it). Accepts the bare type
+   * name (`OrderItem`); use `navigationTargetTypeName()` for navigation property types.
+   */
+  getEntitySetByTypeName(entityTypeName: string): EdmEntitySet | undefined {
+    return this.entitySetsByType.get(entityTypeName)
   }
 
   /** Retrieve a registered entity type by name. Returns undefined if not found. */

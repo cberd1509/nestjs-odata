@@ -263,6 +263,8 @@ export class Product {
 
 Exclude a TypeORM column from OData exposure. The column still exists in the database but will not appear in `$metadata`, query responses, or CRUD operations.
 
+Columns declared with TypeORM's `select: false` are excluded the same way. Excluded properties can't be referenced in `$select`, `$filter` or `$orderby`, including inside `$expand(...)` options (400).
+
 ```typescript
 @Entity()
 export class User {

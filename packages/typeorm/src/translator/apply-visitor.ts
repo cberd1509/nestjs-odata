@@ -6,7 +6,7 @@ import type {
   AggregateExpression,
   FilterNode,
 } from '@nestjs-odata/core'
-import { TypeOrmFilterVisitor } from './filter-visitor.js'
+import { TypeOrmFilterVisitor, type LambdaScopeLookup } from './filter-visitor.js'
 
 /**
  * TypeOrmApplyVisitor — translates an OData $apply pipeline AST into
@@ -32,6 +32,7 @@ export class TypeOrmApplyVisitor {
     private readonly maxFilterDepth: number = 10,
     private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
     private readonly repo: Repository<ObjectLiteral>,
+    private readonly lambdaScope?: LambdaScopeLookup,
   ) {}
 
   /**
@@ -74,6 +75,7 @@ export class TypeOrmApplyVisitor {
       this.maxFilterDepth,
       this.dialect,
       this.repo,
+      this.lambdaScope,
     )
     visitor.visit(filter)
     return []

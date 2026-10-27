@@ -84,6 +84,17 @@ GET /odata/Customers?$filter=Orders/all(o: o/Paid eq true)
 GET /odata/Products?$filter=Reviews/all(r: r/Rating ge 4)
 ```
 
+### Properties inside a lambda
+
+Inside the predicate, a path that starts with the range variable (`i/Shipping`) is a property of
+the collection's entity. A path without it (`Total`) is a property of the entity being filtered,
+as in OData's `$it`. Predicates can combine conditions with `and`, `or` and `not`:
+
+```
+# Orders with an express item, where the order itself is over $500
+GET /odata/Orders?$filter=Items/any(i: i/Shipping eq 'express' and Total gt 500)
+```
+
 ### Combining lambda with other filters
 
 Lambda expressions compose with `and`, `or`, and `not`:
