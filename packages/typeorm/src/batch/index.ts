@@ -1,2 +1,5 @@
 export * from './batch-controller.js'
 export * from './batch-response-builder.js'
+export * from './batch-options.js'
+export * from './batch.module.js'
+export * from './changeset-context.js'

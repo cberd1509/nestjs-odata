@@ -10,7 +10,7 @@ import {
   ODataQueryParam,
   type ODataQuery,
 } from '@nestjs-odata/core'
-import { TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
+import { getODataChangesetManager, TypeOrmAutoHandler } from '@nestjs-odata/typeorm'
 import { DataSource } from 'typeorm'
 
 /**
@@ -74,6 +74,10 @@ export class OrdersController {
     if (!hasNavProps) {
       return this.handler.handleCreate(body, 'Orders')
     }
+
+    // Inside a $batch changeset, join the changeset's transaction.
+    const changeset = getODataChangesetManager()
+    if (changeset) return this.handler.handleDeepCreate(body, 'Orders', changeset)
 
     // Deep insert: wrap in an explicit transaction
     const queryRunner = this.dataSource.createQueryRunner()

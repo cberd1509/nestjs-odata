@@ -203,4 +203,29 @@ describe('ODataTypeOrmModule', () => {
     // register is called once per entity that successfully derives
     expect(mockEdmRegistry.register).toHaveBeenCalledTimes(1)
   })
+
+  it('#73: every forFeature() imports the one static ODataBatchModule instead of declaring BatchController', async () => {
+    const { ODataTypeOrmModule } = await import('./odata-typeorm.module.js')
+    const { ODataBatchModule } = await import('./batch/batch.module.js')
+    const { BatchController } = await import('./batch/batch-controller.js')
+
+    const a = ODataTypeOrmModule.forFeature([Product])
+    const b = ODataTypeOrmModule.forFeature([Category])
+    for (const feature of [a, b]) {
+      expect(feature.controllers ?? []).not.toContain(BatchController)
+      expect(feature.imports).toContain(ODataBatchModule)
+    }
+    expect(Reflect.getMetadata('controllers', ODataBatchModule)).toEqual([BatchController])
+  })
+
+  it('forRoot({ batch }) provides the $batch options', async () => {
+    const { ODataTypeOrmModule } = await import('./odata-typeorm.module.js')
+    const { ODATA_BATCH_OPTIONS } = await import('./batch/batch-options.js')
+    const root = ODataTypeOrmModule.forRoot({ batch: { entitySets: ['Products'] } })
+    const provider = root.providers?.find(
+      (p) => typeof p === 'object' && 'provide' in p && p.provide === ODATA_BATCH_OPTIONS,
+    )
+    expect(provider).toMatchObject({ useValue: { entitySets: ['Products'] } })
+    expect(root.exports).toContain(ODATA_BATCH_OPTIONS)
+  })
 })

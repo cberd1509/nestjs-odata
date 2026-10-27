@@ -42,33 +42,49 @@ describe('buildBatchResponse', () => {
     expect(httpTypeCount).toBe(2)
   })
 
-  it('Test 2: failed changeset response — all changeset parts get error status', () => {
-    const errorBody = JSON.stringify({
-      error: {
-        code: 'InternalServerError',
-        message: 'Operation failed',
-        details: [],
-      },
-    })
-
-    const parts: BatchResponsePart[] = [
+  it('nests a successful changeset in its own multipart/mixed part (OData-Protocol §11.7.7.5)', () => {
+    const result = buildBatchResponse([
+      { statusCode: 200, headers: {}, body: '{"value":[]}' },
       {
-        statusCode: 500,
-        headers: {},
-        body: errorBody,
+        kind: 'changeset',
+        parts: [
+          { contentId: '1', statusCode: 201, headers: { location: '/odata/P(1)' }, body: '{}' },
+          { contentId: '2', statusCode: 204, headers: {} },
+        ],
       },
-      {
-        statusCode: 500,
-        headers: {},
-        body: errorBody,
-      },
-    ]
+    ])
+    const outer = result.contentType.split('boundary=')[1]
+    const nested = /Content-Type: multipart\/mixed; boundary=(\S+)/.exec(result.body)?.[1]
+    expect(nested).toBeDefined()
+    expect(nested).not.toBe(outer)
+    // Two top-level parts: the operation and the changeset.
+    expect(result.body.split(`--${outer}\r\n`).length - 1).toBe(2)
+    expect(result.body.split(`--${nested}\r\n`).length - 1).toBe(2)
+    expect(result.body).toContain(`--${nested}--`)
+    const changesetBody = result.body.slice(result.body.indexOf(`--${nested}`))
+    expect(changesetBody).toContain('Content-ID: 1')
+    expect(changesetBody).toContain('HTTP/1.1 201 Created')
+    expect(changesetBody).toContain('Location: /odata/P(1)')
+    expect(changesetBody).toContain('Content-ID: 2')
+  })
 
-    const result = buildBatchResponse(parts)
+  it('a failed changeset is a single application/http part (no nested multipart)', () => {
+    const errorBody = JSON.stringify({ error: { code: 'NotFound', message: 'x', details: [] } })
+    const result = buildBatchResponse([
+      { contentId: '2', statusCode: 404, headers: { 'content-language': 'en' }, body: errorBody },
+    ])
+    expect(result.body).not.toContain('multipart/mixed')
+    expect((result.body.match(/HTTP\/1\.1 404 Not Found/g) ?? []).length).toBe(1)
+    expect(result.body).toContain('Content-ID: 2')
+    expect(result.body).toContain('Content-Language: en')
+  })
 
-    expect(result.body).toContain('HTTP/1.1 500 Internal Server Error')
-    const errorCount = (result.body.match(/HTTP\/1\.1 500/g) ?? []).length
-    expect(errorCount).toBe(2)
+  it("uses the operation's own Content-Type (e.g. text/plain for $count)", () => {
+    const result = buildBatchResponse([
+      { statusCode: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: '3' },
+    ])
+    expect(result.body).toContain('Content-Type: text/plain; charset=utf-8')
+    expect(result.body).not.toContain('Content-Type: application/json')
   })
 
   it('includes Content-ID when present', () => {

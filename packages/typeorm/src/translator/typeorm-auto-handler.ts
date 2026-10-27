@@ -30,6 +30,7 @@ import {
   WriteNotAllowedException,
 } from '../write/handlers.js'
 import type { TypeOrmScopeService } from '../scope/typeorm-scope.service.js'
+import { getODataChangesetManager } from '../batch/changeset-context.js'
 
 /**
  * TypeOrmAutoHandler — handles OData GET and $count requests automatically
@@ -136,7 +137,7 @@ export class TypeOrmAutoHandler {
     const result = await handler.call(
       handlers,
       body,
-      buildWriteContext(entitySetName, entityType, operation, { manager }),
+      buildWriteContext(entitySetName, entityType, operation, manager ? { manager } : {}),
     )
     const entity = assertHandlerEntity(result, entitySetName, operation)
     return {
@@ -181,6 +182,9 @@ export class TypeOrmAutoHandler {
     work: (repo: Repository<ObjectLiteral>, manager?: EntityManager) => Promise<T>,
   ): Promise<T> {
     const repo = this.resolveRepo(entitySetName)
+    // Inside a `$batch` changeset the write joins the changeset's transaction.
+    const changeset = getODataChangesetManager()
+    if (changeset) return work(repo, changeset)
     if (!this.scopes?.isScoped(entitySetName)) return work(repo)
     return repo.manager.transaction((manager) => work(manager.getRepository(repo.target), manager))
   }
@@ -213,6 +217,14 @@ export class TypeOrmAutoHandler {
    * repo when no DataSource is available (single-entity test fixtures).
    */
   private resolveRepo(entitySetName: string): Repository<ObjectLiteral> {
+    const repo = this.resolveDefaultRepo(entitySetName)
+    // Inside a `$batch` changeset, read and write through the changeset's transaction.
+    const changeset = getODataChangesetManager()
+    return changeset ? changeset.getRepository(repo.target) : repo
+  }
+
+  /** {@link resolveRepo} outside a changeset. */
+  private resolveDefaultRepo(entitySetName: string): Repository<ObjectLiteral> {
     if (!this.dataSource) return this.repo
     const entitySet = this.edmRegistry.getEntitySet(entitySetName)
     if (!entitySet) return this.repo
@@ -797,7 +809,15 @@ export class TypeOrmAutoHandler {
     const conditions = this.conditions(ifMatchHeader)
     this.assertIfMatchPresent(entitySetName, conditions.ifMatch)
     if (this.scopes?.isScoped(entitySetName)) {
-      await this.findForWrite(entitySetName, keyStr, where, this.resolveRepo(entitySetName))
+      // Inside a `$batch` changeset the check runs (and locks) in the changeset's transaction,
+      // which the handler writes through (`ctx.manager`).
+      await this.findForWrite(
+        entitySetName,
+        keyStr,
+        where,
+        this.resolveRepo(entitySetName),
+        getODataChangesetManager(),
+      )
     }
     const ctx = buildWriteContext(entitySetName, entityType, operation, {
       rawKey: keyStr,

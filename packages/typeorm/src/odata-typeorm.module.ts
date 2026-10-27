@@ -37,6 +37,8 @@ import { TypeOrmAutoHandler } from './translator/typeorm-auto-handler.js'
 import { TypeOrmETagProvider } from './etag/typeorm-etag.provider.js'
 import { TypeOrmSearchProvider } from './translator/search-provider.js'
 import { BatchController } from './batch/batch-controller.js'
+import { ODataBatchModule } from './batch/batch.module.js'
+import { ODATA_BATCH_OPTIONS, type ODataBatchOptions } from './batch/batch-options.js'
 import { ODataScopeRegistry } from './scope/scope-registry.js'
 import { TypeOrmScopeService } from './scope/typeorm-scope.service.js'
 import type { ODataScope, ODataScopeDefinition, ODataScopeFn } from './scope/scope.types.js'
@@ -102,6 +104,12 @@ export interface ODataTypeOrmRootOptions {
    * changesets inside your application's unit of work. See {@link ODataChangesetRunner}.
    */
   readonly changesetRunner?: ODataChangesetRunner
+  /**
+   * Options of the `$batch` endpoint: turn it off (`enabled: false`) or restrict the entity sets
+   * its operations may target (`entitySets`). Operations always run through their routes
+   * (guards, interceptors, pipes). See {@link ODataBatchOptions}.
+   */
+  readonly batch?: ODataBatchOptions
 }
 
 /** Value provided under {@link TYPEORM_ODATA_SCOPES}. */
@@ -400,15 +408,19 @@ export class TypeOrmEdmInitializer implements OnModuleInit, OnApplicationBootstr
 @Module({})
 export class ODataTypeOrmModule {
   /**
-   * Application-wide adapter settings, imported once in the root module (optional). Today it
-   * sets the `$batch` changeset runner, which applies to every entity set of the app.
+   * Application-wide adapter settings, imported once in the root module (optional): the
+   * `$batch` changeset runner and the `$batch` endpoint options, which apply to every entity
+   * set of the app.
    */
   static forRoot(options: ODataTypeOrmRootOptions = {}): DynamicModule {
     return {
       module: ODataTypeOrmModule,
       global: true,
-      providers: [{ provide: ODATA_CHANGESET_RUNNER, useValue: options.changesetRunner }],
-      exports: [ODATA_CHANGESET_RUNNER],
+      providers: [
+        { provide: ODATA_CHANGESET_RUNNER, useValue: options.changesetRunner },
+        { provide: ODATA_BATCH_OPTIONS, useValue: options.batch ?? {} },
+      ],
+      exports: [ODATA_CHANGESET_RUNNER, ODATA_BATCH_OPTIONS],
     }
   }
 
@@ -461,8 +473,9 @@ export class ODataTypeOrmModule {
 
     return {
       module: ODataTypeOrmModule,
-      imports: [TypeOrmModule.forFeature(entities), ...(options?.imports ?? [])],
-      controllers: [BatchController, ...featureControllers],
+      // ODataBatchModule declares BatchController: one $batch route for every forFeature().
+      imports: [TypeOrmModule.forFeature(entities), ODataBatchModule, ...(options?.imports ?? [])],
+      controllers: featureControllers,
       providers: [
         {
           provide: TYPEORM_ODATA_ENTITIES,

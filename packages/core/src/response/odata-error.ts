@@ -41,10 +41,14 @@ export interface ODataErrorMapping {
 export interface ODataErrorMapperContext {
   /**
    * The Nest arguments host of the failing route, when the error is caught by
-   * `ODataExceptionFilter`. Undefined for `$batch` parts.
+   * `ODataExceptionFilter` (also for a `$batch` operation, which runs through its own route).
+   * Undefined for errors of the `$batch` request itself.
    */
   readonly host?: ArgumentsHost
-  /** The platform request (for `$batch` parts, the `$batch` request). */
+  /**
+   * The platform request: for a `$batch` operation, the operation's own request (the `$batch`
+   * request is `getODataBatchPart()?.batchRequest`).
+   */
   readonly request?: unknown
   /**
    * Set when the error comes from a `$batch` request: from one operation (`method`, `url`,

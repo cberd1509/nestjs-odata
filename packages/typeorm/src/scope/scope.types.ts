@@ -38,7 +38,7 @@ export interface ODataScopeContext {
    */
   readonly navigationPath: readonly string[]
   /**
-   * The Nest execution context of the route (the `$batch` route for batch parts), or
+   * The Nest execution context of the route (for a `$batch` operation, its own route), or
    * `undefined` outside an HTTP request. See `getODataRequestContext()` in `@nestjs-odata/core`.
    */
   readonly executionContext: ExecutionContext | undefined

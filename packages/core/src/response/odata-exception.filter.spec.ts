@@ -6,6 +6,8 @@ import type { ArgumentsHost } from '@nestjs/common'
 import { ODataExceptionFilter } from './odata-exception.filter.js'
 import { ODataParseError } from '../parser/errors.js'
 import { ODataValidationError } from '../query/odata-validation.error.js'
+import { runWithODataBatchPart } from '../batch/batch-dispatch.js'
+import type { ODataErrorMapperContext } from './odata-error.js'
 
 interface MockResponse {
   status: MockInstance
@@ -152,5 +154,23 @@ describe('ODataExceptionFilter', () => {
         }),
       }),
     )
+  })
+
+  it('hands the error mapper the $batch operation when the request is a batch part', () => {
+    const contexts: ODataErrorMapperContext[] = []
+    const mapping = new ODataExceptionFilter({
+      errorMapper: (_err, ctx) => {
+        contexts.push(ctx)
+        return undefined
+      },
+    })
+    const { host } = makeHost()
+    runWithODataBatchPart(
+      { method: 'DELETE', url: 'Products(1)', contentId: '3', inChangeset: true, batchRequest: {} },
+      () => mapping.catch(new NotFoundException('gone'), host),
+    )
+    mapping.catch(new NotFoundException('gone'), host)
+    expect(contexts[0]?.batch).toEqual({ method: 'DELETE', url: 'Products(1)', contentId: '3' })
+    expect(contexts[1]?.batch).toBeUndefined()
   })
 })

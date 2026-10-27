@@ -25,13 +25,17 @@ export interface ODataWriteContext {
    * answered 428 when the header is missing; the handler still checks that it matches.
    */
   readonly requireIfMatch?: boolean
-  /** The Nest execution context of the route (the `$batch` route for batch parts). */
+  /**
+   * The Nest execution context of the route. A `$batch` operation runs through its own route,
+   * so this is that route's context (the `$batch` request is `getODataBatchPart()?.batchRequest`).
+   */
   readonly executionContext?: ExecutionContext
-  /** The platform request object (the `$batch` request for batch parts). */
+  /** The platform request object (for a `$batch` operation, the operation's own request). */
   readonly request?: unknown
   /**
-   * Inside a `$batch` changeset: the entity manager of the changeset's transaction. Write through
-   * it (or through whatever your `changesetRunner` set up) so the changeset stays atomic.
+   * Inside a `$batch` changeset: the entity manager of the changeset's transaction (also
+   * available as `getODataChangesetManager()`). Write through it (or through whatever your
+   * `changesetRunner` set up) so the changeset stays atomic.
    * For `handleDeepCreate(body, set, manager)`: the manager the caller passed.
    * `undefined` otherwise.
    */
@@ -97,7 +101,9 @@ export type ODataETagSource =
  * Runs the operations of one `$batch` changeset atomically. `work` executes every operation
  * and throws when one fails; the runner must commit when it resolves and roll back when it
  * rejects. The default runs `work` in a TypeORM `QueryRunner` transaction. Provide your own to
- * join your application's unit of work.
+ * join your application's unit of work. The manager passed to `work` is what the changeset's
+ * operations see as `getODataChangesetManager()` and write handlers as `ctx.manager`. `ctx`
+ * describes the `$batch` request.
  */
 export type ODataChangesetRunner = <T>(
   work: (manager: EntityManager) => Promise<T>,

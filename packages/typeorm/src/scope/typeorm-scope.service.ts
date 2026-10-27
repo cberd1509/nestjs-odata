@@ -13,6 +13,7 @@ import {
 import { DataSource } from 'typeorm'
 import type { EntityManager, EntityMetadata, ObjectLiteral, SelectQueryBuilder } from 'typeorm'
 import { ODataScopeRegistry } from './scope-registry.js'
+import { getODataChangesetManager } from '../batch/changeset-context.js'
 import type {
   ODataScopeContext,
   ODataScopeOperation,
@@ -109,7 +110,7 @@ export function renderPrimaryKeyQuery(
 /**
  * Resolves and renders row-level scopes (see `ODataScopeFn`) for the TypeORM adapter.
  *
- * `TypeOrmAutoHandler` and the `$batch` controller use it on every read and before every
+ * `TypeOrmAutoHandler` uses it (also for `$batch` operations) on every read and before every
  * update, replace and delete. Custom controllers that build queries with
  * `TypeOrmQueryTranslator` directly call {@link prepare} and pass the plan to `translate()`.
  */
@@ -121,6 +122,11 @@ export class TypeOrmScopeService {
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
     @Inject(ODataScopeRegistry) private readonly registry: ODataScopeRegistry,
   ) {}
+
+  /** The manager queries run on by default: the current `$batch` changeset's, else the DataSource's. */
+  private defaultManager(): EntityManager {
+    return getODataChangesetManager() ?? this.dataSource.manager
+  }
 
   /** True when reads and writes of `entitySetName` are scoped (or must be, with `requireScope`). */
   isScoped(entitySetName: string): boolean {
@@ -156,7 +162,7 @@ export class TypeOrmScopeService {
       executionContext: request?.executionContext,
       request: request?.request,
     }
-    const qb = primaryKeyQuery(manager ?? this.dataSource.manager, metadata, alias)
+    const qb = primaryKeyQuery(manager ?? this.defaultManager(), metadata, alias)
     await fn(qb, ctx)
     return renderPrimaryKeyQuery(qb, metadata)
   }
@@ -222,7 +228,7 @@ export class TypeOrmScopeService {
     options: { lock?: boolean } = {},
   ): Promise<ObjectLiteral | undefined> {
     const metadata = this.metadataOf(this.entityTypeOf(entitySetName).name)
-    const em = manager ?? this.dataSource.manager
+    const em = manager ?? this.defaultManager()
     const alias = 'entity'
     const qb = em.createQueryBuilder(metadata.target, alias)
     // Find options make getOne() join `eager: true` relations like Repository.findOne().

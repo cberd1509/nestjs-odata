@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { ObjectLiteral, Repository } from 'typeorm'
+import type { EntityManager, ObjectLiteral, Repository } from 'typeorm'
 import type { EdmEntityType, ODataModuleResolvedOptions } from '@nestjs-odata/core'
-import { EdmRegistry, runWithODataRequestContext } from '@nestjs-odata/core'
+import { EdmRegistry, runWithODataBatchPart, runWithODataRequestContext } from '@nestjs-odata/core'
+import { runInODataChangeset } from '../batch/changeset-context.js'
 import { TypeOrmAutoHandler } from './typeorm-auto-handler.js'
 import type { TypeOrmQueryTranslator } from './typeorm-query-translator.js'
 import { ODataWriteRegistry } from '../write/write-registry.js'
@@ -241,5 +242,49 @@ describe('@odata.etag on collection items (#81)', () => {
     expect(result.items[0]).toMatchObject({ __etag: currentETag })
     // No ETag value (e.g. not selected): no ETag rather than a wrong one.
     expect(result.items[1]).not.toHaveProperty('__etag')
+  })
+})
+
+describe('$batch changesets (#67): operations join the changeset transaction', () => {
+  it('reads and writes through the changeset entity manager', async () => {
+    const { handler, repo } = setup()
+    const txRepo = {
+      ...repo,
+      save: vi.fn((v: ObjectLiteral) => Promise.resolve({ ...current, ...v, tx: true })),
+    }
+    const manager = { getRepository: vi.fn().mockReturnValue(txRepo) }
+    const created = await runInODataChangeset(manager as unknown as EntityManager, () =>
+      handler.handleCreate({ name: 'x', price: 1, version: 1 }, 'Products'),
+    )
+    expect(manager.getRepository).toHaveBeenCalled()
+    expect(txRepo.save).toHaveBeenCalled()
+    expect(repo.save).not.toHaveBeenCalled()
+    expect(created.entity).toMatchObject({ tx: true })
+  })
+
+  it('hands write handlers the changeset manager and the batch operation', async () => {
+    const seen: ODataWriteContext[] = []
+    const handlers: ODataWriteHandlers<any> = {
+      create: (body, ctx) => {
+        seen.push(ctx)
+        return { id: 9, ...body }
+      },
+    }
+    const { handler } = setup({ handlers })
+    const manager = { getRepository: vi.fn() } as unknown as EntityManager
+    await runWithODataBatchPart(
+      { method: 'POST', url: 'Products', contentId: '4', inChangeset: true, batchRequest: {} },
+      () =>
+        runInODataChangeset(manager, () =>
+          handler.handleCreate({ name: 'x', price: 1, version: 1 }, 'Products'),
+        ),
+    )
+    expect(seen[0]?.manager).toBe(manager)
+    expect(seen[0]?.batch).toEqual({ contentId: '4', inChangeset: true })
+
+    seen.length = 0
+    await handler.handleCreate({ name: 'y', price: 1, version: 1 }, 'Products')
+    expect(seen[0]?.manager).toBeUndefined()
+    expect(seen[0]?.batch).toBeUndefined()
   })
 })

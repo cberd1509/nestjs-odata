@@ -20,7 +20,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import type { BatchResponsePart } from '@nestjs-odata/core'
+import type { BatchResponseItem, BatchResponsePart } from '@nestjs-odata/core'
 
 /**
  * Map of HTTP status codes to reason phrases.
@@ -44,51 +44,87 @@ const STATUS_TEXTS: Record<number, string> = {
   503: 'Service Unavailable',
 }
 
-/**
- * Build a multipart/mixed batch response from individual operation results.
- *
- * @param parts - Array of per-operation response descriptors
- * @returns Object with `contentType` (for Content-Type header) and `body` (response body string)
- */
 /** Canonical casing for the response headers batch parts carry (`location`, `etag`). */
 const HEADER_NAMES: Record<string, string> = {
   location: 'Location',
   etag: 'ETag',
   allow: 'Allow',
+  'content-type': 'Content-Type',
   'content-language': 'Content-Language',
   'preference-applied': 'Preference-Applied',
   'odata-entityid': 'OData-EntityId',
+  'odata-version': 'OData-Version',
 }
 
-export function buildBatchResponse(parts: BatchResponsePart[]): {
+/** A fresh multipart boundary. */
+function newBoundary(prefix: string): string {
+  return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+}
+
+/** The lines of one `application/http` part (after its boundary delimiter). */
+function operationLines(part: BatchResponsePart): string[] {
+  const lines: string[] = []
+  const statusText = STATUS_TEXTS[part.statusCode] ?? 'Unknown'
+  lines.push('Content-Type: application/http')
+  lines.push('Content-Transfer-Encoding: binary')
+  if (part.contentId !== undefined) {
+    lines.push(`Content-ID: ${part.contentId}`)
+  }
+  lines.push('')
+  lines.push(`HTTP/1.1 ${part.statusCode} ${statusText}`)
+  let hasContentType = false
+  for (const [name, value] of Object.entries(part.headers)) {
+    const key = name.toLowerCase()
+    if (key === 'content-length') continue
+    if (key === 'content-type') {
+      if (part.body === undefined) continue
+      hasContentType = true
+    }
+    lines.push(`${HEADER_NAMES[key] ?? name}: ${value}`)
+  }
+
+  if (part.body !== undefined) {
+    if (!hasContentType) lines.push('Content-Type: application/json')
+    lines.push(`Content-Length: ${Buffer.byteLength(part.body, 'utf-8')}`)
+  }
+  lines.push('')
+
+  if (part.body !== undefined) {
+    lines.push(part.body)
+  }
+  return lines
+}
+
+/**
+ * Build a multipart/mixed batch response from individual operation results.
+ *
+ * A successful changeset (`BatchChangesetResponse`) is a nested multipart/mixed part with
+ * its own boundary, one `application/http` part per changeset request; a failed changeset is a
+ * single `application/http` part in its place (OData-Protocol 4.01 §11.7.7.5).
+ *
+ * @param parts - Array of per-operation (or per-changeset) response descriptors
+ * @returns Object with `contentType` (for Content-Type header) and `body` (response body string)
+ */
+export function buildBatchResponse(parts: readonly BatchResponseItem[]): {
   contentType: string
   body: string
 } {
-  const boundary = `batch_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+  const boundary = newBoundary('batch')
   const lines: string[] = []
 
   for (const part of parts) {
-    const statusText = STATUS_TEXTS[part.statusCode] ?? 'Unknown'
     lines.push(`--${boundary}`)
-    lines.push('Content-Type: application/http')
-    lines.push('Content-Transfer-Encoding: binary')
-    if (part.contentId !== undefined) {
-      lines.push(`Content-ID: ${part.contentId}`)
-    }
-    lines.push('')
-    lines.push(`HTTP/1.1 ${part.statusCode} ${statusText}`)
-    for (const [name, value] of Object.entries(part.headers)) {
-      lines.push(`${HEADER_NAMES[name.toLowerCase()] ?? name}: ${value}`)
-    }
-
-    if (part.body !== undefined) {
-      lines.push('Content-Type: application/json')
-      lines.push(`Content-Length: ${Buffer.byteLength(part.body, 'utf-8')}`)
-    }
-    lines.push('')
-
-    if (part.body !== undefined) {
-      lines.push(part.body)
+    if ('kind' in part && part.kind === 'changeset') {
+      const changesetBoundary = newBoundary('changeset')
+      lines.push(`Content-Type: multipart/mixed; boundary=${changesetBoundary}`)
+      lines.push('')
+      for (const operation of part.parts) {
+        lines.push(`--${changesetBoundary}`)
+        lines.push(...operationLines(operation))
+      }
+      lines.push(`--${changesetBoundary}--`)
+    } else {
+      lines.push(...operationLines(part as BatchResponsePart))
     }
   }
 

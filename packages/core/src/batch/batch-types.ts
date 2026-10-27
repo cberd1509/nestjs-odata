@@ -67,9 +67,22 @@ export interface BatchResponsePart {
 }
 
 /**
+ * The response to a successful changeset: a nested multipart/mixed part holding one response
+ * per changeset request, each with its request's Content-ID (OData-Protocol 4.01 §11.7.7.5).
+ * A failed changeset is answered with a single {@link BatchResponsePart} instead.
+ */
+export interface BatchChangesetResponse {
+  readonly kind: 'changeset'
+  readonly parts: readonly BatchResponsePart[]
+}
+
+/** One top-level part of a batch response: an operation's response or a changeset's. */
+export type BatchResponseItem = BatchResponsePart | BatchChangesetResponse
+
+/**
  * The complete batch response, ready to be serialized to multipart/mixed.
  */
 export interface BatchResponse {
   readonly boundary: string
-  readonly parts: readonly BatchResponsePart[]
+  readonly parts: readonly BatchResponseItem[]
 }

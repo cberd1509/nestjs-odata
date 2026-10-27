@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus, InternalServerErrorException } from '@nestjs/common'
-import { getODataRequestContext, type EdmEntityType } from '@nestjs-odata/core'
+import { getODataBatchPart, getODataRequestContext, type EdmEntityType } from '@nestjs-odata/core'
+import { getODataChangesetManager } from '../batch/changeset-context.js'
 import type { ODataWriteContext, ODataWriteHandlers, ODataWriteOperation } from './write.types.js'
 
 /**
@@ -115,12 +116,18 @@ export function buildWriteContext(
   extra: Partial<ODataWriteContext> = {},
 ): ODataWriteContext {
   const request = getODataRequestContext()
+  // A `$batch` operation runs through its route: describe it, and inside a changeset hand the
+  // handler the changeset's entity manager.
+  const part = getODataBatchPart()
+  const manager = getODataChangesetManager()
   return {
     entitySetName,
     entityType,
     operation,
     executionContext: request?.executionContext,
     request: request?.request,
+    ...(manager ? { manager } : {}),
+    ...(part ? { batch: { contentId: part.contentId, inChangeset: part.inChangeset } } : {}),
     ...extra,
   }
 }
