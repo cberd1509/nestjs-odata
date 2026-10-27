@@ -211,6 +211,8 @@ The maximum nesting depth is controlled by `maxDeepInsertDepth` (default: 5). Se
 ## ETag concurrency control
 
 Entities with an `@ODataETag()` property support optimistic concurrency via HTTP ETag headers.
+An `etag` option on the `forFeature()` item (a property name or a function of the entity)
+overrides it; see [Custom write handlers](./write-handlers#etags-and-if-match).
 
 ### Setup
 
@@ -357,3 +359,6 @@ async createProduct(@Body() body: Record<string, unknown>) {
 ```
 
 Regular NestJS guards, pipes, and interceptors work as-is on OData controllers.
+
+To route all writes of an entity set through your own services (including `$batch`), register
+[custom write handlers](./write-handlers) instead of overriding each controller method.

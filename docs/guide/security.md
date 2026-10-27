@@ -142,10 +142,15 @@ export class AppModule {}
 
 Entities decorated with `@ODataETag()` get automatic optimistic concurrency control:
 
-- **Write protection**: `PATCH`, `PUT`, and `DELETE` require an `If-Match` header containing the current ETag value. If the ETag does not match (another client modified the entity), the server returns `412 Precondition Failed`.
+- **Write protection**: when a `PATCH`, `PUT` or `DELETE` (also inside `$batch`) carries an `If-Match` header that does not match the current ETag (another client modified the entity), the server returns `412 Precondition Failed` and changes nothing. A request **without** `If-Match` is not refused: the library does not require optimistic concurrency (no `428 Precondition Required`), so clients that want the protection must send the header.
 - **Read optimization**: `GET` single entity supports `If-None-Match`. If the ETag matches (entity unchanged), the server returns `304 Not Modified` with no body.
 
 This prevents lost-update scenarios in concurrent environments without pessimistic locking.
+
+`If-Match: *` matches any existing entity, and a comma-separated list matches when any entry
+does. The `etag` option of `ODataTypeOrmModule.forFeature()` items sets the ETag source per
+entity set (a version column, a function); with [write handlers](./write-handlers), the handler
+receives `If-Match` and must check it in the same transaction as its write.
 
 ```typescript
 import { ODataETag } from '@nestjs-odata/core'
@@ -219,6 +224,10 @@ Guards decide whether a request may call a route. To restrict _which rows_ it se
 [row-level scope](./row-level-scopes) per entity set. Scopes apply to collections, `$count`,
 by-key reads, every `$expand` path, lambdas in `$filter`, `$apply`, `$batch` and the existence
 checks of writes. Set `requireScope: true` so an entity set without a scope fails closed.
+
+[Write handlers](./write-handlers) receive the raw parsed body: there is no repository column
+whitelist, so validate it there. Deep inserts never write nested entities of a handler-backed
+entity set through the repository (400).
 
 ## Recommended production configuration
 

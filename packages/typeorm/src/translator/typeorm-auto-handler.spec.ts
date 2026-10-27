@@ -644,8 +644,38 @@ describe('TypeOrmAutoHandler', () => {
         'W/"dXBkYXRlZEF0"',
       )
 
-      expect(etagProvider.validateIfMatch).toHaveBeenCalled()
+      expect(etagProvider.computeETag).toHaveBeenCalledWith(entity, 'updatedAt')
       expect(result).toBeDefined()
+    })
+
+    it('Test E1b: If-Match lists and * match a column ETag (one comparison rule everywhere)', async () => {
+      const entity = { id: 1, name: 'Widget', updatedAt: new Date('2024-01-01T00:00:00Z') }
+      const { repo, findOne, save } = makeMockRepo()
+      findOne.mockResolvedValue(entity)
+      save.mockImplementation((e: ObjectLiteral) => Promise.resolve(e))
+      const etagProvider = {
+        getETagColumn: vi.fn().mockReturnValue('updatedAt'),
+        computeETag: vi.fn().mockReturnValue('W/"current"'),
+        // The legacy single-value check would refuse a list: it must no longer decide.
+        validateIfMatch: vi.fn().mockReturnValue(false),
+      }
+      autoHandler = new TypeOrmAutoHandler(
+        translator,
+        edmRegistry,
+        makeOptions(),
+        repo,
+        etagProvider,
+      )
+
+      await expect(
+        autoHandler.handleUpdate('1', { name: 'A' }, 'Products', 'W/"old", W/"current"'),
+      ).resolves.toBeDefined()
+      await expect(
+        autoHandler.handleUpdate('1', { name: 'B' }, 'Products', '*'),
+      ).resolves.toBeDefined()
+      await expect(
+        autoHandler.handleUpdate('1', { name: 'C' }, 'Products', 'W/"old", W/"older"'),
+      ).rejects.toMatchObject({ status: 412 })
     })
 
     it('Test E2: handleUpdate with stale If-Match throws PreconditionFailedException (412)', async () => {

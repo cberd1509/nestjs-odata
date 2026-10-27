@@ -90,7 +90,10 @@ export class ODataResponseInterceptor implements NestInterceptor {
               .getResponse<{ setHeader: (k: string, v: string) => void }>()
             httpResponse.setHeader('Location', createResult.locationUrl)
           }
-          const entity = (createResult.entity ?? result) as Record<string, unknown>
+          const entity = applyETag(
+            context,
+            (createResult.entity ?? result) as Record<string, unknown>,
+          )
           const contextUrl = buildContextUrl(
             this.options.serviceRoot,
             entitySetName,
@@ -135,23 +138,7 @@ export class ODataResponseInterceptor implements NestInterceptor {
           // Annotate the single entity (RESP-04, RESP-05, RESP-06)
           const annotationCtx = this.resolveAnnotationContext(entitySetName)
 
-          // Handle __etag internal property — set ETag header and add @odata.etag to body
-          let entityToAnnotate = entityResult
-          if (entityResult['__etag']) {
-            const etag = entityResult['__etag'] as string
-            const httpResponse = context
-              .switchToHttp()
-              .getResponse<{ setHeader: (k: string, v: string) => void }>()
-            httpResponse.setHeader('ETag', etag)
-            // Remove internal property and add @odata.etag
-            const rest: Record<string, unknown> = {}
-            for (const key of Object.keys(entityResult)) {
-              if (key !== '__etag') {
-                rest[key] = entityResult[key]
-              }
-            }
-            entityToAnnotate = { '@odata.etag': etag, ...rest }
-          }
+          const entityToAnnotate = applyETag(context, entityResult)
 
           const annotatedEntity = annotationCtx
             ? annotateEntity(entityToAnnotate, annotationCtx)
@@ -217,4 +204,21 @@ export class ODataResponseInterceptor implements NestInterceptor {
       }),
     )
   }
+}
+
+/**
+ * Turn the internal `__etag` property adapters attach to an entity into the `ETag` response
+ * header and the `@odata.etag` annotation. Entities without one are returned unchanged.
+ */
+function applyETag(
+  context: ExecutionContext,
+  entity: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!entity || typeof entity !== 'object' || typeof entity['__etag'] !== 'string') return entity
+  const { __etag: etag, ...rest } = entity
+  context
+    .switchToHttp()
+    .getResponse<{ setHeader: (k: string, v: string) => void }>()
+    .setHeader('ETag', etag)
+  return { '@odata.etag': etag, ...rest }
 }

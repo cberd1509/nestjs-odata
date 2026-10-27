@@ -85,6 +85,19 @@ ODataTypeOrmModule.forFeature([{ entity: Project, scope: ownRows }, Task], {
 })
 ```
 
+### Write handlers and ETags
+
+`writeHandlers` on an item routes the entity set's POST, PATCH, PUT, DELETE and deep insert
+(also in `$batch`) through your own code, and `etag` sets where its ETag comes from (a property
+name or a function). See [Custom write handlers](./write-handlers).
+
+```typescript
+ODataTypeOrmModule.forFeature(
+  [{ entity: Account, writeHandlers: AccountWriteHandlers, etag: 'version' }],
+  { imports: [AccountsModule] }, // modules the handlers class injects from
+)
+```
+
 ### Custom entity-set names
 
 Pass `{ entity, name }` configs inside the items array to override the OData
@@ -148,6 +161,18 @@ Pass an explicit value (`globalPrefixExclude('/v2/odata')`) when you have
 multiple OData mounts or need to exclude a specific sub-path. Without this,
 `@odata.context` / `@odata.id` / `@odata.nextLink` URLs in the response body
 would be inconsistent with the actual route paths.
+
+## ODataTypeOrmModule.forRoot() options
+
+Optional, imported once in the root module. `changesetRunner` runs every `$batch` changeset of
+the application inside your own unit of work instead of a TypeORM `QueryRunner` transaction.
+See [$batch changesets and atomicity](./write-handlers#batch-changesets-and-atomicity).
+
+```typescript
+ODataTypeOrmModule.forRoot({
+  changesetRunner: (work, { request }) => unitOfWork.run(request, (manager) => work(manager)),
+})
+```
 
 ## Per-entity security overrides
 

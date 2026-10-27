@@ -1,3 +1,4 @@
+import { etagMatches, formatWeakETag } from '../write/etag.js'
 import { Injectable } from '@nestjs/common'
 import type { DataSource } from 'typeorm'
 import { EdmRegistry } from '@nestjs-odata/core'
@@ -46,15 +47,7 @@ export class TypeOrmETagProvider implements IETagProvider {
    * Format: W/"<base64-encoded string value>"
    */
   computeETag(entity: Record<string, unknown>, etagColumn: string): string {
-    const value = entity[etagColumn]
-    let stringValue: string
-    if (value instanceof Date) {
-      stringValue = value.toISOString()
-    } else {
-      stringValue = String(value)
-    }
-    const encoded = Buffer.from(stringValue).toString('base64')
-    return `W/"${encoded}"`
+    return formatWeakETag(entity[etagColumn])
   }
 
   /**
@@ -66,14 +59,8 @@ export class TypeOrmETagProvider implements IETagProvider {
     entity: Record<string, unknown>,
     etagColumn: string,
   ): boolean {
-    const current = this.computeETag(entity, etagColumn)
-    // Normalize: strip surrounding quotes/whitespace for robust comparison
-    const normalize = (s: string): string =>
-      s
-        .trim()
-        .replace(/^W\//, '')
-        .replace(/^"(.*)"$/, '$1')
-    return normalize(current) === normalize(ifMatchValue)
+    // Same comparison as the write paths: `*`, lists and weak ETags.
+    return etagMatches(ifMatchValue, this.computeETag(entity, etagColumn))
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
