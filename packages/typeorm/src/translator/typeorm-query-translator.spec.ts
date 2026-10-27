@@ -412,7 +412,7 @@ describe('TypeOrmQueryTranslator', () => {
 
 describe('sqlDialectOf', () => {
   it('treats every SQLite-based driver as sqlite', async () => {
-    const { sqlDialectOf } = await import('./typeorm-query-translator.js')
+    const { sqlDialectOf } = await import('./sql-dialect.js')
     for (const type of ['sqlite', 'better-sqlite3', 'sqljs', 'capacitor', 'expo']) {
       expect(sqlDialectOf(type)).toBe('sqlite')
     }

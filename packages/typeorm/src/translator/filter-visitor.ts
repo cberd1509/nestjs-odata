@@ -1,4 +1,5 @@
 import { Brackets, type SelectQueryBuilder, type ObjectLiteral, type Repository } from 'typeorm'
+import type { SqlDialect } from './sql-dialect.js'
 import type {
   BinaryExprNode,
   FunctionCallNode,
@@ -94,7 +95,7 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
     private readonly maxFilterDepth: number = 10,
-    private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
+    private readonly dialect: SqlDialect = 'ansi',
     private readonly repo?: Repository<ObjectLiteral>,
     private readonly lambdaScope?: LambdaScopeLookup,
   ) {}
@@ -477,7 +478,7 @@ class InnerFilterExprBuilder {
     private readonly alias: string,
     private readonly entityType: EdmEntityType,
     startCount: number,
-    private readonly dialect: 'sqlite' | 'postgres' | 'ansi' = 'ansi',
+    private readonly dialect: SqlDialect = 'ansi',
     /** Lambda range variable (`t` in `any(t: t/title eq 'x')`); `t/title` maps to `alias.title`. */
     private readonly lambdaVariable: string | null = null,
     /**
