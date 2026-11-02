@@ -29,7 +29,7 @@
     "@odata2ts/odata2ts": "^0.45.0",
     "@swc/core": "^1.16.20",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^4.1.12",
     "better-sqlite3": "^12.11.1",
