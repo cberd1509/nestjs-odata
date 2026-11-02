@@ -68,7 +68,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.19.2",
     "@vitest/coverage-v8": "^4.1.12",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "tsdown": "^0.22.14",
