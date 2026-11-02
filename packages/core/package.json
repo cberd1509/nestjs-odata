@@ -67,7 +67,7 @@
     "rxjs": "^7.8.2",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.3",
-    "unplugin-swc": "^1.6.0",
+    "unplugin-swc": "^2.0.0",
     "vitest": "^4.1.12"
   },
   "dependencies": {
