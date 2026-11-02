@@ -75,6 +75,6 @@
     "typeorm": "^1.1.2",
     "typescript": "^5.9.3",
     "unplugin-swc": "^1.6.0",
-    "vitest": "^4.1.12"
+    "vitest": "^5.0.5"
   }
 }
