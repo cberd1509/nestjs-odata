@@ -47,6 +47,10 @@ class ChildEntity {
   @Column({ nullable: true })
   parentId!: number
 
+  /** A property whose column name differs from the property name. */
+  @Column({ name: 'sort_rank', default: 0 })
+  sortRank!: number
+
   @ManyToOne(() => ParentEntity, (p) => p.children)
   parent!: ParentEntity
 }
@@ -115,9 +119,9 @@ describe('lambda any/all (FILT-01, FILT-02)', () => {
     // parent 2: child with value 30
     // parent 3: no children
     await childRepo.save([
-      { id: 1, value: 150, parentId: 1, name: 'alpha' },
-      { id: 2, value: 50, parentId: 1, name: 'beta' },
-      { id: 3, value: 30, parentId: 2, name: 'gamma' },
+      { id: 1, value: 150, parentId: 1, name: 'alpha', sortRank: 1 },
+      { id: 2, value: 50, parentId: 1, name: 'beta', sortRank: 2 },
+      { id: 3, value: 30, parentId: 2, name: 'gamma', sortRank: 9 },
     ])
   })
 
@@ -157,6 +161,25 @@ describe('lambda any/all (FILT-01, FILT-02)', () => {
     const ids = result.map((p) => (p as ParentEntity).id).sort()
     expect(ids).toContain(1)
     expect(ids).not.toContain(2)
+  })
+
+  it('resolves range-variable properties to their database column names (any and all)', async () => {
+    const parentRepo = dataSource.getRepository(ParentEntity) as Repository<ObjectLiteral>
+    const run = async (node: LambdaExprNode): Promise<{ sql: string; ids: number[] }> => {
+      const qb = parentRepo.createQueryBuilder('entity')
+      new TypeOrmFilterVisitor(qb, 'entity', entityType, 10, 'sqlite', parentRepo).visit(node)
+      const rows = await qb.getMany()
+      return { sql: qb.getQuery(), ids: rows.map((p) => (p as ParentEntity).id).sort() }
+    }
+
+    const any = await run(makeLambda('any', 'children', 'c', makeBinary('gt', 'c/sortRank', 5)))
+    expect(any.sql).toContain('"sort_rank"')
+    expect(any.sql).not.toContain('sortRank')
+    expect(any.ids).toEqual([2])
+
+    const all = await run(makeLambda('all', 'children', 'c', makeBinary('lt', 'c/sortRank', 5)))
+    expect(all.sql).toContain('"sort_rank"')
+    expect(all.ids).toEqual([1, 3])
   })
 
   it('Test 3 — any() with no predicate: returns only parents with non-empty children collection', async () => {
