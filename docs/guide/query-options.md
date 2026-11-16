@@ -57,7 +57,21 @@ $filter=description eq null
 $filter=deletedAt ne null
 ```
 
-`eq null` and `ne null` translate to `IS NULL` and `IS NOT NULL`.
+`eq null` and `ne null` translate to `IS NULL` and `IS NOT NULL`, with the operands in either
+order (`null eq description`).
+
+### Literals
+
+Besides strings (`'Widget'`), numbers, `true`/`false` and `null`, `$filter` accepts unquoted GUIDs,
+dates and date-times with a time zone (the ABNF `guidValue`, `dateValue` and `dateTimeOffsetValue`):
+
+```
+$filter=externalId eq 0f8fad5b-d9cb-469f-a165-70867728950e
+$filter=dueDate ge 2026-11-01
+$filter=createdAt lt 2026-11-01T10:30:00Z
+```
+
+Their values are bound as strings, for the database to convert.
 
 ### Navigation paths
 

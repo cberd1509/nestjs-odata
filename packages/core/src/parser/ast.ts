@@ -35,7 +35,8 @@ export type UnaryOperator = 'not' | 'neg'
 export type LambdaOperator = 'any' | 'all'
 
 /** Literal kind discriminant */
-export type LiteralKind = 'string' | 'number' | 'boolean' | 'null' | 'guid' | 'dateTimeOffset'
+export type LiteralKind =
+  'string' | 'number' | 'boolean' | 'null' | 'guid' | 'date' | 'dateTimeOffset'
 
 // ---------------------------------------------------------------------------
 // FilterNode — discriminated union of all filter expression node types
@@ -69,7 +70,7 @@ export interface PropertyAccessNode {
   readonly path: string[]
 }
 
-/** Literal value: string, number, boolean, null, guid, dateTimeOffset */
+/** Literal value: string, number, boolean, null, guid, date, dateTimeOffset */
 export interface LiteralNode {
   readonly kind: 'Literal'
   readonly literalKind: LiteralKind

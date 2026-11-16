@@ -17,6 +17,7 @@ export enum TokenKind {
   BOOL_LITERAL = 'BOOL_LITERAL',
   NULL_LITERAL = 'NULL_LITERAL',
   GUID_LITERAL = 'GUID_LITERAL',
+  DATE_LITERAL = 'DATE_LITERAL',
   DATETIME_LITERAL = 'DATETIME_LITERAL',
 
   // Identifiers
@@ -80,6 +81,30 @@ const KEYWORDS: Readonly<Record<string, TokenKind>> = {
 
 /** GUID pattern: 8-4-4-4-12 hex chars */
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+/** dateValue (P2 ABNF): `YYYY-MM-DD`. */
+const DATE_RE = /\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])/y
+
+/** The time part of a dateTimeOffsetValue: `THH:MM[:SS[.fff]]` and `Z` or `±HH:MM`. */
+const TIME_OF_DAY_OFFSET_RE =
+  /T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,12})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)/y
+
+/** The match of a sticky regex at `pos`, or undefined. */
+function matchAt(re: RegExp, input: string, pos: number): string | undefined {
+  re.lastIndex = pos
+  return re.exec(input)?.[0]
+}
+
+/** True when the character at `pos` would continue a word (so a literal cannot end there). */
+function continuesWord(input: string, pos: number): boolean {
+  return pos < input.length && (isAlphaNum(input[pos]) || input[pos] === '-')
+}
+
+/** The GUID literal starting at `pos`, when it is one whole token. */
+function guidAt(input: string, pos: number): string | undefined {
+  const candidate = input.slice(pos, pos + 36)
+  return GUID_RE.test(candidate) && !continuesWord(input, pos + 36) ? candidate : undefined
+}
 
 /** A single lexer token with kind, value, and source position */
 export interface Token {
@@ -179,6 +204,28 @@ export function tokenize(input: string): Token[] {
 
     // Numeric literal: digit or negative number
     if (isDigit(ch)) {
+      // A GUID, date or dateTimeOffset that starts with a digit, anywhere in the input.
+      const guid = guidAt(input, start)
+      if (guid) {
+        tokens.push({ kind: TokenKind.GUID_LITERAL, value: guid, position: start })
+        pos = start + guid.length
+        continue
+      }
+      const date = matchAt(DATE_RE, input, start)
+      if (date) {
+        const time = matchAt(TIME_OF_DAY_OFFSET_RE, input, start + date.length)
+        const literal = date + (time ?? '')
+        if (continuesWord(input, start + literal.length) || input[start + literal.length] === 'T') {
+          throw new ODataParseError(`Invalid date/time literal at position ${start}`, start)
+        }
+        tokens.push({
+          kind: time ? TokenKind.DATETIME_LITERAL : TokenKind.DATE_LITERAL,
+          value: literal,
+          position: start,
+        })
+        pos = start + literal.length
+        continue
+      }
       let numStr = ''
       while (pos < input.length && isDigit(input[pos])) {
         numStr += input[pos++]
@@ -197,18 +244,6 @@ export function tokenize(input: string): Token[] {
         }
         tokens.push({ kind: TokenKind.DECIMAL_LITERAL, value: parseFloat(numStr), position: start })
       } else {
-        // Could be start of GUID — check if followed by hex chars and dashes
-        // e.g., 12345678-1234-...
-        const remaining = input.slice(start)
-        const guidMatch = GUID_RE.exec(remaining)
-        if (guidMatch && remaining.length >= 36) {
-          const guidStr = remaining.slice(0, 36)
-          if (GUID_RE.test(guidStr)) {
-            tokens.push({ kind: TokenKind.GUID_LITERAL, value: guidStr, position: start })
-            pos = start + 36
-            continue
-          }
-        }
         tokens.push({ kind: TokenKind.INT_LITERAL, value: parseInt(numStr, 10), position: start })
       }
       continue
@@ -233,12 +268,8 @@ export function tokenize(input: string): Token[] {
         // Peek: if we see a dash, check if it looks like a GUID pattern
         if (input[pos] === '-') {
           // Only include dash if it looks like it's part of a GUID
-          const soFar = word + input.slice(start, pos)
-          void soFar
-          // Check remaining from start
-          const remaining = input.slice(start)
-          if (GUID_RE.test(remaining.slice(0, 36))) {
-            const guidStr = remaining.slice(0, 36)
+          const guidStr = guidAt(input, start)
+          if (guidStr) {
             tokens.push({ kind: TokenKind.GUID_LITERAL, value: guidStr, position: start })
             pos = start + 36
             word = '' // signal we handled it

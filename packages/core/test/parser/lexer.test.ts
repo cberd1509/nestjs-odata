@@ -89,6 +89,59 @@ describe('OData Lexer', () => {
       expect(tokens[0].kind).toBe(TokenKind.GUID_LITERAL)
       expect(tokens[0].value).toBe('12345678-1234-1234-1234-123456789abc')
     })
+
+    it('tokenizes a GUID that starts with a digit and is not at the end of the input', () => {
+      const tokens = tokenize('Id eq 12345678-1234-1234-1234-123456789abc and Price gt 5')
+      expect(tokens.map((t) => t.kind)).toEqual([
+        TokenKind.IDENTIFIER,
+        TokenKind.EQ,
+        TokenKind.GUID_LITERAL,
+        TokenKind.AND,
+        TokenKind.IDENTIFIER,
+        TokenKind.GT,
+        TokenKind.INT_LITERAL,
+        TokenKind.EOF,
+      ])
+      expect(tokens[2].value).toBe('12345678-1234-1234-1234-123456789abc')
+    })
+
+    it('tokenizes a digit-leading GUID followed by a closing parenthesis', () => {
+      const tokens = tokenize('(Id eq 12345678-1234-1234-1234-123456789abc)')
+      expect(tokens[3].kind).toBe(TokenKind.GUID_LITERAL)
+      expect(tokens[4].kind).toBe(TokenKind.CLOSE_PAREN)
+    })
+
+    it('does not take the first 36 characters of a longer word as a GUID', () => {
+      expect(() => tokenize('12345678-1234-1234-1234-123456789abcd')).toThrow()
+    })
+  })
+
+  describe('date and dateTimeOffset literals', () => {
+    it('tokenizes a bare date (Edm.Date)', () => {
+      const tokens = tokenize('DueDate ge 2026-11-01 and Id gt 1')
+      expect(tokens[2].kind).toBe(TokenKind.DATE_LITERAL)
+      expect(tokens[2].value).toBe('2026-11-01')
+      expect(tokens[3].kind).toBe(TokenKind.AND)
+    })
+
+    it('tokenizes a dateTimeOffset with Z or a numeric offset', () => {
+      for (const value of [
+        '2026-11-01T10:30Z',
+        '2026-11-01T10:30:15Z',
+        '2026-11-01T10:30:15.123Z',
+        '2026-11-01T10:30:15-05:00',
+        '2026-11-01T10:30:15+01:00',
+      ]) {
+        const tokens = tokenize(`CreatedAt lt ${value}`)
+        expect(tokens[2].kind).toBe(TokenKind.DATETIME_LITERAL)
+        expect(tokens[2].value).toBe(value)
+        expect(tokens[3].kind).toBe(TokenKind.EOF)
+      }
+    })
+
+    it('rejects a dateTimeOffset without a time zone', () => {
+      expect(() => tokenize('CreatedAt lt 2026-11-01T10:30:15')).toThrow()
+    })
   })
 
   describe('keyword tokens', () => {

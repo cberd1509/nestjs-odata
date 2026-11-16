@@ -196,6 +196,31 @@ describe('$filter — literal types', () => {
     expect(lit.literalKind).toBe('guid')
     expect(lit.value).toBe('12345678-1234-1234-1234-123456789abc')
   })
+
+  it('parses a digit-leading GUID literal followed by more of the filter', () => {
+    const node = parseFilter('Id eq 12345678-1234-1234-1234-123456789abc or Price gt 5')
+    assertBinaryExpr(node, 'or')
+    const lit = (node.left as BinaryExprNode).right as LiteralNode
+    expect(lit.literalKind).toBe('guid')
+    expect(lit.value).toBe('12345678-1234-1234-1234-123456789abc')
+  })
+
+  it('parses a date literal', () => {
+    const node = parseFilter('DueDate ge 2026-11-01 and Price gt 5')
+    assertBinaryExpr(node, 'and')
+    const lit = (node.left as BinaryExprNode).right as LiteralNode
+    expect(lit).toEqual({ kind: 'Literal', literalKind: 'date', value: '2026-11-01' })
+  })
+
+  it('parses a dateTimeOffset literal', () => {
+    const node = parseFilter('CreatedAt lt 2026-11-01T10:30:00Z')
+    const lit = (node as BinaryExprNode).right as LiteralNode
+    expect(lit).toEqual({
+      kind: 'Literal',
+      literalKind: 'dateTimeOffset',
+      value: '2026-11-01T10:30:00Z',
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
