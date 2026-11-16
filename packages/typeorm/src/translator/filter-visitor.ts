@@ -172,16 +172,17 @@ export class TypeOrmFilterVisitor implements FilterVisitor<void> {
     const sqlOp = COMPARISON_OPS[operator]
     if (sqlOp) {
       this.pendingParams = {}
-      const leftExpr = this.resolveExpression(left)
-      const nullCheck = nullComparison(operator, right)
+      const nullCheck = nullComparison(operator, left, right)
       if (nullCheck) {
         // `eq null` / `ne null` (P2 §5.1.1.1.1): SQL `= NULL` is never true.
+        const operandExpr = this.resolveExpression(nullCheck.operand)
         const params = this.pendingParams
         this.pendingParams = {}
-        this.qb.andWhere(`${leftExpr} ${nullCheck}`, params)
+        this.qb.andWhere(`${operandExpr} ${nullCheck.sql}`, params)
         this.currentDepth--
         return
       }
+      const leftExpr = this.resolveExpression(left)
       if (right.kind !== 'Literal') {
         // Comparing two expressions (`qty gt minQty`, `price gt $it/cost`).
         const rightExpr = this.resolveExpression(right)
@@ -646,9 +647,9 @@ class InnerFilterExprBuilder {
       }
       const sqlOp = COMPARISON_OPS[node.operator]
       if (sqlOp) {
+        const nullCheck = nullComparison(node.operator, node.left, node.right)
+        if (nullCheck) return `${this.buildExpr(nullCheck.operand)} ${nullCheck.sql}`
         const left = this.buildExpr(node.left)
-        const nullCheck = nullComparison(node.operator, node.right)
-        if (nullCheck) return `${left} ${nullCheck}`
         const right = this.buildExpr(node.right)
         return `${left} ${sqlOp} ${right}`
       }
@@ -686,9 +687,11 @@ class InnerFilterExprBuilder {
       let alias = this.alias
       let segments = node.path
       let binding = this.paths?.inner
+      let onRangeVariable = false
       if (this.lambdaVariable) {
         if (node.path.length > 1 && node.path[0] === this.lambdaVariable) {
           segments = node.path.slice(1)
+          onRangeVariable = true
         } else {
           alias = this.outerAlias ?? this.alias
           binding = this.paths?.outer
@@ -698,6 +701,12 @@ class InnerFilterExprBuilder {
         const rendered = renderPath(this.paths?.context, binding, segments)
         Object.assign(this.params, rendered.params)
         return rendered.sql
+      }
+      if (onRangeVariable && binding) {
+        // The lambda's subquery alias is not a query builder alias, so TypeORM does not map
+        // `alias.property` to the column as it does for the filtered entity: map it here.
+        const column = binding.metadata.findColumnWithPropertyPath(segments[0])
+        if (column) return binding.column(column.databaseName)
       }
       return `${alias}.${segments[0]}`
     }
@@ -812,10 +821,22 @@ function containsLambda(node: FilterNode): boolean {
   }
 }
 
-/** `IS NULL` / `IS NOT NULL` for `eq null` / `ne null`, otherwise undefined. */
-function nullComparison(operator: string, right: FilterNode): string | undefined {
-  if (right.kind !== 'Literal' || right.value !== null) return undefined
-  if (operator === 'eq') return 'IS NULL'
-  if (operator === 'ne') return 'IS NOT NULL'
+/**
+ * `IS NULL` / `IS NOT NULL` and the operand it applies to, for `x eq null` / `x ne null` and
+ * the reversed `null eq x` / `null ne x`; otherwise undefined.
+ */
+function nullComparison(
+  operator: string,
+  left: FilterNode,
+  right: FilterNode,
+): { operand: FilterNode; sql: string } | undefined {
+  const sql = operator === 'eq' ? 'IS NULL' : operator === 'ne' ? 'IS NOT NULL' : undefined
+  if (!sql) return undefined
+  if (isNullLiteral(right)) return { operand: left, sql }
+  if (isNullLiteral(left)) return { operand: right, sql }
   return undefined
+}
+
+function isNullLiteral(node: FilterNode): boolean {
+  return node.kind === 'Literal' && node.value === null
 }

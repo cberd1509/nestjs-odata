@@ -289,6 +289,11 @@ class Parser {
       }
       return lit
     }
+    if (token.kind === TokenKind.DATE_LITERAL) {
+      this.advance()
+      const lit: LiteralNode = { kind: 'Literal', literalKind: 'date', value: token.value }
+      return lit
+    }
     if (token.kind === TokenKind.DATETIME_LITERAL) {
       this.advance()
       const lit: LiteralNode = {

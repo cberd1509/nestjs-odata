@@ -173,6 +173,38 @@ describe('TypeOrmFilterVisitor', () => {
       expect(calls[0][1]).not.toEqual(calls[1][1])
     })
 
+    it('translates `null eq prop` / `null ne prop` to IS NULL / IS NOT NULL', () => {
+      for (const [operator, sql] of [
+        ['eq', 'entity.Price IS NULL'],
+        ['ne', 'entity.Price IS NOT NULL'],
+      ]) {
+        const local = makeQb()
+        const visitor = new TypeOrmFilterVisitor(local, 'entity', entityType)
+        visitor.visit({
+          kind: 'BinaryExpr',
+          operator,
+          left: { kind: 'Literal', literalKind: 'null', value: null },
+          right: { kind: 'PropertyAccess', path: ['Price'] },
+        })
+        expect(local.andWhere).toHaveBeenCalledWith(sql, {})
+      }
+    })
+
+    it('translates `null eq prop` under not to NOT (prop IS NULL)', () => {
+      const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
+      visitor.visit({
+        kind: 'UnaryExpr',
+        operator: 'not',
+        operand: {
+          kind: 'BinaryExpr',
+          operator: 'eq',
+          left: { kind: 'Literal', literalKind: 'null', value: null },
+          right: { kind: 'PropertyAccess', path: ['Price'] },
+        },
+      })
+      expect(qb.andWhere).toHaveBeenCalledWith('NOT (entity.Price IS NULL)', {})
+    })
+
     it('translates not with NOT(...) wrapping', () => {
       const visitor = new TypeOrmFilterVisitor(qb, 'entity', entityType)
       const node: UnaryExprNode = {
