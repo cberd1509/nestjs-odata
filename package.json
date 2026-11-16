@@ -28,9 +28,9 @@
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "publint": "^0.3.25",
-    "turbo": "^2.11.10",
+    "turbo": "^2.11.11",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1"
   },
