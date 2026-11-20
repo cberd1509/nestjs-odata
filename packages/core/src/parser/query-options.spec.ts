@@ -1,10 +1,10 @@
 /**
  * Tests for how query option values reach the parser: parseQueryOptions takes decoded values and
- * never decodes them again; parseQuery takes a raw query string, splits it on `&` between
- * parameters only and decodes each name and value once.
+ * never decodes them again; parseQueryString takes a raw query string, splits it on `&` between
+ * parameters only and decodes each name and value once; parseQuery keeps its 2.3.0 contract.
  */
 import { describe, it, expect } from 'vitest'
-import { parseQuery, parseQueryOptions } from './index.js'
+import { parseQuery, parseQueryOptions, parseQueryString } from './index.js'
 import { ODataParseError } from './errors.js'
 import type { FilterNode } from './ast.js'
 
@@ -71,44 +71,85 @@ describe('parseQueryOptions (decoded values)', () => {
     expect(parseQueryOptions({ $TOP: '5', $Skip: '10' })).toMatchObject({ top: 5, skip: 10 })
   })
 
-  it('ignores unknown options, also repeated or non-string ones', () => {
+  it('ignores unknown parameters, also repeated or non-string ones, and undefined values', () => {
     expect(
       parseQueryOptions({ foo: ['a', 'b'], bar: { nested: 'x' }, $top: '1', $filter: undefined }),
     ).toMatchObject({ top: 1, filter: undefined })
   })
 
-  it('ignores a system query option whose value is not a string', () => {
-    expect(parseQueryOptions({ $filter: { x: 'y' } }).filter).toBeUndefined()
+  it.each([
+    ['an object ($filter[x]=... with an extended query parser)', { x: "Name eq 'a'" }],
+    ['a number', 5],
+    ['a boolean', true],
+    ['null', null],
+  ])('refuses a system query option whose value is %s', (_label, value) => {
+    expect(() => parseQueryOptions({ $filter: value })).toThrow(ODataParseError)
+    expect(() => parseQueryOptions({ $filter: value })).toThrow(/single text value/)
   })
 
   it('refuses a repeated system query option', () => {
     expect(() => parseQueryOptions({ $top: ['1', '2'] })).toThrow(ODataParseError)
     expect(() => parseQueryOptions({ $top: ['1', '2'] })).toThrow(/more than once/)
   })
+
+  it.each([
+    ['$top', '$TOP'],
+    ['$filter', '$FILTER'],
+    ['$search', '$Search'],
+    ['$count', '$COUNT'],
+  ])('refuses %s together with %s', (a, b) => {
+    const value = a === '$top' ? '1' : a === '$count' ? 'true' : a === '$search' ? 'x' : 'Id eq 1'
+    expect(() => parseQueryOptions({ [a]: value, [b]: value })).toThrow(/more than once/)
+  })
+
+  it('parses $count, $search and $apply in the same pass, values as given', () => {
+    const result = parseQueryOptions({
+      $COUNT: 'true',
+      $search: '"A & 100% C+"',
+      $apply: "filter(Name eq 'b & c')",
+    })
+    expect(result.count).toBe(true)
+    expect(result.search).toEqual({ kind: 'SearchTerm', value: 'A & 100% C+' })
+    expect(result.apply).toMatchObject({ steps: [{ kind: 'ApplyFilter' }] })
+    expect(parseQueryOptions({ $count: 'false' }).count).toBe(false)
+  })
 })
 
-describe('parseQuery (raw query string)', () => {
+describe('parseQueryString (raw, percent-encoded query string)', () => {
+  it('parses $count, $search and $apply too', () => {
+    const result = parseQueryString(
+      '$count=true&$search=%22a%20%26%20b%22&$apply=filter(Id%20eq%201)',
+    )
+    expect(result.count).toBe(true)
+    expect(result.search).toEqual({ kind: 'SearchTerm', value: 'a & b' })
+    expect(result.apply).toBeDefined()
+  })
+
+  it('refuses $top=1&$TOP=2', () => {
+    expect(() => parseQueryString('$top=1&$TOP=2')).toThrow(/more than once/)
+  })
+
   it('splits on & only between parameters: %26 stays inside the value', () => {
-    const { filter, top } = parseQuery("$filter=Name%20eq%20'A%20%26%20B'&$top=3")
+    const { filter, top } = parseQueryString("$filter=Name%20eq%20'A%20%26%20B'&$top=3")
     expect(rightLiteral(filter)).toBe('A & B')
     expect(top).toBe(3)
   })
 
   it('decodes each value once: %25 is a literal %, %2B a literal +, + a space', () => {
-    expect(rightLiteral(parseQuery("$filter=Name eq '100%25'").filter)).toBe('100%')
-    expect(rightLiteral(parseQuery("$filter=Name eq 'C%2B'").filter)).toBe('C+')
-    expect(rightLiteral(parseQuery("$filter=Name+eq+'a+b'").filter)).toBe('a b')
-    expect(rightLiteral(parseQuery("$filter=Name eq '%2526'").filter)).toBe('%26')
+    expect(rightLiteral(parseQueryString("$filter=Name eq '100%25'").filter)).toBe('100%')
+    expect(rightLiteral(parseQueryString("$filter=Name eq 'C%2B'").filter)).toBe('C+')
+    expect(rightLiteral(parseQueryString("$filter=Name+eq+'a+b'").filter)).toBe('a b')
+    expect(rightLiteral(parseQueryString("$filter=Name eq '%2526'").filter)).toBe('%26')
   })
 
   it("decodes %27 quotes and keeps OData's '' escape", () => {
-    expect(rightLiteral(parseQuery('$filter=Name%20eq%20%27O%27%27Brien%27').filter)).toBe(
+    expect(rightLiteral(parseQueryString('$filter=Name%20eq%20%27O%27%27Brien%27').filter)).toBe(
       "O'Brien",
     )
   })
 
   it('decodes option names (%24filter) and nested $expand options', () => {
-    const { expand } = parseQuery(
+    const { expand } = parseQueryString(
       "%24expand=Items(%24filter%3DNote%20eq%20'b%20%26%20c'%3B%24select%3DNote)",
     )
     const [item] = expand?.items ?? []
@@ -117,23 +158,59 @@ describe('parseQuery (raw query string)', () => {
   })
 
   it('accepts a leading ?, empty parameters and parameters without a value', () => {
-    expect(parseQuery('?&$top=1&&flag')).toMatchObject({ top: 1 })
-    expect(parseQuery('')).toEqual({})
+    expect(parseQueryString('?&$top=1&&flag')).toMatchObject({ top: 1 })
+    expect(parseQueryString('')).toEqual({})
   })
 
   it('refuses malformed percent-encoding with an ODataParseError', () => {
-    expect(() => parseQuery("$filter=Name eq '100%'")).toThrow(ODataParseError)
-    expect(() => parseQuery("$filter=Name eq '100%'")).toThrow(/percent-encoding/)
+    expect(() => parseQueryString("$filter=Name eq '100%'")).toThrow(ODataParseError)
+    expect(() => parseQueryString("$filter=Name eq '100%'")).toThrow(/percent-encoding/)
   })
 
   it('refuses a repeated system query option', () => {
-    expect(() => parseQuery('$top=1&$top=2&$top=3')).toThrow(/more than once/)
+    expect(() => parseQueryString('$top=1&$top=2&$top=3')).toThrow(/more than once/)
   })
 
   it('unchanged for unencoded queries', () => {
-    const result = parseQuery('$filter=Active eq true&$expand=Customer&$orderby=Name desc')
+    const result = parseQueryString('$filter=Active eq true&$expand=Customer&$orderby=Name desc')
     expect(result.filter).toMatchObject({ kind: 'BinaryExpr', operator: 'eq' })
     expect(result.expand?.items[0]?.navigationProperty).toBe('Customer')
     expect(result.orderBy?.[0]?.direction).toBe('desc')
+  })
+})
+
+describe('parseQuery (2.3.0 contract: values used as given, no decoding)', () => {
+  it('does not decode: %, %25, + and %2B stay as written', () => {
+    expect(rightLiteral(parseQuery("$filter=Name eq '100%'").filter)).toBe('100%')
+    expect(rightLiteral(parseQuery("$filter=Name eq '100%25'").filter)).toBe('100%25')
+    expect(rightLiteral(parseQuery("$filter=Name eq 'C+'").filter)).toBe('C+')
+    expect(rightLiteral(parseQuery("$filter=Name eq 'C%2B'").filter)).toBe('C%2B')
+  })
+
+  it('splits on every &, ignores $count, $search, $apply and unknown options', () => {
+    const result = parseQuery('?$top=2&$search=%&$apply=(&$count=x&flag&other=1')
+    expect(result).toEqual({
+      filter: undefined,
+      orderBy: undefined,
+      select: undefined,
+      top: 2,
+      skip: undefined,
+      expand: undefined,
+    })
+  })
+
+  it('names are case-insensitive and the last repeated option wins', () => {
+    expect(parseQuery('$top=1&$TOP=2').top).toBe(2)
+  })
+
+  it('parses the options it always parsed', () => {
+    const result = parseQuery(
+      "$filter=Name eq 'x'&$select=Name&$orderby=Name desc&$skip=1&$expand=Items",
+    )
+    expect(rightLiteral(result.filter)).toBe('x')
+    expect(result.select?.items?.map((i) => i.path)).toEqual([['Name']])
+    expect(result.orderBy?.[0]?.direction).toBe('desc')
+    expect(result.skip).toBe(1)
+    expect(result.expand?.items[0]?.navigationProperty).toBe('Items')
   })
 })

@@ -1,23 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common'
 import type { ArgumentMetadata, PipeTransform } from '@nestjs/common'
-import { parseQueryOptions, queryOptionValue } from '../parser/parser.js'
+import { parseQueryOptions } from '../parser/parser.js'
 import type { ODataQueryOptionValues } from '../parser/parser.js'
-import { parseSearch } from '../parser/search-parser.js'
-import { parseApply } from '../parser/apply-parser.js'
 import { EdmRegistry } from '../edm/edm-registry.js'
 import { ODATA_MODULE_OPTIONS } from '../tokens.js'
 import type { ODataModuleResolvedOptions } from '../odata.module.js'
 import type { ODataQuery } from './odata-query.types.js'
 import { navigationTargetTypeName } from '../edm/navigation.js'
 import type { EdmEntityType } from '../edm/edm-entity-type.js'
-import type {
-  FilterNode,
-  SelectItem,
-  ExpandItem,
-  ExpandNode,
-  SearchNode,
-  ApplyNode,
-} from '../parser/ast.js'
+import type { FilterNode, SelectItem, ExpandItem, ExpandNode } from '../parser/ast.js'
 import { ODataNotImplementedError } from '../parser/errors.js'
 import { ODataValidationError } from './odata-validation.error.js'
 
@@ -39,7 +30,8 @@ const ORDER_BY: PathOption = { name: '$orderby', navigation: false }
  * what NestJS gives an `@Query()` parameter (Express's `req.query`, Fastify's `request.query`).
  * Each option is parsed from its own value and never percent-decoded again, so a value may hold
  * `&`, `%`, `+` or any other character (`$filter=contains(title,'A & B')`, sent as `%26`). A
- * repeated system query option is refused (400). To parse a raw query string, use `parseQuery`.
+ * system query option given more than once (in any letter case) or with a non-string value is
+ * refused (400). To parse a raw query string, use `parseQueryString`.
  *
  * Per threat model T-03-01: validates all $filter/$select/$orderby property
  * references against EdmRegistry. Unknown properties throw ODataValidationError.
@@ -59,28 +51,10 @@ export class ODataQueryPipe implements PipeTransform<ODataQueryOptionValues, ODa
     // metadata.data carries the entitySetName passed by @ODataQuery(entitySetName)
     const entitySetName = metadata.data ?? ''
 
-    // $count, $search and $apply are parsed here; the other options by parseQueryOptions. Every
-    // value is used as given (decoded once by the URL parser).
-    let count = false
-    let search: SearchNode | undefined
-    let apply: ApplyNode | undefined
-
-    for (const [key, raw] of Object.entries(value ?? {})) {
-      const lkey = key.toLowerCase()
-      if (lkey !== '$count' && lkey !== '$search' && lkey !== '$apply') continue
-      const val = queryOptionValue(key, raw)
-      if (val === undefined) continue
-      if (lkey === '$count') {
-        count = val === 'true'
-      } else if (lkey === '$search') {
-        search = parseSearch(val)
-      } else {
-        apply = parseApply(val)
-      }
-    }
-
-    // Parse into QueryOptions (filter AST, select, orderBy, top, skip, expand)
+    // Every system query option, parsed from its own value as given (decoded once by the URL
+    // parser): one pass that refuses repeated or non-string options.
     const parsed = parseQueryOptions(value ?? {})
+    const { count, search, apply } = parsed
 
     // Enforce maxTop: reject (HTTP 400) when $top exceeds the limit (per D-05, SEC-01)
     // Per-entity override takes precedence over global options (per D-07)

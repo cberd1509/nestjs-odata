@@ -141,6 +141,8 @@ describe('Query option encoding (e2e)', () => {
 
   it('a repeated system query option is refused with 400', async () => {
     await request.get('/odata/Products?$top=1&$top=2').expect(400)
+    await request.get('/odata/Products?$top=1&$TOP=2').expect(400)
+    await request.get('/odata/Products?$filter=id eq 1&$FILTER=id eq 2').expect(400)
   })
 
   it('normal queries are unchanged', async () => {

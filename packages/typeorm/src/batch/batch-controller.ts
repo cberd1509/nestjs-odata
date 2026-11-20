@@ -544,7 +544,7 @@ export class BatchController {
         // `value` is already decoded by URLSearchParams: parse it as is, never decode it again.
         expand = parseQueryOptions({ $expand: value }).expand
       } catch {
-        continue // the route refuses an invalid $expand itself (400)
+        return false // fail closed: an $expand the allow-list cannot read is not allowed
       }
       if (!this.expandAllowed(type, expand)) return false
     }

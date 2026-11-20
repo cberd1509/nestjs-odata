@@ -1,13 +1,14 @@
 import { createParamDecorator } from '@nestjs/common'
 import type { ExecutionContext } from '@nestjs/common'
 import { ODataQueryPipe } from '../query/odata-query.pipe.js'
+import type { ODataQueryOptionValues } from '../parser/parser.js'
 
 /**
  * Internal param decorator that extracts req.query from the HTTP execution context.
  * Not exported — consumers use the ODataQueryParam wrapper which auto-attaches ODataQueryPipe.
  */
 const RawQuery = createParamDecorator((_data: string | undefined, ctx: ExecutionContext) => {
-  const request = ctx.switchToHttp().getRequest<{ query: Record<string, string> }>()
+  const request = ctx.switchToHttp().getRequest<{ query: ODataQueryOptionValues }>()
   return request.query
 })
 

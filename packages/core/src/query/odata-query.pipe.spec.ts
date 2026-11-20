@@ -471,13 +471,27 @@ describe('ODataQueryPipe', () => {
       }
     })
 
-    it('ignores non-string values and unknown repeated parameters', () => {
+    it('refuses non-string values of system query options; ignores unknown parameters', () => {
+      expect(() => createPipe().transform({ $count: { a: 'b' } }, metadata)).toThrow(
+        /single text value/,
+      )
+      expect(() => createPipe().transform({ $filter: { x: 'Id eq 1' } }, metadata)).toThrow(
+        ODataParseError,
+      )
       const result = createPipe().transform(
-        { $count: { a: 'b' }, tags: ['a', 'b'], $top: '3' },
+        { tags: ['a', 'b'], other: { x: 1 }, $top: '3' },
         metadata,
       )
-      expect(result.count).toBeUndefined()
       expect(result.top).toBe(3)
+    })
+
+    it('refuses a system query option repeated in another letter case', () => {
+      expect(() => createPipe().transform({ $top: '1', $TOP: '2' }, metadata)).toThrow(
+        /more than once/,
+      )
+      expect(() =>
+        createPipe().transform({ $filter: 'Id eq 1', $FILTER: 'Id eq 2' }, metadata),
+      ).toThrow(/more than once/)
     })
 
     it('an undefined query object parses as an empty query', () => {

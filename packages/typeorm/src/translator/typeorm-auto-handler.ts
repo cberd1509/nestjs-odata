@@ -369,22 +369,24 @@ export class TypeOrmAutoHandler {
       baseUrl = `${root}/${entitySetName}`
     }
 
-    // Parse existing params and update $skip/$top
     // URLSearchParams splits on `&` between parameters only and decodes each name and value once
     // (`+` as a space, like the request's own query parser), so `%26` stays inside its value.
-    const params = new Map<string, string>()
-    for (const [name, value] of new URLSearchParams(searchStr)) {
-      params.set(name, value)
+    // Every parameter is kept (a repeated custom one included) except $skip and $top, whatever
+    // their case, which are replaced.
+    const params = new URLSearchParams(searchStr)
+    for (const name of new Set(params.keys())) {
+      const lower = name.toLowerCase()
+      if (lower === '$skip' || lower === '$top') params.delete(name)
     }
+    params.append('$skip', String(newSkip))
+    params.append('$top', String(top))
 
-    params.set('$skip', String(newSkip))
-    params.set('$top', String(top))
-
-    const queryParts: string[] = []
-    for (const [key, val] of params.entries()) {
-      // Do not encode OData system query option prefix ($) — OData URLs use $ unencoded
-      queryParts.push(`${key}=${encodeURIComponent(val)}`)
-    }
+    // Names and values are percent-encoded; a leading `$` stays as is (OData URLs use it unencoded).
+    const encodeName = (name: string) =>
+      name.startsWith('$') ? `$${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name)
+    const queryParts = [...params].map(
+      ([name, value]) => `${encodeName(name)}=${encodeURIComponent(value)}`,
+    )
 
     return `${baseUrl}?${queryParts.join('&')}`
   }
