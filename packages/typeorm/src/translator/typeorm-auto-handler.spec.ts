@@ -458,6 +458,81 @@ describe('TypeOrmAutoHandler', () => {
       expect(result.nextLink).toContain('$skip=2')
     })
 
+    it('buildNextLink keeps an encoded & (and %, +) inside its value', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const filter = "contains(name,'A & B') or name eq '100% C+'"
+      const nextLink = autoHandler.buildNextLink(
+        `http://localhost/odata/Products?$filter=${encodeURIComponent(filter)}&$top=5`,
+        5,
+        5,
+      )
+
+      const params = new URLSearchParams(nextLink.slice(nextLink.indexOf('?') + 1))
+      expect(params.get('$filter')).toBe(filter)
+      expect([...params.keys()].sort()).toEqual(['$filter', '$skip', '$top'])
+    })
+
+    it('buildNextLink reads + as a space and tolerates malformed percent-encoding', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://localhost/odata/Products?$search=a+b&x=100%',
+        5,
+        5,
+      )
+
+      expect(nextLink).toContain('$search=a%20b')
+      expect(nextLink).toContain('x=100%25')
+    })
+
+    it('buildNextLink keeps every value of a repeated custom parameter, in order', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://localhost/odata/Products?tag=a&tag=b%26c&$top=5',
+        5,
+        5,
+      )
+
+      const params = new URLSearchParams(nextLink.slice(nextLink.indexOf('?') + 1))
+      expect(params.getAll('tag')).toEqual(['a', 'b&c'])
+    })
+
+    it('buildNextLink replaces $skip and $top whatever their letter case', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://localhost/odata/Products?$SKIP=0&$Top=5&$filter=Id%20gt%201',
+        5,
+        5,
+      )
+
+      const query = nextLink.slice(nextLink.indexOf('?') + 1)
+      expect(query).toBe('$filter=Id%20gt%201&$skip=5&$top=5')
+    })
+
+    it('buildNextLink encodes parameter names, keeping a leading $', () => {
+      const { repo } = makeMockRepo()
+      autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)
+
+      const nextLink = autoHandler.buildNextLink(
+        'http://localhost/odata/Products?a%26b=1&%24custom%3Dx=2&$filter=Id%20eq%201',
+        5,
+        5,
+      )
+
+      const query = nextLink.slice(nextLink.indexOf('?') + 1)
+      expect(query).toBe('a%26b=1&$custom%3Dx=2&$filter=Id%20eq%201&$skip=5&$top=5')
+      const params = new URLSearchParams(query)
+      expect(params.get('a&b')).toBe('1')
+      expect(params.get('$custom=x')).toBe('2')
+    })
+
     it('Test 20: buildNextLink rooted at serviceRoot when entitySetName is supplied', () => {
       const { repo } = makeMockRepo()
       autoHandler = new TypeOrmAutoHandler(translator, edmRegistry, makeOptions(), repo)

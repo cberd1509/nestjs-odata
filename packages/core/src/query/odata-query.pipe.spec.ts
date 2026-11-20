@@ -402,4 +402,104 @@ describe('ODataQueryPipe', () => {
       ).toThrow("Property 'Nope' not found on entity 'Review'")
     })
   })
+
+  describe('query option values (decoded once by the URL parser, never again)', () => {
+    const literal = (node: unknown) =>
+      (node as { right: { value: unknown } } | undefined)?.right.value
+
+    it.each(['A & B', '100% cotton', 'C+ grade', 'a%20b', 'a%26b'])(
+      '$filter keeps %j as given',
+      (text) => {
+        const result = createPipe().transform({ $filter: `Name eq '${text}'` }, metadata)
+        expect(literal(result.filter)).toBe(text)
+      },
+    )
+
+    it("$filter: OData's '' escape inside a literal", () => {
+      const result = createPipe().transform({ $filter: "Name eq 'O''Brien'" }, metadata)
+      expect(literal(result.filter)).toBe("O'Brien")
+    })
+
+    it('$search: &, % and + inside a phrase are not decoded again', () => {
+      const result = createPipe().transform({ $search: '"A & B 100% C+"' }, metadata)
+      expect(result.search).toEqual({ kind: 'SearchTerm', value: 'A & B 100% C+' })
+    })
+
+    it('$search: a value that would be malformed percent-encoding does not throw', () => {
+      const result = createPipe().transform({ $search: '100%' }, metadata)
+      expect(result.search).toMatchObject({ kind: 'SearchTerm', value: '100%' })
+    })
+
+    it('$apply: a literal with & and % inside filter()', () => {
+      const result = createPipe().transform({ $apply: "filter(Name eq 'A & 100%')" }, metadata)
+      const [step] = (result.apply as { steps: { filter: unknown }[] }).steps
+      expect(literal(step?.filter)).toBe('A & 100%')
+    })
+
+    it('$orderby and $select with literals and spaces', () => {
+      const result = createPipe().transform(
+        { $orderby: "Name eq 'A & B, C' desc,Price", $select: 'Name, Price' },
+        metadata,
+      )
+      expect(result.orderBy).toHaveLength(2)
+      expect(literal(result.orderBy?.[0]?.expression)).toBe('A & B, C')
+      expect(result.select?.items?.map((i) => i.path)).toEqual([['Name'], ['Price']])
+    })
+
+    it("nested $expand options: Category($filter=Name eq 'b & c')", () => {
+      mockEdmRegistry.getEntityType.mockImplementation((name: string) =>
+        name === 'Product' || name === 'Category' ? mockEntityType : undefined,
+      )
+      const result = createPipe().transform(
+        { $expand: "Category($filter=Name eq 'b & c; 100%')" },
+        metadata,
+      )
+      expect(literal(result.expand?.items[0]?.filter)).toBe('b & c; 100%')
+    })
+
+    it('a value holding & does not create other options', () => {
+      const result = createPipe().transform({ $filter: "Name eq 'x&$top=1'" }, metadata)
+      expect(literal(result.filter)).toBe('x&$top=1')
+      expect(result.top).toBeUndefined()
+    })
+
+    it('refuses a repeated system query option ($count, $search, $apply included)', () => {
+      for (const name of ['$filter', '$top', '$count', '$search', '$apply']) {
+        expect(() => createPipe().transform({ [name]: ['1', '2'] }, metadata)).toThrow(
+          /more than once/,
+        )
+      }
+    })
+
+    it('refuses non-string values of system query options; ignores unknown parameters', () => {
+      expect(() => createPipe().transform({ $count: { a: 'b' } }, metadata)).toThrow(
+        /single text value/,
+      )
+      expect(() => createPipe().transform({ $filter: { x: 'Id eq 1' } }, metadata)).toThrow(
+        ODataParseError,
+      )
+      const result = createPipe().transform(
+        { tags: ['a', 'b'], other: { x: 1 }, $top: '3' },
+        metadata,
+      )
+      expect(result.top).toBe(3)
+    })
+
+    it('refuses a system query option repeated in another letter case', () => {
+      expect(() => createPipe().transform({ $top: '1', $TOP: '2' }, metadata)).toThrow(
+        /more than once/,
+      )
+      expect(() =>
+        createPipe().transform({ $filter: 'Id eq 1', $FILTER: 'Id eq 2' }, metadata),
+      ).toThrow(/more than once/)
+    })
+
+    it('an undefined query object parses as an empty query', () => {
+      const result = createPipe().transform(
+        undefined as unknown as Record<string, string>,
+        metadata,
+      )
+      expect(result).toMatchObject({ entitySetName: 'Products', filter: undefined })
+    })
+  })
 })

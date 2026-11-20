@@ -29,6 +29,8 @@ import type {
   OrderByItem,
   PropertyAccessNode,
   QueryOptions,
+  SearchNode,
+  ApplyNode,
   SelectItem,
   SelectNode,
   UnaryExprNode,
@@ -36,6 +38,7 @@ import type {
 import { ODataNotImplementedError, ODataParseError } from './errors.js'
 import { tokenize, Token, TokenKind } from './lexer.js'
 import { parseSearch } from './search-parser.js'
+import { parseApply } from './apply-parser.js'
 
 /** Maximum nesting depth for parenthesized expressions (DoS protection, T-01-09) */
 const MAX_NESTING_DEPTH = 50
@@ -559,54 +562,166 @@ export function parseFilter(input: string, options: { allowIt?: boolean } = {}):
 }
 
 /**
- * Parse an OData query string into a QueryOptions object.
- * Handles $filter, $orderby, $select, $top, $skip.
- * Unknown query options are silently ignored.
+ * The query options of a request, one entry per parameter name, with **decoded** values: what
+ * NestJS gives an `@Query()` parameter (Express's `req.query`, Fastify's `request.query`). A value
+ * is used as given: it is never percent-decoded again, so a literal `%` or `+` in it stays as it
+ * is. Each system query option must be a string given once: an array (a repeated parameter) or
+ * any other non-string value (`$filter[x]=...` read by an extended query parser) is refused.
+ * Parameters that are not system query options are ignored.
+ */
+export type ODataQueryOptionValues = Readonly<Record<string, unknown>>
+
+/** The system query options, parsed: QueryOptions plus `$count`, `$search` and `$apply`. */
+export interface ParsedQueryOptions extends QueryOptions {
+  /** `$count=true` */
+  readonly count?: boolean
+  readonly search?: SearchNode
+  readonly apply?: ApplyNode
+}
+
+/** The system query options parsed here, lower case. */
+const SYSTEM_QUERY_OPTIONS = new Set([
+  '$filter',
+  '$orderby',
+  '$select',
+  '$top',
+  '$skip',
+  '$expand',
+  '$count',
+  '$search',
+  '$apply',
+])
+
+/** The options parseQuery has always parsed (2.3.0 contract). */
+const LEGACY_QUERY_OPTIONS = new Set(['$filter', '$orderby', '$select', '$top', '$skip', '$expand'])
+
+/**
+ * Collect the system query options of `entries` by lower-case name, in a single pass: names are
+ * case-insensitive, each value must be a string, and an option given twice in any spelling
+ * (`$top` and `$TOP`) is refused (P2 §5: a system query option is specified at most once).
+ * Other parameters are ignored; an `undefined` value counts as absent.
+ */
+function collectSystemQueryOptions(entries: Iterable<[string, unknown]>): Map<string, string> {
+  const options = new Map<string, string>()
+  for (const [key, value] of entries) {
+    const name = key.toLowerCase()
+    if (!SYSTEM_QUERY_OPTIONS.has(name) || value === undefined) continue
+    if (Array.isArray(value) || options.has(name)) {
+      throw new ODataParseError(
+        `System query option '${key}' must not be specified more than once`,
+        0,
+      )
+    }
+    if (typeof value !== 'string') {
+      throw new ODataParseError(`System query option '${key}' must have a single text value`, 0)
+    }
+    options.set(name, value)
+  }
+  return options
+}
+
+/** Parse collected system query options (lower-case names, values as given). */
+function parseSystemQueryOptions(options: ReadonlyMap<string, string>): ParsedQueryOptions {
+  const get = (name: string) => options.get(name)
+  const filter = get('$filter')
+  const orderBy = get('$orderby')
+  const select = get('$select')
+  const top = get('$top')
+  const skip = get('$skip')
+  const expand = get('$expand')
+  const count = get('$count')
+  const search = get('$search')
+  const apply = get('$apply')
+  return {
+    filter: filter === undefined ? undefined : parseFilter(filter),
+    orderBy: orderBy === undefined ? undefined : parseOrderBy(orderBy),
+    select: select === undefined ? undefined : parseSelect(select),
+    top: top === undefined ? undefined : parseNonNegativeInt(top, '$top', 0),
+    skip: skip === undefined ? undefined : parseNonNegativeInt(skip, '$skip', 0),
+    expand: expand === undefined ? undefined : parseExpand(expand),
+    count: count === undefined ? undefined : count === 'true',
+    search: search === undefined ? undefined : parseSearch(search),
+    apply: apply === undefined ? undefined : parseApply(apply),
+  }
+}
+
+/**
+ * Parse the system query options of a request, given as decoded values by parameter name (e.g.
+ * `req.query`): $filter, $orderby, $select, $top, $skip, $expand, $count, $search and $apply.
+ * Option names are case-insensitive; other parameters are ignored.
+ *
+ * Each option is parsed from its own value, so a value may hold any character, `&` included
+ * (`$filter=contains(title,'A & B')`, sent as `%26`). Values are not percent-decoded: pass them
+ * decoded exactly once, as a URL parser gives them. For a raw query string, use
+ * {@link parseQueryString}.
+ *
+ * @param options - Decoded query option values by name (e.g. `req.query`)
+ * @returns The parsed options (only those present are set)
+ * @throws ODataParseError on syntax errors, a repeated option (in any letter case) or a value
+ *   that is not a single string
+ */
+export function parseQueryOptions(options: ODataQueryOptionValues): ParsedQueryOptions {
+  return parseSystemQueryOptions(collectSystemQueryOptions(Object.entries(options)))
+}
+
+/**
+ * Parse a raw, percent-encoded OData query string (as it appears in a URL) into its system query
+ * options, like {@link parseQueryOptions}.
+ *
+ * The string is split on `&` between parameters only, then each name and value is decoded once
+ * (`+` as a space, then percent-decoding, as URL query parsers do), so an encoded `&` (`%26`)
+ * stays inside its value and `%25` is a literal `%`.
  *
  * @param queryString - Raw query string, with or without leading '?'
+ * @throws ODataParseError on syntax errors, malformed percent-encoding, a repeated option or an
+ *   option without a value
+ */
+export function parseQueryString(queryString: string): ParsedQueryOptions {
+  const qs = queryString.startsWith('?') ? queryString.slice(1) : queryString
+  const entries = qs
+    .split('&')
+    .filter(Boolean)
+    .map((part): [string, string] => {
+      const eq = part.indexOf('=')
+      return eq === -1
+        ? [decodeQueryComponent(part), '']
+        : [decodeQueryComponent(part.slice(0, eq)), decodeQueryComponent(part.slice(eq + 1))]
+    })
+  return parseSystemQueryOptions(collectSystemQueryOptions(entries))
+}
+
+/**
+ * Parse an OData query string into a QueryOptions object.
+ * Handles $filter, $orderby, $select, $top, $skip and $expand; unknown query options (and
+ * $count, $search, $apply) are silently ignored, and the last of repeated options wins.
+ *
+ * The string is split on `&` and the values are used as given, without percent-decoding, so a
+ * value cannot hold `&`. For a percent-encoded query string use {@link parseQueryString}, and for
+ * decoded values by name (`req.query`) use {@link parseQueryOptions}.
+ *
+ * @param queryString - Query string, with or without leading '?'
  * @returns Parsed QueryOptions (fields are optional — only present when found in query)
  * @throws ODataParseError on syntax errors
  */
 export function parseQuery(queryString: string): QueryOptions {
-  // Strip leading '?' if present
   const qs = queryString.startsWith('?') ? queryString.slice(1) : queryString
-
-  if (!qs.trim()) return {}
-
-  const parts = qs.split('&')
-  let filter: FilterNode | undefined
-  let orderBy: OrderByItem[] | undefined
-  let select: SelectNode | undefined
-  let top: number | undefined
-  let skip: number | undefined
-  let expand: ExpandNode | undefined
-
-  for (const part of parts) {
-    const lpart = part.toLowerCase()
-
-    if (lpart.startsWith('$filter=')) {
-      const val = part.slice('$filter='.length)
-      filter = parseFilter(val)
-    } else if (lpart.startsWith('$orderby=')) {
-      const val = part.slice('$orderby='.length)
-      orderBy = parseOrderBy(val)
-    } else if (lpart.startsWith('$select=')) {
-      const val = part.slice('$select='.length)
-      select = parseSelect(val)
-    } else if (lpart.startsWith('$top=')) {
-      const val = part.slice('$top='.length)
-      top = parseNonNegativeInt(val, '$top', 0)
-    } else if (lpart.startsWith('$skip=')) {
-      const val = part.slice('$skip='.length)
-      skip = parseNonNegativeInt(val, '$skip', 0)
-    } else if (lpart.startsWith('$expand=')) {
-      const val = part.slice('$expand='.length)
-      expand = parseExpand(val)
-    }
-    // Unknown options are silently ignored
+  const options = new Map<string, string>()
+  for (const part of qs.split('&')) {
+    const eq = part.indexOf('=')
+    const name = part.slice(0, eq).toLowerCase()
+    if (eq !== -1 && LEGACY_QUERY_OPTIONS.has(name)) options.set(name, part.slice(eq + 1))
   }
-
+  const { filter, orderBy, select, top, skip, expand } = parseSystemQueryOptions(options)
   return { filter, orderBy, select, top, skip, expand }
+}
+
+/** Decode one name or value of a raw query string: `+` is a space, then percent-decoding. */
+function decodeQueryComponent(text: string): string {
+  try {
+    return decodeURIComponent(text.replace(/\+/g, ' '))
+  } catch {
+    throw new ODataParseError(`Malformed percent-encoding in query string: '${text}'`, 0)
+  }
 }
 
 /**
@@ -616,7 +731,8 @@ export function parseQuery(queryString: string): QueryOptions {
 function parseOrderBy(value: string, allowIt = true): OrderByItem[] {
   if (!value.trim()) return []
 
-  const items = value.split(',')
+  // Commas inside string literals or function calls do not separate items.
+  const items = splitTopLevel(value, ',')
   return items.map((item) => {
     const trimmed = item.trim()
     // Check for trailing 'asc' or 'desc' keyword
