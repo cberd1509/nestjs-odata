@@ -120,7 +120,9 @@ curl 'http://localhost:3000/odata/Products?$filter=(price gt 10 and price lt 100
 ```
 
 ::: tip URL encoding
-OData `$filter` values must be URL-encoded when using single quotes or special characters. Use `%27` for `'` and `%20` for spaces, or use a library that handles encoding automatically.
+Percent-encode each query option value once, as `encodeURIComponent` or `URLSearchParams` do: `%27` for `'`, `%20` for spaces, and always `%26` for `&`, `%25` for `%` and `%2B` for `+` (a bare `+` is read as a space). Each system query option is parsed from its own value, decoded exactly once by the URL parser, so `$filter=contains(name,'A %26 B')` filters on `A & B` and `name eq '100%25'` on `100%`. Inside a string literal, a single quote is doubled: `name eq 'O''Brien'`. A system query option given more than once is refused with 400.
+
+`ODataQueryPipe` expects the decoded values NestJS passes to `@Query()` (`req.query`) and never decodes them again. To parse a raw query string yourself, use `parseQuery('$filter=...&$top=5')`, which splits on `&` between parameters and decodes each name and value; for values you already decoded, use `parseQueryOptions({ $filter: "name eq 'A & B'" })`.
 :::
 
 ## $select

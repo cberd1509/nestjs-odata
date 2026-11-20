@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common'
 import type { ArgumentMetadata, PipeTransform } from '@nestjs/common'
-import { parseQuery } from '../parser/parser.js'
+import { parseQueryOptions, queryOptionValue } from '../parser/parser.js'
+import type { ODataQueryOptionValues } from '../parser/parser.js'
 import { parseSearch } from '../parser/search-parser.js'
 import { parseApply } from '../parser/apply-parser.js'
 import { EdmRegistry } from '../edm/edm-registry.js'
@@ -31,8 +32,14 @@ const FILTER: PathOption = { name: '$filter', navigation: true }
 const ORDER_BY: PathOption = { name: '$orderby', navigation: false }
 
 /**
- * ODataQueryPipe — NestJS PipeTransform that converts raw Express query params
- * (req.query as Record<string, string>) into a typed, validated ODataQuery.
+ * ODataQueryPipe — NestJS PipeTransform that converts the request's query options into a typed,
+ * validated ODataQuery.
+ *
+ * Input contract: one entry per query option name with its value **already decoded**, which is
+ * what NestJS gives an `@Query()` parameter (Express's `req.query`, Fastify's `request.query`).
+ * Each option is parsed from its own value and never percent-decoded again, so a value may hold
+ * `&`, `%`, `+` or any other character (`$filter=contains(title,'A & B')`, sent as `%26`). A
+ * repeated system query option is refused (400). To parse a raw query string, use `parseQuery`.
  *
  * Per threat model T-03-01: validates all $filter/$select/$orderby property
  * references against EdmRegistry. Unknown properties throw ODataValidationError.
@@ -42,39 +49,38 @@ const ORDER_BY: PathOption = { name: '$orderby', navigation: false }
  * Zero TypeORM imports — per PKG-01 architecture constraint.
  */
 @Injectable()
-export class ODataQueryPipe implements PipeTransform<Record<string, string>, ODataQuery> {
+export class ODataQueryPipe implements PipeTransform<ODataQueryOptionValues, ODataQuery> {
   constructor(
     private readonly edmRegistry: EdmRegistry,
     @Inject(ODATA_MODULE_OPTIONS) private readonly options: ODataModuleResolvedOptions,
   ) {}
 
-  transform(value: Record<string, string>, metadata: ArgumentMetadata): ODataQuery {
+  transform(value: ODataQueryOptionValues, metadata: ArgumentMetadata): ODataQuery {
     // metadata.data carries the entitySetName passed by @ODataQuery(entitySetName)
     const entitySetName = metadata.data ?? ''
 
-    // Reconstruct query string from the Record entries (handling $count, $search, $apply separately)
-    const parts: string[] = []
+    // $count, $search and $apply are parsed here; the other options by parseQueryOptions. Every
+    // value is used as given (decoded once by the URL parser).
     let count = false
     let search: SearchNode | undefined
     let apply: ApplyNode | undefined
 
-    for (const [key, val] of Object.entries(value)) {
+    for (const [key, raw] of Object.entries(value ?? {})) {
       const lkey = key.toLowerCase()
+      if (lkey !== '$count' && lkey !== '$search' && lkey !== '$apply') continue
+      const val = queryOptionValue(key, raw)
+      if (val === undefined) continue
       if (lkey === '$count') {
         count = val === 'true'
       } else if (lkey === '$search') {
-        search = parseSearch(decodeURIComponent(val))
-      } else if (lkey === '$apply') {
-        apply = parseApply(decodeURIComponent(val))
+        search = parseSearch(val)
       } else {
-        parts.push(`${key}=${val}`)
+        apply = parseApply(val)
       }
     }
 
-    const queryString = parts.join('&')
-
-    // Parse into QueryOptions (filter AST, select, orderBy, top, skip)
-    const parsed = parseQuery(queryString)
+    // Parse into QueryOptions (filter AST, select, orderBy, top, skip, expand)
+    const parsed = parseQueryOptions(value ?? {})
 
     // Enforce maxTop: reject (HTTP 400) when $top exceeds the limit (per D-05, SEC-01)
     // Per-entity override takes precedence over global options (per D-07)

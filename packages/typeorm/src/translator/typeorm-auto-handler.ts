@@ -370,17 +370,11 @@ export class TypeOrmAutoHandler {
     }
 
     // Parse existing params and update $skip/$top
+    // URLSearchParams splits on `&` between parameters only and decodes each name and value once
+    // (`+` as a space, like the request's own query parser), so `%26` stays inside its value.
     const params = new Map<string, string>()
-    if (searchStr) {
-      for (const part of searchStr.split('&')) {
-        const eqIdx = part.indexOf('=')
-        if (eqIdx !== -1) {
-          params.set(
-            decodeURIComponent(part.slice(0, eqIdx)),
-            decodeURIComponent(part.slice(eqIdx + 1)),
-          )
-        }
-      }
+    for (const [name, value] of new URLSearchParams(searchStr)) {
+      params.set(name, value)
     }
 
     params.set('$skip', String(newSkip))

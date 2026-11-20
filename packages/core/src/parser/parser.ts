@@ -559,21 +559,29 @@ export function parseFilter(input: string, options: { allowIt?: boolean } = {}):
 }
 
 /**
- * Parse an OData query string into a QueryOptions object.
- * Handles $filter, $orderby, $select, $top, $skip.
- * Unknown query options are silently ignored.
- *
- * @param queryString - Raw query string, with or without leading '?'
- * @returns Parsed QueryOptions (fields are optional — only present when found in query)
- * @throws ODataParseError on syntax errors
+ * The system query options of a request, one entry per option name, with **decoded** values:
+ * what NestJS gives an `@Query()` parameter (Express's `req.query`, Fastify's `request.query`).
+ * A value is used as given: it is never percent-decoded again, so a literal `%` or `+` in it
+ * stays as it is. A repeated option (an array value) is refused; anything else that is not a
+ * string (a nested object from an extended query parser) is ignored, like unknown options.
  */
-export function parseQuery(queryString: string): QueryOptions {
-  // Strip leading '?' if present
-  const qs = queryString.startsWith('?') ? queryString.slice(1) : queryString
+export type ODataQueryOptionValues = Readonly<Record<string, unknown>>
 
-  if (!qs.trim()) return {}
-
-  const parts = qs.split('&')
+/**
+ * Parse the system query options of a request, given as one decoded value per option name, into
+ * a QueryOptions object. Handles $filter, $orderby, $select, $top, $skip and $expand; option names
+ * are case-insensitive. Unknown query options are silently ignored.
+ *
+ * Each option is parsed from its own value, so a value may hold any character, `&` included
+ * (`$filter=contains(title,'A & B')`, sent as `%26`). Values are not percent-decoded: pass them
+ * decoded exactly once, as a URL parser gives them. To parse a raw query string, use
+ * {@link parseQuery}.
+ *
+ * @param options - Decoded query option values by name (e.g. `req.query`)
+ * @returns Parsed QueryOptions (fields are optional — only present when found in the options)
+ * @throws ODataParseError on syntax errors, or when an option is repeated
+ */
+export function parseQueryOptions(options: ODataQueryOptionValues): QueryOptions {
   let filter: FilterNode | undefined
   let orderBy: OrderByItem[] | undefined
   let select: SelectNode | undefined
@@ -581,32 +589,84 @@ export function parseQuery(queryString: string): QueryOptions {
   let skip: number | undefined
   let expand: ExpandNode | undefined
 
-  for (const part of parts) {
-    const lpart = part.toLowerCase()
+  for (const [key, value] of Object.entries(options)) {
+    const name = key.toLowerCase()
+    if (!QUERY_OPTION_NAMES.has(name)) continue // Unknown options are silently ignored
+    const val = queryOptionValue(key, value)
+    if (val === undefined) continue
 
-    if (lpart.startsWith('$filter=')) {
-      const val = part.slice('$filter='.length)
+    if (name === '$filter') {
       filter = parseFilter(val)
-    } else if (lpart.startsWith('$orderby=')) {
-      const val = part.slice('$orderby='.length)
+    } else if (name === '$orderby') {
       orderBy = parseOrderBy(val)
-    } else if (lpart.startsWith('$select=')) {
-      const val = part.slice('$select='.length)
+    } else if (name === '$select') {
       select = parseSelect(val)
-    } else if (lpart.startsWith('$top=')) {
-      const val = part.slice('$top='.length)
+    } else if (name === '$top') {
       top = parseNonNegativeInt(val, '$top', 0)
-    } else if (lpart.startsWith('$skip=')) {
-      const val = part.slice('$skip='.length)
+    } else if (name === '$skip') {
       skip = parseNonNegativeInt(val, '$skip', 0)
-    } else if (lpart.startsWith('$expand=')) {
-      const val = part.slice('$expand='.length)
+    } else {
       expand = parseExpand(val)
     }
-    // Unknown options are silently ignored
   }
 
   return { filter, orderBy, select, top, skip, expand }
+}
+
+/** The options {@link parseQueryOptions} parses (lower case). */
+const QUERY_OPTION_NAMES = new Set(['$filter', '$orderby', '$select', '$top', '$skip', '$expand'])
+
+/**
+ * The string value of one query option: undefined for a value that is not a string, an
+ * ODataParseError for a repeated option (P2 §5: a system query option is specified at most once).
+ */
+export function queryOptionValue(name: string, value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    throw new ODataParseError(
+      `System query option '${name}' must not be specified more than once`,
+      0,
+    )
+  }
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * Parse a raw OData query string (as it appears in a URL, percent-encoded) into a QueryOptions
+ * object. Handles $filter, $orderby, $select, $top, $skip and $expand. Unknown query options are
+ * silently ignored.
+ *
+ * The string is split on `&` between parameters only, then each name and value is decoded once
+ * (`+` as a space, then percent-decoding, as URL query parsers do), so an encoded `&` (`%26`)
+ * stays inside its value. To parse values that are already decoded (`req.query`), use
+ * {@link parseQueryOptions}: decoding them again would corrupt a literal `%` or `+`.
+ *
+ * @param queryString - Raw query string, with or without leading '?'
+ * @returns Parsed QueryOptions (fields are optional — only present when found in query)
+ * @throws ODataParseError on syntax errors, malformed percent-encoding or a repeated option
+ */
+export function parseQuery(queryString: string): QueryOptions {
+  // Strip leading '?' if present
+  const qs = queryString.startsWith('?') ? queryString.slice(1) : queryString
+
+  const options: Record<string, string | string[]> = {}
+  for (const part of qs.split('&')) {
+    if (!part) continue
+    const eq = part.indexOf('=')
+    const name = decodeQueryComponent(eq === -1 ? part : part.slice(0, eq))
+    const value = eq === -1 ? '' : decodeQueryComponent(part.slice(eq + 1))
+    const previous = Object.prototype.hasOwnProperty.call(options, name) ? options[name] : undefined
+    options[name] = previous === undefined ? value : [previous, value].flat()
+  }
+  return parseQueryOptions(options)
+}
+
+/** Decode one name or value of a raw query string: `+` is a space, then percent-decoding. */
+function decodeQueryComponent(text: string): string {
+  try {
+    return decodeURIComponent(text.replace(/\+/g, ' '))
+  } catch {
+    throw new ODataParseError(`Malformed percent-encoding in query string: '${text}'`, 0)
+  }
 }
 
 /**
@@ -616,7 +676,8 @@ export function parseQuery(queryString: string): QueryOptions {
 function parseOrderBy(value: string, allowIt = true): OrderByItem[] {
   if (!value.trim()) return []
 
-  const items = value.split(',')
+  // Commas inside string literals or function calls do not separate items.
+  const items = splitTopLevel(value, ',')
   return items.map((item) => {
     const trimmed = item.trim()
     // Check for trailing 'asc' or 'desc' keyword

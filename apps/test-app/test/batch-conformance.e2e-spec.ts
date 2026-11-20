@@ -710,9 +710,12 @@ describe('$batch options of ODataTypeOrmModule.forRoot()', () => {
         const parts = await postBatch(notesOnly, [
           op({ method: 'GET', url: 'Notes?$expand=ticket' }),
           op({ method: 'GET', url: 'Notes?$EXPAND=ticket' }),
+          // `&` and `%` inside a nested literal must not make the allow-list skip the option.
+          op({ method: 'GET', url: "Notes?$expand=ticket($filter=subject eq 'A %26 B')" }),
+          op({ method: 'GET', url: "Notes?$expand=ticket($filter=subject eq '100%25')" }),
           op({ method: 'GET', url: 'Notes?$top=1' }),
         ])
-        expect(parts.map((p) => single(p).status)).toEqual([403, 403, 200])
+        expect(parts.map((p) => single(p).status)).toEqual([403, 403, 403, 403, 200])
       } finally {
         await notesOnly.close()
       }
